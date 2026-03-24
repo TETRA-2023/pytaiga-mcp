@@ -2164,4 +2164,15 @@ def list_comments(
 
 # --- Run the server ---
 if __name__ == "__main__":
-    mcp.run()
+    import os
+    import sys
+
+    transport = "stdio"
+    if "--sse" in sys.argv:
+        transport = "sse"
+    elif "--streamable-http" in sys.argv:
+        transport = "streamable-http"
+    elif os.environ.get("TAIGA_TRANSPORT", "").lower() in ("sse", "streamable-http"):
+        transport = os.environ["TAIGA_TRANSPORT"].lower()
+
+    mcp.run(transport=transport)
