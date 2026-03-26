@@ -1664,6 +1664,224 @@ def get_issue_types(project_id: int, session_id: Optional[str] = None) -> List[D
     )
 
 
+# --- Project Configuration CRUD Tools ---
+
+# Mapping from user-facing config type to API path segment
+_PROJECT_CONFIG_TYPE_MAP = {
+    "epic_status": "epic-statuses",
+    "userstory_status": "userstory-statuses",
+    "user_story_status": "userstory-statuses",
+    "task_status": "task-statuses",
+    "issue_status": "issue-statuses",
+    "issue_type": "issue-types",
+    "priority": "priorities",
+    "severity": "severities",
+}
+_PROJECT_CONFIG_VALID_TYPES = [
+    "epic_status",
+    "issue_status",
+    "issue_type",
+    "priority",
+    "severity",
+    "task_status",
+    "userstory_status",
+]
+
+
+def _validate_project_config_type(config_type: str) -> str:
+    """Validate and normalize a project configuration type."""
+    config_type = config_type.strip().lower()
+    if config_type not in _PROJECT_CONFIG_TYPE_MAP:
+        raise ValueError(
+            f"Invalid config_type '{config_type}'. Must be one of: {_PROJECT_CONFIG_VALID_TYPES}"
+        )
+    return config_type
+
+
+@mcp.tool(
+    "create_project_config",
+    description=(
+        "Creates a project configuration item (status, type, priority, or severity). "
+        "config_type: 'epic_status', 'userstory_status', 'task_status', 'issue_status', "
+        "'issue_type', 'priority', or 'severity'. "
+        "color is a hex string (e.g. '#999999'). is_closed marks whether the status "
+        "represents a closed/done state (statuses only). "
+        "Uses default session if session_id not provided."
+    ),
+)
+def create_project_config(
+    project_id: int,
+    config_type: str,
+    name: str,
+    color: str = "#999999",
+    is_closed: Optional[bool] = None,
+    order: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Creates a project configuration item."""
+    config_type = _validate_project_config_type(config_type)
+    name = name.strip() if name else ""
+    if not name:
+        raise ValueError("Name cannot be empty.")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing create_project_config '{name}' ({config_type}) in project {project_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    api_path = _PROJECT_CONFIG_TYPE_MAP[config_type]
+
+    def do_create():
+        payload: Dict[str, Any] = {
+            "project": project_id,
+            "name": name,
+            "color": color,
+        }
+        if is_closed is not None:
+            payload["is_closed"] = is_closed
+        if order is not None:
+            payload["order"] = order
+        return taiga_client_wrapper.api.post(f"/{api_path}", json=payload)
+
+    return _execute_taiga_operation(
+        "create_project_config", do_create, f"'{name}' ({config_type}) in project {project_id}"
+    )
+
+
+@mcp.tool(
+    "update_project_config",
+    description=(
+        "Updates a project configuration item (status, type, priority, or severity). "
+        "config_type: 'epic_status', 'userstory_status', 'task_status', 'issue_status', "
+        "'issue_type', 'priority', or 'severity'. "
+        "item_id is the internal ID of the configuration item. "
+        "Uses default session if session_id not provided."
+    ),
+)
+def update_project_config(
+    item_id: int,
+    config_type: str,
+    name: Optional[str] = None,
+    color: Optional[str] = None,
+    is_closed: Optional[bool] = None,
+    order: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Updates a project configuration item."""
+    config_type = _validate_project_config_type(config_type)
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError("Name cannot be empty.")
+    if all(v is None for v in [name, color, is_closed, order]):
+        raise ValueError("At least one field to update must be provided.")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing update_project_config {item_id} ({config_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    api_path = _PROJECT_CONFIG_TYPE_MAP[config_type]
+
+    def do_update():
+        payload: Dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if color is not None:
+            payload["color"] = color
+        if is_closed is not None:
+            payload["is_closed"] = is_closed
+        if order is not None:
+            payload["order"] = order
+        return taiga_client_wrapper.api.patch(f"/{api_path}/{item_id}", json=payload)
+
+    return _execute_taiga_operation("update_project_config", do_update, f"{config_type} {item_id}")
+
+
+@mcp.tool(
+    "delete_project_config",
+    description=(
+        "Deletes a project configuration item (status, type, priority, or severity). "
+        "config_type: 'epic_status', 'userstory_status', 'task_status', 'issue_status', "
+        "'issue_type', 'priority', or 'severity'. "
+        "item_id is the internal ID of the configuration item. "
+        "Uses default session if session_id not provided."
+    ),
+)
+def delete_project_config(
+    item_id: int,
+    config_type: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Deletes a project configuration item."""
+    config_type = _validate_project_config_type(config_type)
+
+    actual_session_id = _get_session_id(session_id)
+    logger.warning(
+        f"Executing delete_project_config {item_id} ({config_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    api_path = _PROJECT_CONFIG_TYPE_MAP[config_type]
+
+    def do_delete():
+        taiga_client_wrapper.api.delete(f"/{api_path}/{item_id}")
+        return {"status": "deleted", "item_id": item_id, "config_type": config_type}
+
+    return _execute_taiga_operation("delete_project_config", do_delete, f"{config_type} {item_id}")
+
+
+@mcp.tool(
+    "bulk_update_order_project_config",
+    description=(
+        "Bulk updates the display order of project configuration items. "
+        "config_type: 'epic_status', 'userstory_status', 'task_status', 'issue_status', "
+        "'issue_type', 'priority', or 'severity'. "
+        "bulk_orders is a list of [id, order] pairs, e.g. [[1, 1], [2, 2], [3, 3]]. "
+        "Uses default session if session_id not provided."
+    ),
+)
+def bulk_update_order_project_config(
+    project_id: int,
+    config_type: str,
+    bulk_orders: List[List[int]],
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Bulk updates the display order of project configuration items."""
+    config_type = _validate_project_config_type(config_type)
+    if not bulk_orders:
+        raise ValueError("bulk_orders cannot be empty.")
+    for pair in bulk_orders:
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ValueError(f"Each entry in bulk_orders must be a [id, order] pair, got: {pair}")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing bulk_update_order_project_config ({config_type}) in project {project_id}, "
+        f"{len(bulk_orders)} items, session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    api_path = _PROJECT_CONFIG_TYPE_MAP[config_type]
+
+    def do_bulk_order():
+        payload = {"project": project_id, "bulk_orders": bulk_orders}
+        taiga_client_wrapper.api.post(f"/{api_path}/bulk_update_order", json=payload)
+        return {
+            "status": "updated",
+            "config_type": config_type,
+            "project_id": project_id,
+            "items_reordered": len(bulk_orders),
+        }
+
+    return _execute_taiga_operation(
+        "bulk_update_order_project_config",
+        do_bulk_order,
+        f"{config_type} in project {project_id}",
+    )
+
+
 # --- Story Points Tools ---
 
 
