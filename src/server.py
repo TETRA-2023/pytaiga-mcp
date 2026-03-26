@@ -2129,8 +2129,6 @@ def create_attachment(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Creates an attachment by uploading a file from the local filesystem."""
-    import os
-
     entity_type = _validate_attachment_type(entity_type)
     file_path = file_path.strip() if file_path else ""
     if not file_path:
