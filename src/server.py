@@ -1797,6 +1797,242 @@ def delete_point(
     return _execute_taiga_operation("delete_point", do_delete, f"point {point_id}")
 
 
+# --- Custom Attributes Tools ---
+
+# Mapping from user-facing entity type to API path segments
+_CUSTOM_ATTR_TYPE_MAP = {
+    "epic": ("epic-custom-attributes", "epics"),
+    "user_story": ("userstory-custom-attributes", "userstories"),
+    "userstory": ("userstory-custom-attributes", "userstories"),
+    "task": ("task-custom-attributes", "tasks"),
+    "issue": ("issue-custom-attributes", "issues"),
+}
+_CUSTOM_ATTR_VALID_TYPES = ["epic", "issue", "task", "user_story"]
+
+
+def _validate_custom_attr_type(entity_type: str) -> str:
+    """Validate and normalize a custom attribute entity type."""
+    entity_type = entity_type.strip().lower()
+    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of: {_CUSTOM_ATTR_VALID_TYPES}"
+        )
+    return entity_type
+
+
+@mcp.tool(
+    "list_custom_attributes",
+    description="Lists custom attribute definitions for a project. entity_type: 'epic', 'user_story', 'task', or 'issue'. Uses default session if session_id not provided.",
+)
+def list_custom_attributes(
+    project_id: int,
+    entity_type: str,
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lists custom attribute definitions for a given entity type in a project."""
+    entity_type = _validate_custom_attr_type(entity_type)
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing list_custom_attributes for {entity_type} in project {project_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    attr_path = _CUSTOM_ATTR_TYPE_MAP[entity_type][0]
+
+    return _execute_taiga_operation(
+        "list_custom_attributes",
+        lambda: taiga_client_wrapper.api.get(f"/{attr_path}", params={"project": project_id}),
+        f"{entity_type} in project {project_id}",
+    )
+
+
+@mcp.tool(
+    "create_custom_attribute",
+    description="Creates a custom attribute definition for a project. entity_type: 'epic', 'user_story', 'task', or 'issue'. type can be 'text', 'multiline', 'richtext', 'date', 'url', 'dropdown', 'checkbox', 'number'. Uses default session if session_id not provided.",
+)
+def create_custom_attribute(
+    project_id: int,
+    entity_type: str,
+    name: str,
+    attr_type: str = "text",
+    description: str = "",
+    order: Optional[int] = None,
+    extra: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Creates a custom attribute definition."""
+    entity_type = _validate_custom_attr_type(entity_type)
+    name = name.strip() if name else ""
+    if not name:
+        raise ValueError("Attribute name cannot be empty.")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing create_custom_attribute '{name}' for {entity_type} in project {project_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    attr_path = _CUSTOM_ATTR_TYPE_MAP[entity_type][0]
+
+    def do_create():
+        payload: Dict[str, Any] = {
+            "project": project_id,
+            "name": name,
+            "type": attr_type,
+        }
+        if description:
+            payload["description"] = description
+        if order is not None:
+            payload["order"] = order
+        if extra is not None:
+            payload["extra"] = extra
+        return taiga_client_wrapper.api.post(f"/{attr_path}", json=payload)
+
+    return _execute_taiga_operation(
+        "create_custom_attribute", do_create, f"'{name}' for {entity_type} in project {project_id}"
+    )
+
+
+@mcp.tool(
+    "update_custom_attribute",
+    description="Updates a custom attribute definition. entity_type: 'epic', 'user_story', 'task', or 'issue'. Uses default session if session_id not provided.",
+)
+def update_custom_attribute(
+    attribute_id: int,
+    entity_type: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    order: Optional[int] = None,
+    extra: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Updates a custom attribute definition."""
+    entity_type = _validate_custom_attr_type(entity_type)
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError("Attribute name cannot be empty.")
+    if all(v is None for v in [name, description, order, extra]):
+        raise ValueError("At least one field to update must be provided.")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing update_custom_attribute {attribute_id} ({entity_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    attr_path = _CUSTOM_ATTR_TYPE_MAP[entity_type][0]
+
+    def do_update():
+        payload: Dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if description is not None:
+            payload["description"] = description
+        if order is not None:
+            payload["order"] = order
+        if extra is not None:
+            payload["extra"] = extra
+        return taiga_client_wrapper.api.patch(f"/{attr_path}/{attribute_id}", json=payload)
+
+    return _execute_taiga_operation(
+        "update_custom_attribute", do_update, f"attribute {attribute_id}"
+    )
+
+
+@mcp.tool(
+    "delete_custom_attribute",
+    description="Deletes a custom attribute definition. entity_type: 'epic', 'user_story', 'task', or 'issue'. Uses default session if session_id not provided.",
+)
+def delete_custom_attribute(
+    attribute_id: int,
+    entity_type: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Deletes a custom attribute definition."""
+    entity_type = _validate_custom_attr_type(entity_type)
+
+    actual_session_id = _get_session_id(session_id)
+    logger.warning(
+        f"Executing delete_custom_attribute {attribute_id} ({entity_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    attr_path = _CUSTOM_ATTR_TYPE_MAP[entity_type][0]
+
+    def do_delete():
+        taiga_client_wrapper.api.delete(f"/{attr_path}/{attribute_id}")
+        return {"status": "deleted", "attribute_id": attribute_id, "entity_type": entity_type}
+
+    return _execute_taiga_operation(
+        "delete_custom_attribute", do_delete, f"attribute {attribute_id}"
+    )
+
+
+@mcp.tool(
+    "get_custom_attribute_values",
+    description="Gets the custom attribute values for a specific entity (e.g., a user story or task). entity_type: 'epic', 'user_story', 'task', or 'issue'. entity_id is the internal ID of the entity. Returns a dict with 'attributes_values' mapping attribute IDs to their values, plus 'version' for optimistic concurrency. Uses default session if session_id not provided.",
+)
+def get_custom_attribute_values(
+    entity_id: int,
+    entity_type: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Gets custom attribute values for a specific entity."""
+    entity_type = _validate_custom_attr_type(entity_type)
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing get_custom_attribute_values for {entity_type} {entity_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    values_path = _CUSTOM_ATTR_TYPE_MAP[entity_type][1]
+
+    return _execute_taiga_operation(
+        "get_custom_attribute_values",
+        lambda: taiga_client_wrapper.api.get(
+            f"/{values_path}/custom-attributes-values/{entity_id}"
+        ),
+        f"{entity_type} {entity_id}",
+    )
+
+
+@mcp.tool(
+    "set_custom_attribute_values",
+    description="Sets custom attribute values for a specific entity. entity_type: 'epic', 'user_story', 'task', or 'issue'. attributes_values is a dict mapping attribute IDs (as strings) to their values. version is required for optimistic concurrency (get it from get_custom_attribute_values). Uses default session if session_id not provided.",
+)
+def set_custom_attribute_values(
+    entity_id: int,
+    entity_type: str,
+    attributes_values: Dict[str, Any],
+    version: int,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Sets custom attribute values for a specific entity."""
+    entity_type = _validate_custom_attr_type(entity_type)
+    if not attributes_values:
+        raise ValueError("attributes_values cannot be empty.")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing set_custom_attribute_values for {entity_type} {entity_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    values_path = _CUSTOM_ATTR_TYPE_MAP[entity_type][1]
+
+    def do_set():
+        return taiga_client_wrapper.api.patch(
+            f"/{values_path}/custom-attributes-values/{entity_id}",
+            json={"attributes_values": attributes_values, "version": version},
+        )
+
+    return _execute_taiga_operation(
+        "set_custom_attribute_values", do_set, f"{entity_type} {entity_id}"
+    )
+
+
 # --- Epic Tools ---
 
 

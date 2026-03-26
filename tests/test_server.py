@@ -988,6 +988,170 @@ class TestTaigaTools:
         assert result["status"] == "deleted"
         assert result["point_id"] == 10
 
+    # ─── Custom Attributes tests ─────────────────────────────────────
+
+    def test_list_custom_attributes(self, session_setup):
+        """Test list_custom_attributes calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = [{"id": 1, "name": "Patent Number"}]
+        result = src.server.list_custom_attributes(21, "user_story", session_id=session_id)
+        mock_client.api.get.assert_called_once_with(
+            "/userstory-custom-attributes", params={"project": 21}
+        )
+        assert len(result) == 1
+
+    def test_list_custom_attributes_issue(self, session_setup):
+        """Test list_custom_attributes for issues."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = []
+        src.server.list_custom_attributes(21, "issue", session_id=session_id)
+        mock_client.api.get.assert_called_once_with(
+            "/issue-custom-attributes", params={"project": 21}
+        )
+
+    def test_list_custom_attributes_invalid_type_raises(self):
+        """Test list_custom_attributes raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.list_custom_attributes(21, "invalid")
+
+    def test_create_custom_attribute(self, session_setup):
+        """Test create_custom_attribute calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 1, "name": "Patent Number", "type": "text"}
+        result = src.server.create_custom_attribute(
+            21, "task", "Patent Number", session_id=session_id
+        )
+        mock_client.api.post.assert_called_once_with(
+            "/task-custom-attributes",
+            json={"project": 21, "name": "Patent Number", "type": "text"},
+        )
+        assert result["name"] == "Patent Number"
+
+    def test_create_custom_attribute_with_options(self, session_setup):
+        """Test create_custom_attribute with all optional fields."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 1}
+        src.server.create_custom_attribute(
+            21,
+            "epic",
+            "Status",
+            attr_type="dropdown",
+            description="Workflow status",
+            order=5,
+            extra="Option A,Option B",
+            session_id=session_id,
+        )
+        call_json = mock_client.api.post.call_args[1]["json"]
+        assert call_json["type"] == "dropdown"
+        assert call_json["description"] == "Workflow status"
+        assert call_json["order"] == 5
+        assert call_json["extra"] == "Option A,Option B"
+
+    def test_create_custom_attribute_empty_name_raises(self):
+        """Test create_custom_attribute raises on empty name."""
+        with pytest.raises(ValueError, match="Attribute name cannot be empty"):
+            src.server.create_custom_attribute(21, "task", "  ")
+
+    def test_create_custom_attribute_invalid_type_raises(self):
+        """Test create_custom_attribute raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.create_custom_attribute(21, "bogus", "Name")
+
+    def test_update_custom_attribute(self, session_setup):
+        """Test update_custom_attribute calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {"id": 5, "name": "New Name"}
+        result = src.server.update_custom_attribute(
+            5, "user_story", name="New Name", session_id=session_id
+        )
+        mock_client.api.patch.assert_called_once_with(
+            "/userstory-custom-attributes/5", json={"name": "New Name"}
+        )
+        assert result["name"] == "New Name"
+
+    def test_update_custom_attribute_no_fields_raises(self):
+        """Test update_custom_attribute raises when no fields provided."""
+        with pytest.raises(ValueError, match="At least one field"):
+            src.server.update_custom_attribute(5, "task")
+
+    def test_update_custom_attribute_empty_name_raises(self):
+        """Test update_custom_attribute raises on empty name."""
+        with pytest.raises(ValueError, match="Attribute name cannot be empty"):
+            src.server.update_custom_attribute(5, "task", name="  ")
+
+    def test_delete_custom_attribute(self, session_setup):
+        """Test delete_custom_attribute calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.delete.return_value = None
+        result = src.server.delete_custom_attribute(5, "issue", session_id=session_id)
+        mock_client.api.delete.assert_called_once_with("/issue-custom-attributes/5")
+        assert result["status"] == "deleted"
+        assert result["attribute_id"] == 5
+
+    def test_delete_custom_attribute_invalid_type_raises(self):
+        """Test delete_custom_attribute raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.delete_custom_attribute(5, "bogus")
+
+    def test_get_custom_attribute_values(self, session_setup):
+        """Test get_custom_attribute_values calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = {
+            "attributes_values": {"1": "US2024/001234", "2": "USPTO"},
+            "version": 3,
+        }
+        result = src.server.get_custom_attribute_values(100, "user_story", session_id=session_id)
+        mock_client.api.get.assert_called_once_with("/userstories/custom-attributes-values/100")
+        assert result["version"] == 3
+        assert result["attributes_values"]["1"] == "US2024/001234"
+
+    def test_get_custom_attribute_values_epic(self, session_setup):
+        """Test get_custom_attribute_values for epics."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = {"attributes_values": {}, "version": 1}
+        src.server.get_custom_attribute_values(50, "epic", session_id=session_id)
+        mock_client.api.get.assert_called_once_with("/epics/custom-attributes-values/50")
+
+    def test_get_custom_attribute_values_invalid_type_raises(self):
+        """Test get_custom_attribute_values raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.get_custom_attribute_values(100, "bogus")
+
+    def test_set_custom_attribute_values(self, session_setup):
+        """Test set_custom_attribute_values calls correct endpoint with version."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {
+            "attributes_values": {"1": "EP2024/5678"},
+            "version": 4,
+        }
+        result = src.server.set_custom_attribute_values(
+            100, "task", {"1": "EP2024/5678"}, version=3, session_id=session_id
+        )
+        mock_client.api.patch.assert_called_once_with(
+            "/tasks/custom-attributes-values/100",
+            json={"attributes_values": {"1": "EP2024/5678"}, "version": 3},
+        )
+        assert result["version"] == 4
+
+    def test_set_custom_attribute_values_empty_raises(self):
+        """Test set_custom_attribute_values raises on empty attributes_values."""
+        with pytest.raises(ValueError, match="attributes_values cannot be empty"):
+            src.server.set_custom_attribute_values(100, "task", {}, version=1)
+
+    def test_set_custom_attribute_values_invalid_type_raises(self):
+        """Test set_custom_attribute_values raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.set_custom_attribute_values(100, "bogus", {"1": "x"}, version=1)
+
+    def test_custom_attributes_userstory_alias(self, session_setup):
+        """Test that 'userstory' alias works same as 'user_story'."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = []
+        src.server.list_custom_attributes(21, "userstory", session_id=session_id)
+        mock_client.api.get.assert_called_once_with(
+            "/userstory-custom-attributes", params={"project": 21}
+        )
+
     # ─── Epic tools tests ────────────────────────────────────────────
 
     def test_list_epics(self, session_setup):
