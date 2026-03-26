@@ -1734,17 +1734,15 @@ class TestTaigaTools:
         )
         assert len(result) == 2
 
-    def test_bulk_create_user_stories_empty_raises(self, session_setup):
-        """Test bulk_create_user_stories raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_create_user_stories_empty_raises(self):
+        """Test bulk_create_user_stories raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_user_stories(21, [], session_id=session_id)
+            src.server.bulk_create_user_stories(21, [])
 
-    def test_bulk_create_user_stories_whitespace_only_raises(self, session_setup):
+    def test_bulk_create_user_stories_whitespace_only_raises(self):
         """Test bulk_create_user_stories raises when all subjects are whitespace."""
-        session_id, _ = session_setup
         with pytest.raises(ValueError, match="only empty strings"):
-            src.server.bulk_create_user_stories(21, ["  ", "", " "], session_id=session_id)
+            src.server.bulk_create_user_stories(21, ["  ", "", " "])
 
     def test_bulk_create_user_stories_strips_subjects(self, session_setup):
         """Test bulk_create_user_stories strips whitespace from subjects."""
@@ -1773,11 +1771,10 @@ class TestTaigaTools:
         call_json = mock_client.api.post.call_args[1]["json"]
         assert call_json["us_id"] == 5
 
-    def test_bulk_create_tasks_empty_raises(self, session_setup):
-        """Test bulk_create_tasks raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_create_tasks_empty_raises(self):
+        """Test bulk_create_tasks raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_tasks(21, [], session_id=session_id)
+            src.server.bulk_create_tasks(21, [])
 
     def test_bulk_create_issues(self, session_setup):
         """Test bulk_create_issues calls correct endpoint."""
@@ -1790,11 +1787,10 @@ class TestTaigaTools:
         )
         assert len(result) == 1
 
-    def test_bulk_create_issues_empty_raises(self, session_setup):
-        """Test bulk_create_issues raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_create_issues_empty_raises(self):
+        """Test bulk_create_issues raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_issues(21, [], session_id=session_id)
+            src.server.bulk_create_issues(21, [])
 
     def test_bulk_create_epics(self, session_setup):
         """Test bulk_create_epics calls correct endpoint."""
@@ -1807,11 +1803,10 @@ class TestTaigaTools:
         )
         assert len(result) == 1
 
-    def test_bulk_create_epics_empty_raises(self, session_setup):
-        """Test bulk_create_epics raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_create_epics_empty_raises(self):
+        """Test bulk_create_epics raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_epics(21, [], session_id=session_id)
+            src.server.bulk_create_epics(21, [])
 
     def test_bulk_update_user_story_milestone(self, session_setup):
         """Test bulk_update_user_story_milestone calls correct endpoint."""
@@ -1826,11 +1821,10 @@ class TestTaigaTools:
         assert result["status"] == "updated"
         assert result["stories_moved"] == 2
 
-    def test_bulk_update_user_story_milestone_empty_raises(self, session_setup):
-        """Test bulk_update_user_story_milestone raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_update_user_story_milestone_empty_raises(self):
+        """Test bulk_update_user_story_milestone raises on empty list before checking session."""
         with pytest.raises(ValueError, match="bulk_stories list cannot be empty"):
-            src.server.bulk_update_user_story_milestone(21, 5, [], session_id=session_id)
+            src.server.bulk_update_user_story_milestone(21, 5, [])
 
     def test_bulk_update_user_story_order_backlog(self, session_setup):
         """Test bulk_update_user_story_order with backlog order type."""
@@ -1869,19 +1863,15 @@ class TestTaigaTools:
             json={"project_id": 21, "bulk_stories": stories},
         )
 
-    def test_bulk_update_user_story_order_invalid_type_raises(self, session_setup):
-        """Test bulk_update_user_story_order raises on invalid order type."""
-        session_id, _ = session_setup
+    def test_bulk_update_user_story_order_invalid_type_raises(self):
+        """Test bulk_update_user_story_order raises on invalid order type before session."""
         with pytest.raises(ValueError, match="Invalid order_type"):
-            src.server.bulk_update_user_story_order(
-                21, "invalid", [{"us_id": 1, "order": 1}], session_id=session_id
-            )
+            src.server.bulk_update_user_story_order(21, "invalid", [{"us_id": 1, "order": 1}])
 
-    def test_bulk_update_user_story_order_empty_raises(self, session_setup):
-        """Test bulk_update_user_story_order raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_update_user_story_order_empty_raises(self):
+        """Test bulk_update_user_story_order raises on empty list before session."""
         with pytest.raises(ValueError, match="bulk_stories list cannot be empty"):
-            src.server.bulk_update_user_story_order(21, "backlog", [], session_id=session_id)
+            src.server.bulk_update_user_story_order(21, "backlog", [])
 
     def test_bulk_create_memberships(self, session_setup):
         """Test bulk_create_memberships calls correct endpoint."""
@@ -1894,36 +1884,42 @@ class TestTaigaTools:
             json={"project_id": 21, "bulk_memberships": members},
         )
         assert result["status"] == "invited"
+        assert result["members_invited"] == [{"id": 1, "email": "a@b.com"}]
 
-    def test_bulk_create_memberships_empty_raises(self, session_setup):
-        """Test bulk_create_memberships raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_create_memberships_empty_raises(self):
+        """Test bulk_create_memberships raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Members list cannot be empty"):
-            src.server.bulk_create_memberships(21, [], session_id=session_id)
+            src.server.bulk_create_memberships(21, [])
 
-    def test_bulk_create_memberships_missing_fields_raises(self, session_setup):
+    def test_bulk_create_memberships_missing_fields_raises(self):
         """Test bulk_create_memberships raises when member dict missing required fields."""
-        session_id, _ = session_setup
         with pytest.raises(ValueError, match="must have 'email' and 'role_id'"):
-            src.server.bulk_create_memberships(21, [{"email": "a@b.com"}], session_id=session_id)
+            src.server.bulk_create_memberships(21, [{"email": "a@b.com"}])
+
+    def test_bulk_create_memberships_role_id_zero_accepted(self, session_setup):
+        """Test bulk_create_memberships accepts role_id=0 (falsy but present)."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = [{"id": 1}]
+        members = [{"email": "a@b.com", "role_id": 0}]
+        result = src.server.bulk_create_memberships(21, members, session_id=session_id)
+        assert result["status"] == "invited"
 
     def test_bulk_link_user_stories_to_epic(self, session_setup):
         """Test bulk_link_user_stories_to_epic calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
-        result = src.server.bulk_link_user_stories_to_epic(10, [1, 2, 3], session_id=session_id)
+        result = src.server.bulk_link_user_stories_to_epic(21, 10, [1, 2, 3], session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/epics/10/related_userstories/bulk_create",
-            json={"project_id": 10, "bulk_userstories": [1, 2, 3]},
+            json={"project_id": 21, "bulk_userstories": [1, 2, 3]},
         )
         assert result["status"] == "linked"
         assert result["count"] == 3
 
-    def test_bulk_link_user_stories_to_epic_empty_raises(self, session_setup):
-        """Test bulk_link_user_stories_to_epic raises on empty list."""
-        session_id, _ = session_setup
+    def test_bulk_link_user_stories_to_epic_empty_raises(self):
+        """Test bulk_link_user_stories_to_epic raises on empty list before session."""
         with pytest.raises(ValueError, match="user_story_ids list cannot be empty"):
-            src.server.bulk_link_user_stories_to_epic(10, [], session_id=session_id)
+            src.server.bulk_link_user_stories_to_epic(21, 10, [])
 
     def test_bulk_create_user_stories_no_session_raises(self):
         """Test bulk_create_user_stories raises when no session available."""

@@ -2783,6 +2783,16 @@ def get_history(
 # --- Bulk Operations ---
 
 
+def _clean_subjects(subjects: List[str]) -> List[str]:
+    """Validate and clean a list of subject strings for bulk creation."""
+    if not subjects:
+        raise ValueError("Subjects list cannot be empty.")
+    cleaned = [s.strip() for s in subjects if s and s.strip()]
+    if not cleaned:
+        raise ValueError("Subjects list contains only empty strings.")
+    return cleaned
+
+
 @mcp.tool(
     "bulk_create_user_stories",
     description="Creates multiple user stories at once from a list of subjects. All stories are created in the specified project. Returns the list of created stories. Uses default session if session_id not provided.",
@@ -2794,12 +2804,8 @@ def bulk_create_user_stories(
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
     """Bulk-creates user stories from a list of subject strings."""
+    cleaned = _clean_subjects(subjects)
     actual_session_id = _get_session_id(session_id)
-    if not subjects:
-        raise ValueError("Subjects list cannot be empty.")
-    cleaned = [s.strip() for s in subjects if s and s.strip()]
-    if not cleaned:
-        raise ValueError("Subjects list contains only empty strings.")
     logger.info(
         f"Executing bulk_create_user_stories: {len(cleaned)} stories in project {project_id}, "
         f"session {actual_session_id[:8]}..."
@@ -2832,12 +2838,8 @@ def bulk_create_tasks(
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
     """Bulk-creates tasks from a list of subject strings."""
+    cleaned = _clean_subjects(subjects)
     actual_session_id = _get_session_id(session_id)
-    if not subjects:
-        raise ValueError("Subjects list cannot be empty.")
-    cleaned = [s.strip() for s in subjects if s and s.strip()]
-    if not cleaned:
-        raise ValueError("Subjects list contains only empty strings.")
     logger.info(
         f"Executing bulk_create_tasks: {len(cleaned)} tasks in project {project_id}, "
         f"session {actual_session_id[:8]}..."
@@ -2869,12 +2871,8 @@ def bulk_create_issues(
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
     """Bulk-creates issues from a list of subject strings."""
+    cleaned = _clean_subjects(subjects)
     actual_session_id = _get_session_id(session_id)
-    if not subjects:
-        raise ValueError("Subjects list cannot be empty.")
-    cleaned = [s.strip() for s in subjects if s and s.strip()]
-    if not cleaned:
-        raise ValueError("Subjects list contains only empty strings.")
     logger.info(
         f"Executing bulk_create_issues: {len(cleaned)} issues in project {project_id}, "
         f"session {actual_session_id[:8]}..."
@@ -2906,12 +2904,8 @@ def bulk_create_epics(
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
     """Bulk-creates epics from a list of subject strings."""
+    cleaned = _clean_subjects(subjects)
     actual_session_id = _get_session_id(session_id)
-    if not subjects:
-        raise ValueError("Subjects list cannot be empty.")
-    cleaned = [s.strip() for s in subjects if s and s.strip()]
-    if not cleaned:
-        raise ValueError("Subjects list contains only empty strings.")
     logger.info(
         f"Executing bulk_create_epics: {len(cleaned)} epics in project {project_id}, "
         f"session {actual_session_id[:8]}..."
@@ -2943,9 +2937,9 @@ def bulk_update_user_story_milestone(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Moves multiple user stories to a milestone. bulk_stories is a list of {us_id, order} dicts."""
-    actual_session_id = _get_session_id(session_id)
     if not bulk_stories:
         raise ValueError("bulk_stories list cannot be empty.")
+    actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing bulk_update_user_story_milestone: {len(bulk_stories)} stories -> "
         f"milestone {milestone_id} in project {project_id}, session {actual_session_id[:8]}..."
@@ -2986,7 +2980,6 @@ def bulk_update_user_story_order(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Reorders user stories in bulk for a given view (backlog, kanban, or sprint)."""
-    actual_session_id = _get_session_id(session_id)
     valid_order_types = {"backlog", "kanban", "sprint"}
     order_type = order_type.strip().lower()
     if order_type not in valid_order_types:
@@ -2995,6 +2988,7 @@ def bulk_update_user_story_order(
         )
     if not bulk_stories:
         raise ValueError("bulk_stories list cannot be empty.")
+    actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing bulk_update_user_story_order: {len(bulk_stories)} stories, "
         f"order_type={order_type} in project {project_id}, session {actual_session_id[:8]}..."
@@ -3031,12 +3025,12 @@ def bulk_create_memberships(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Bulk-invites members to a project. members is a list of {role_id, email} dicts."""
-    actual_session_id = _get_session_id(session_id)
     if not members:
         raise ValueError("Members list cannot be empty.")
     for m in members:
-        if not m.get("email") or not m.get("role_id"):
+        if "email" not in m or "role_id" not in m:
             raise ValueError("Each member must have 'email' and 'role_id' fields.")
+    actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing bulk_create_memberships: {len(members)} members in project {project_id}, "
         f"session {actual_session_id[:8]}..."
@@ -3048,12 +3042,10 @@ def bulk_create_memberships(
             "/memberships/bulk_create",
             json={"project_id": project_id, "bulk_memberships": members},
         )
-        if isinstance(result, list):
-            return {"status": "invited", "project_id": project_id, "members_invited": result}
         return {
             "status": "invited",
             "project_id": project_id,
-            "members_count": len(members),
+            "members_invited": result if isinstance(result, list) else len(members),
         }
 
     return _execute_taiga_operation(
@@ -3063,17 +3055,18 @@ def bulk_create_memberships(
 
 @mcp.tool(
     "bulk_link_user_stories_to_epic",
-    description="Links multiple user stories to an epic in a single call. Uses default session if session_id not provided.",
+    description="Links multiple user stories to an epic in a single call. project_id is required to identify the project context. Uses default session if session_id not provided.",
 )
 def bulk_link_user_stories_to_epic(
+    project_id: int,
     epic_id: int,
     user_story_ids: List[int],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Links multiple user stories to an epic at once."""
-    actual_session_id = _get_session_id(session_id)
     if not user_story_ids:
         raise ValueError("user_story_ids list cannot be empty.")
+    actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing bulk_link_user_stories_to_epic: {len(user_story_ids)} stories -> "
         f"epic {epic_id}, session {actual_session_id[:8]}..."
@@ -3083,7 +3076,7 @@ def bulk_link_user_stories_to_epic(
     def do_bulk():
         taiga_client_wrapper.api.post(
             f"/epics/{epic_id}/related_userstories/bulk_create",
-            json={"project_id": epic_id, "bulk_userstories": user_story_ids},
+            json={"project_id": project_id, "bulk_userstories": user_story_ids},
         )
         return {
             "status": "linked",
