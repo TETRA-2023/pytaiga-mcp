@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-03-26)
+
+### Bug Fixes
+
+- Address review findings for bulk operations
+  ([`5d930b8`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5d930b83952cd7272db6a803c43a4cc6744d230b))
+
+### Features
+
+- Add bulk operations tools for batch entity management
+  ([`d48165f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d48165f7d40a66a51260dd4bef2f4d6c44aca362))
+
+
 ## v1.9.0 (2026-03-26)
 
 ### Features
