@@ -2033,6 +2033,203 @@ def set_custom_attribute_values(
     )
 
 
+# --- Attachment Tools ---
+
+# Mapping from user-facing entity type to Taiga attachment API path segment
+_ATTACHMENT_TYPE_MAP = {
+    "epic": "epics",
+    "user_story": "userstories",
+    "userstory": "userstories",
+    "task": "tasks",
+    "issue": "issues",
+    "wiki": "wiki",
+    "wiki_page": "wiki",
+}
+_ATTACHMENT_VALID_TYPES = ["epic", "issue", "task", "user_story", "wiki"]
+
+
+def _validate_attachment_type(entity_type: str) -> str:
+    """Validate and normalize an attachment entity type."""
+    entity_type = entity_type.strip().lower()
+    if entity_type not in _ATTACHMENT_TYPE_MAP:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of: {_ATTACHMENT_VALID_TYPES}"
+        )
+    return entity_type
+
+
+@mcp.tool(
+    "list_attachments",
+    description="Lists attachments for a specific entity. entity_type: 'epic', 'user_story', 'task', 'issue', or 'wiki'. object_id is the internal ID of the entity. Uses default session if session_id not provided.",
+)
+def list_attachments(
+    object_id: int,
+    entity_type: str,
+    project_id: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lists attachments for a specific entity."""
+    entity_type = _validate_attachment_type(entity_type)
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing list_attachments for {entity_type} {object_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    path_segment = _ATTACHMENT_TYPE_MAP[entity_type]
+
+    params: Dict[str, Any] = {"object_id": object_id}
+    if project_id is not None:
+        params["project"] = project_id
+
+    return _execute_taiga_operation(
+        "list_attachments",
+        lambda: taiga_client_wrapper.api.get(f"/{path_segment}/attachments", params=params),
+        f"{entity_type} {object_id}",
+    )
+
+
+@mcp.tool(
+    "get_attachment",
+    description="Gets a specific attachment by ID. entity_type: 'epic', 'user_story', 'task', 'issue', or 'wiki'. Uses default session if session_id not provided.",
+)
+def get_attachment(
+    attachment_id: int,
+    entity_type: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Gets a specific attachment by its ID."""
+    entity_type = _validate_attachment_type(entity_type)
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing get_attachment {attachment_id} ({entity_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    path_segment = _ATTACHMENT_TYPE_MAP[entity_type]
+
+    return _execute_taiga_operation(
+        "get_attachment",
+        lambda: taiga_client_wrapper.api.get(f"/{path_segment}/attachments/{attachment_id}"),
+        f"attachment {attachment_id}",
+    )
+
+
+@mcp.tool(
+    "create_attachment",
+    description="Creates an attachment on an entity by uploading a file from the local filesystem. entity_type: 'epic', 'user_story', 'task', 'issue', or 'wiki'. file_path is the absolute path to the file to upload. description is optional. Uses default session if session_id not provided.",
+)
+def create_attachment(
+    project_id: int,
+    object_id: int,
+    entity_type: str,
+    file_path: str,
+    description: str = "",
+    is_deprecated: bool = False,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Creates an attachment by uploading a file from the local filesystem."""
+    entity_type = _validate_attachment_type(entity_type)
+    file_path = file_path.strip() if file_path else ""
+    if not file_path:
+        raise ValueError("file_path cannot be empty.")
+    if not os.path.isfile(file_path):
+        raise ValueError(f"File not found: {file_path}")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing create_attachment on {entity_type} {object_id} in project {project_id}, "
+        f"file: {os.path.basename(file_path)}, session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    path_segment = _ATTACHMENT_TYPE_MAP[entity_type]
+
+    def do_create():
+        with open(file_path, "rb") as f:
+            files = {"attached_file": (os.path.basename(file_path), f)}
+            data = {
+                "project": str(project_id),
+                "object_id": str(object_id),
+            }
+            if description:
+                data["description"] = description
+            if is_deprecated:
+                data["is_deprecated"] = "true"
+            return taiga_client_wrapper.api.post(
+                f"/{path_segment}/attachments", data=data, files=files
+            )
+
+    return _execute_taiga_operation(
+        "create_attachment",
+        do_create,
+        f"on {entity_type} {object_id} in project {project_id}",
+    )
+
+
+@mcp.tool(
+    "update_attachment",
+    description="Updates an attachment's metadata (description, is_deprecated). entity_type: 'epic', 'user_story', 'task', 'issue', or 'wiki'. Uses default session if session_id not provided.",
+)
+def update_attachment(
+    attachment_id: int,
+    entity_type: str,
+    description: Optional[str] = None,
+    is_deprecated: Optional[bool] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Updates an attachment's metadata."""
+    entity_type = _validate_attachment_type(entity_type)
+    if description is None and is_deprecated is None:
+        raise ValueError("At least one field to update must be provided.")
+
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing update_attachment {attachment_id} ({entity_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    path_segment = _ATTACHMENT_TYPE_MAP[entity_type]
+
+    def do_update():
+        payload: Dict[str, Any] = {}
+        if description is not None:
+            payload["description"] = description
+        if is_deprecated is not None:
+            payload["is_deprecated"] = is_deprecated
+        return taiga_client_wrapper.api.patch(
+            f"/{path_segment}/attachments/{attachment_id}", json=payload
+        )
+
+    return _execute_taiga_operation("update_attachment", do_update, f"attachment {attachment_id}")
+
+
+@mcp.tool(
+    "delete_attachment",
+    description="Deletes an attachment. entity_type: 'epic', 'user_story', 'task', 'issue', or 'wiki'. Uses default session if session_id not provided.",
+)
+def delete_attachment(
+    attachment_id: int,
+    entity_type: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Deletes an attachment."""
+    entity_type = _validate_attachment_type(entity_type)
+
+    actual_session_id = _get_session_id(session_id)
+    logger.warning(
+        f"Executing delete_attachment {attachment_id} ({entity_type}), "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    path_segment = _ATTACHMENT_TYPE_MAP[entity_type]
+
+    def do_delete():
+        taiga_client_wrapper.api.delete(f"/{path_segment}/attachments/{attachment_id}")
+        return {"status": "deleted", "attachment_id": attachment_id, "entity_type": entity_type}
+
+    return _execute_taiga_operation("delete_attachment", do_delete, f"attachment {attachment_id}")
+
+
 # --- Epic Tools ---
 
 

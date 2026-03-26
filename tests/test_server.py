@@ -1152,6 +1152,151 @@ class TestTaigaTools:
             "/userstory-custom-attributes", params={"project": 21}
         )
 
+    # ─── Attachment tests ────────────────────────────────────────────
+
+    def test_list_attachments(self, session_setup):
+        """Test list_attachments calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = [{"id": 1, "name": "doc.pdf"}]
+        result = src.server.list_attachments(100, "user_story", session_id=session_id)
+        mock_client.api.get.assert_called_once_with(
+            "/userstories/attachments", params={"object_id": 100}
+        )
+        assert len(result) == 1
+
+    def test_list_attachments_with_project(self, session_setup):
+        """Test list_attachments passes project_id when provided."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = []
+        src.server.list_attachments(100, "task", project_id=21, session_id=session_id)
+        mock_client.api.get.assert_called_once_with(
+            "/tasks/attachments", params={"object_id": 100, "project": 21}
+        )
+
+    def test_list_attachments_wiki(self, session_setup):
+        """Test list_attachments for wiki entity type."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = []
+        src.server.list_attachments(10, "wiki", session_id=session_id)
+        mock_client.api.get.assert_called_once_with("/wiki/attachments", params={"object_id": 10})
+
+    def test_list_attachments_invalid_type_raises(self):
+        """Test list_attachments raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.list_attachments(100, "bogus")
+
+    def test_get_attachment(self, session_setup):
+        """Test get_attachment calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = {"id": 5, "name": "spec.pdf", "url": "https://..."}
+        result = src.server.get_attachment(5, "issue", session_id=session_id)
+        mock_client.api.get.assert_called_once_with("/issues/attachments/5")
+        assert result["id"] == 5
+
+    def test_get_attachment_invalid_type_raises(self):
+        """Test get_attachment raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.get_attachment(5, "bogus")
+
+    def test_create_attachment(self, session_setup, tmp_path):
+        """Test create_attachment uploads file via multipart."""
+        session_id, mock_client = session_setup
+        # Create a temporary file to upload
+        test_file = tmp_path / "test.pdf"
+        test_file.write_text("fake pdf content")
+        mock_client.api.post.return_value = {"id": 10, "name": "test.pdf"}
+
+        result = src.server.create_attachment(
+            21, 100, "epic", str(test_file), session_id=session_id
+        )
+        assert result["id"] == 10
+        call_kwargs = mock_client.api.post.call_args
+        assert call_kwargs[0][0] == "/epics/attachments"
+        assert call_kwargs[1]["data"]["project"] == "21"
+        assert call_kwargs[1]["data"]["object_id"] == "100"
+        # files should contain the attached_file tuple
+        assert "attached_file" in call_kwargs[1]["files"]
+
+    def test_create_attachment_with_description(self, session_setup, tmp_path):
+        """Test create_attachment passes description."""
+        session_id, mock_client = session_setup
+        test_file = tmp_path / "notes.txt"
+        test_file.write_text("notes")
+        mock_client.api.post.return_value = {"id": 11}
+
+        src.server.create_attachment(
+            21, 50, "task", str(test_file), description="Design notes", session_id=session_id
+        )
+        call_data = mock_client.api.post.call_args[1]["data"]
+        assert call_data["description"] == "Design notes"
+
+    def test_create_attachment_empty_path_raises(self):
+        """Test create_attachment raises on empty file_path."""
+        with pytest.raises(ValueError, match="file_path cannot be empty"):
+            src.server.create_attachment(21, 100, "task", "  ")
+
+    def test_create_attachment_file_not_found_raises(self):
+        """Test create_attachment raises when file doesn't exist."""
+        with pytest.raises(ValueError, match="File not found"):
+            src.server.create_attachment(21, 100, "task", "/nonexistent/file.pdf")
+
+    def test_create_attachment_invalid_type_raises(self):
+        """Test create_attachment raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.create_attachment(21, 100, "bogus", "/some/file.pdf")
+
+    def test_update_attachment(self, session_setup):
+        """Test update_attachment calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {"id": 5, "description": "Updated"}
+        result = src.server.update_attachment(
+            5, "user_story", description="Updated", session_id=session_id
+        )
+        mock_client.api.patch.assert_called_once_with(
+            "/userstories/attachments/5", json={"description": "Updated"}
+        )
+        assert result["description"] == "Updated"
+
+    def test_update_attachment_deprecated(self, session_setup):
+        """Test update_attachment with is_deprecated flag."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {"id": 5, "is_deprecated": True}
+        src.server.update_attachment(5, "issue", is_deprecated=True, session_id=session_id)
+        mock_client.api.patch.assert_called_once_with(
+            "/issues/attachments/5", json={"is_deprecated": True}
+        )
+
+    def test_update_attachment_no_fields_raises(self):
+        """Test update_attachment raises when no fields provided."""
+        with pytest.raises(ValueError, match="At least one field"):
+            src.server.update_attachment(5, "task")
+
+    def test_update_attachment_invalid_type_raises(self):
+        """Test update_attachment raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.update_attachment(5, "bogus", description="x")
+
+    def test_delete_attachment(self, session_setup):
+        """Test delete_attachment calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.delete.return_value = None
+        result = src.server.delete_attachment(5, "wiki", session_id=session_id)
+        mock_client.api.delete.assert_called_once_with("/wiki/attachments/5")
+        assert result["status"] == "deleted"
+        assert result["attachment_id"] == 5
+
+    def test_delete_attachment_invalid_type_raises(self):
+        """Test delete_attachment raises on invalid entity_type."""
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            src.server.delete_attachment(5, "bogus")
+
+    def test_attachments_wiki_page_alias(self, session_setup):
+        """Test that 'wiki_page' alias works same as 'wiki'."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = []
+        src.server.list_attachments(10, "wiki_page", session_id=session_id)
+        mock_client.api.get.assert_called_once_with("/wiki/attachments", params={"object_id": 10})
+
     # ─── Epic tools tests ────────────────────────────────────────────
 
     def test_list_epics(self, session_setup):
