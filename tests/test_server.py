@@ -911,6 +911,179 @@ class TestTaigaTools:
         assert len(result) == 2
         mock_client.list_resources.assert_called_once_with("issue_types", project_id=123)
 
+    # ─── Project Configuration CRUD tests ────────────────────────────
+
+    def test_create_project_config_status(self, session_setup):
+        """Test create_project_config for issue_status."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 10, "name": "In Review"}
+        result = src.server.create_project_config(
+            21, "issue_status", "In Review", session_id=session_id
+        )
+        mock_client.api.post.assert_called_once_with(
+            "/issue-statuses",
+            json={"project": 21, "name": "In Review", "color": "#999999"},
+        )
+        assert result["name"] == "In Review"
+
+    def test_create_project_config_with_options(self, session_setup):
+        """Test create_project_config with all optional fields."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 11}
+        src.server.create_project_config(
+            21,
+            "task_status",
+            "Done",
+            color="#00FF00",
+            is_closed=True,
+            order=5,
+            session_id=session_id,
+        )
+        call_json = mock_client.api.post.call_args[1]["json"]
+        assert call_json["name"] == "Done"
+        assert call_json["color"] == "#00FF00"
+        assert call_json["is_closed"] is True
+        assert call_json["order"] == 5
+
+    def test_create_project_config_priority(self, session_setup):
+        """Test create_project_config for priority."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 12}
+        src.server.create_project_config(21, "priority", "Urgent", session_id=session_id)
+        mock_client.api.post.assert_called_once_with(
+            "/priorities",
+            json={"project": 21, "name": "Urgent", "color": "#999999"},
+        )
+
+    def test_create_project_config_severity(self, session_setup):
+        """Test create_project_config for severity."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 13}
+        src.server.create_project_config(21, "severity", "Critical", session_id=session_id)
+        mock_client.api.post.assert_called_once_with(
+            "/severities",
+            json={"project": 21, "name": "Critical", "color": "#999999"},
+        )
+
+    def test_create_project_config_issue_type(self, session_setup):
+        """Test create_project_config for issue_type."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 14}
+        src.server.create_project_config(21, "issue_type", "Security", session_id=session_id)
+        mock_client.api.post.assert_called_once_with(
+            "/issue-types",
+            json={"project": 21, "name": "Security", "color": "#999999"},
+        )
+
+    def test_create_project_config_epic_status(self, session_setup):
+        """Test create_project_config for epic_status."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 15}
+        src.server.create_project_config(21, "epic_status", "Backlog", session_id=session_id)
+        mock_client.api.post.assert_called_once_with(
+            "/epic-statuses",
+            json={"project": 21, "name": "Backlog", "color": "#999999"},
+        )
+
+    def test_create_project_config_empty_name_raises(self):
+        """Test create_project_config raises on empty name."""
+        with pytest.raises(ValueError, match="Name cannot be empty"):
+            src.server.create_project_config(21, "issue_status", "  ")
+
+    def test_create_project_config_invalid_type_raises(self):
+        """Test create_project_config raises on invalid config_type."""
+        with pytest.raises(ValueError, match="Invalid config_type"):
+            src.server.create_project_config(21, "bogus", "Name")
+
+    def test_create_project_config_user_story_status_alias(self, session_setup):
+        """Test user_story_status alias maps to userstory-statuses."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {"id": 16}
+        src.server.create_project_config(21, "user_story_status", "New", session_id=session_id)
+        assert mock_client.api.post.call_args[0][0] == "/userstory-statuses"
+
+    def test_update_project_config(self, session_setup):
+        """Test update_project_config calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {"id": 10, "name": "Reviewed"}
+        result = src.server.update_project_config(
+            10, "issue_status", name="Reviewed", session_id=session_id
+        )
+        mock_client.api.patch.assert_called_once_with(
+            "/issue-statuses/10", json={"name": "Reviewed"}
+        )
+        assert result["name"] == "Reviewed"
+
+    def test_update_project_config_multiple_fields(self, session_setup):
+        """Test update_project_config with multiple fields."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {"id": 10}
+        src.server.update_project_config(
+            10, "priority", name="Critical", color="#FF0000", order=1, session_id=session_id
+        )
+        call_json = mock_client.api.patch.call_args[1]["json"]
+        assert call_json["name"] == "Critical"
+        assert call_json["color"] == "#FF0000"
+        assert call_json["order"] == 1
+
+    def test_update_project_config_empty_name_raises(self):
+        """Test update_project_config raises on empty name."""
+        with pytest.raises(ValueError, match="Name cannot be empty"):
+            src.server.update_project_config(10, "issue_status", name="  ")
+
+    def test_update_project_config_no_fields_raises(self):
+        """Test update_project_config raises when no fields provided."""
+        with pytest.raises(ValueError, match="At least one field"):
+            src.server.update_project_config(10, "issue_status")
+
+    def test_update_project_config_invalid_type_raises(self):
+        """Test update_project_config raises on invalid config_type."""
+        with pytest.raises(ValueError, match="Invalid config_type"):
+            src.server.update_project_config(10, "bogus", name="X")
+
+    def test_delete_project_config(self, session_setup):
+        """Test delete_project_config calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.delete.return_value = None
+        result = src.server.delete_project_config(10, "severity", session_id=session_id)
+        mock_client.api.delete.assert_called_once_with("/severities/10")
+        assert result["status"] == "deleted"
+        assert result["item_id"] == 10
+
+    def test_delete_project_config_invalid_type_raises(self):
+        """Test delete_project_config raises on invalid config_type."""
+        with pytest.raises(ValueError, match="Invalid config_type"):
+            src.server.delete_project_config(10, "bogus")
+
+    def test_bulk_update_order_project_config(self, session_setup):
+        """Test bulk_update_order_project_config calls correct endpoint."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = None
+        result = src.server.bulk_update_order_project_config(
+            21, "issue_status", [[1, 1], [2, 2], [3, 3]], session_id=session_id
+        )
+        mock_client.api.post.assert_called_once_with(
+            "/issue-statuses/bulk_update_order",
+            json={"project": 21, "bulk_orders": [[1, 1], [2, 2], [3, 3]]},
+        )
+        assert result["status"] == "updated"
+        assert result["items_reordered"] == 3
+
+    def test_bulk_update_order_project_config_empty_raises(self):
+        """Test bulk_update_order_project_config raises on empty list."""
+        with pytest.raises(ValueError, match="bulk_orders cannot be empty"):
+            src.server.bulk_update_order_project_config(21, "priority", [])
+
+    def test_bulk_update_order_project_config_invalid_pair_raises(self):
+        """Test bulk_update_order_project_config raises on malformed pair."""
+        with pytest.raises(ValueError, match="must be a \\[id, order\\] pair"):
+            src.server.bulk_update_order_project_config(21, "priority", [[1]])
+
+    def test_bulk_update_order_project_config_invalid_type_raises(self):
+        """Test bulk_update_order_project_config raises on invalid config_type."""
+        with pytest.raises(ValueError, match="Invalid config_type"):
+            src.server.bulk_update_order_project_config(21, "bogus", [[1, 1]])
+
     # ─── Story Points tools tests ─────────────────────────────────────
 
     def test_list_points(self, session_setup):
