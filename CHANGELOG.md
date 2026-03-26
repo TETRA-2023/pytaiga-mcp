@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.13.0 (2026-03-26)
+
+### Features
+
+- Add project configuration CRUD tools for statuses, types, priorities, severities
+  ([`c8f1398`](https://github.com/TETRA-2023/pytaiga-mcp/commit/c8f139873ddcc850e28bd63d3d86cd4c93c54003))
+
+
 ## v1.12.0 (2026-03-26)
 
 ### Bug Fixes
