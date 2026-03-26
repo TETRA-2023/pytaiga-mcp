@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-03-26)
+
+### Features
+
+- Add story points management tools
+  ([`5c5209b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5c5209b31ac8198c654a16042e24212f01e72d1c))
+
+
 ## v1.8.0 (2026-03-26)
 
 ### Features
