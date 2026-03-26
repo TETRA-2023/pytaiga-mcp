@@ -1807,6 +1807,17 @@ _CUSTOM_ATTR_TYPE_MAP = {
     "task": ("task-custom-attributes", "tasks"),
     "issue": ("issue-custom-attributes", "issues"),
 }
+_CUSTOM_ATTR_VALID_TYPES = ["epic", "issue", "task", "user_story"]
+
+
+def _validate_custom_attr_type(entity_type: str) -> str:
+    """Validate and normalize a custom attribute entity type."""
+    entity_type = entity_type.strip().lower()
+    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of: {_CUSTOM_ATTR_VALID_TYPES}"
+        )
+    return entity_type
 
 
 @mcp.tool(
@@ -1819,12 +1830,7 @@ def list_custom_attributes(
     session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Lists custom attribute definitions for a given entity type in a project."""
-    entity_type = entity_type.strip().lower()
-    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {sorted(set(k for k in _CUSTOM_ATTR_TYPE_MAP if '_' not in k or k == 'user_story'))}"
-        )
+    entity_type = _validate_custom_attr_type(entity_type)
     actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing list_custom_attributes for {entity_type} in project {project_id}, "
@@ -1848,19 +1854,14 @@ def create_custom_attribute(
     project_id: int,
     entity_type: str,
     name: str,
-    type: str = "text",
+    attr_type: str = "text",
     description: str = "",
     order: Optional[int] = None,
     extra: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Creates a custom attribute definition."""
-    entity_type = entity_type.strip().lower()
-    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {sorted(set(k for k in _CUSTOM_ATTR_TYPE_MAP if '_' not in k or k == 'user_story'))}"
-        )
+    entity_type = _validate_custom_attr_type(entity_type)
     name = name.strip() if name else ""
     if not name:
         raise ValueError("Attribute name cannot be empty.")
@@ -1877,7 +1878,7 @@ def create_custom_attribute(
         payload: Dict[str, Any] = {
             "project": project_id,
             "name": name,
-            "type": type,
+            "type": attr_type,
         }
         if description:
             payload["description"] = description
@@ -1906,12 +1907,7 @@ def update_custom_attribute(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Updates a custom attribute definition."""
-    entity_type = entity_type.strip().lower()
-    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {sorted(set(k for k in _CUSTOM_ATTR_TYPE_MAP if '_' not in k or k == 'user_story'))}"
-        )
+    entity_type = _validate_custom_attr_type(entity_type)
     if name is not None:
         name = name.strip()
         if not name:
@@ -1954,12 +1950,7 @@ def delete_custom_attribute(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Deletes a custom attribute definition."""
-    entity_type = entity_type.strip().lower()
-    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {sorted(set(k for k in _CUSTOM_ATTR_TYPE_MAP if '_' not in k or k == 'user_story'))}"
-        )
+    entity_type = _validate_custom_attr_type(entity_type)
 
     actual_session_id = _get_session_id(session_id)
     logger.warning(
@@ -1988,12 +1979,7 @@ def get_custom_attribute_values(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Gets custom attribute values for a specific entity."""
-    entity_type = entity_type.strip().lower()
-    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {sorted(set(k for k in _CUSTOM_ATTR_TYPE_MAP if '_' not in k or k == 'user_story'))}"
-        )
+    entity_type = _validate_custom_attr_type(entity_type)
 
     actual_session_id = _get_session_id(session_id)
     logger.info(
@@ -2024,12 +2010,7 @@ def set_custom_attribute_values(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Sets custom attribute values for a specific entity."""
-    entity_type = entity_type.strip().lower()
-    if entity_type not in _CUSTOM_ATTR_TYPE_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {sorted(set(k for k in _CUSTOM_ATTR_TYPE_MAP if '_' not in k or k == 'user_story'))}"
-        )
+    entity_type = _validate_custom_attr_type(entity_type)
     if not attributes_values:
         raise ValueError("attributes_values cannot be empty.")
 

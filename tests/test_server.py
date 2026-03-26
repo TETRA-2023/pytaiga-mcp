@@ -1035,7 +1035,7 @@ class TestTaigaTools:
             21,
             "epic",
             "Status",
-            type="dropdown",
+            attr_type="dropdown",
             description="Workflow status",
             order=5,
             extra="Option A,Option B",
