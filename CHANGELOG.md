@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.12.0 (2026-03-26)
+
+### Bug Fixes
+
+- Remove redundant inline import of os in create_attachment
+  ([`7d5b94e`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7d5b94e582fbb6deb44c0be6fc611c3eaa96f9a6))
+
+### Features
+
+- Add attachment tools for all entity types
+  ([`9cf9c2f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9cf9c2fcdbcddbb8651df5ec008919a670db3d60))
+
+
 ## v1.11.0 (2026-03-26)
 
 ### Bug Fixes
