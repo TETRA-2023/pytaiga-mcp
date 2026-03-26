@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-03-26)
+
+### Bug Fixes
+
+- Address PR #41 review findings for custom attributes
+  ([`a032b96`](https://github.com/TETRA-2023/pytaiga-mcp/commit/a032b96ae3d92d56dcdedb2c36c4058248c32a6a))
+
+### Features
+
+- Add custom attributes tools for entity metadata management
+  ([`22b6e8b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/22b6e8bf21ff0a219982e696f924ad65a52b697e))
+
+
 ## v1.10.0 (2026-03-26)
 
 ### Bug Fixes
