@@ -1866,28 +1866,28 @@ class TestTaigaTools:
         with pytest.raises(ValueError, match="Invalid object_type"):
             src.server.add_comment(1, "invalid_type", "comment", session_id)
 
-    def test_add_comment_unescapes_newlines(self, session_setup):
-        """Test add_comment converts literal \\n to actual newlines."""
+    def test_add_comment_unescapes_newlines_and_tabs(self, session_setup):
+        """Test add_comment converts literal \\n and \\t to actual characters."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = {"id": 42, "version": 3}
         mock_client.api.patch.return_value = {"id": 42, "version": 4}
 
-        src.server.add_comment(42, "issue", "Line 1\\nLine 2\\nLine 3", session_id)
+        src.server.add_comment(42, "issue", "Line 1\\nLine 2\\tindented", session_id)
 
         mock_client.api.patch.assert_called_once_with(
-            "/issues/42", json={"comment": "Line 1\nLine 2\nLine 3", "version": 3}
+            "/issues/42", json={"comment": "Line 1\nLine 2\tindented", "version": 3}
         )
 
-    def test_edit_comment_unescapes_newlines(self, session_setup):
-        """Test edit_comment converts literal \\n to actual newlines."""
+    def test_edit_comment_unescapes_newlines_and_tabs(self, session_setup):
+        """Test edit_comment converts literal \\n and \\t to actual characters."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        src.server.edit_comment(42, "issue", "abc", "Line 1\\nLine 2", session_id)
+        src.server.edit_comment(42, "issue", "abc", "Line 1\\nLine 2\\tindented", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/history/issue/42/edit_comment/",
-            json={"comment_id": "abc", "comment": "Line 1\nLine 2"},
+            json={"comment_id": "abc", "comment": "Line 1\nLine 2\tindented"},
         )
 
     def test_add_comment_missing_version(self, session_setup):
@@ -2062,7 +2062,7 @@ class TestTaigaTools:
 
         result = src.server.get_comment_versions(42, "task", "abc123", session_id)
 
-        mock_client.api.get.assert_called_once_with("/history/task/42/comment_versions/abc123")
+        mock_client.api.get.assert_called_once_with("/history/task/42/comment_versions/abc123/")
         assert result["comment_id"] == "abc123"
         assert len(result["versions"]) == 2
 

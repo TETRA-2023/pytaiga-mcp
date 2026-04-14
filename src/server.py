@@ -3175,8 +3175,8 @@ def add_comment(
         )
     if not comment or not comment.strip():
         raise ValueError("Comment text must not be empty.")
-    # Unescape literal \n sequences that LLMs send through MCP JSON
-    comment = comment.replace("\\n", "\n")
+    # Unescape literal escape sequences that LLMs send through MCP JSON
+    comment = comment.replace("\\n", "\n").replace("\\t", "\t")
 
     patch_path, _ = _COMMENT_TYPE_MAP[object_type]
     actual_session_id = _get_session_id(session_id)
@@ -3271,8 +3271,8 @@ def edit_comment(
             f"Must be one of: {', '.join(sorted(_COMMENT_TYPE_MAP.keys()))}"
         )
     new_comment = new_comment.strip() if new_comment else ""
-    # Unescape literal \n sequences that LLMs send through MCP JSON
-    new_comment = new_comment.replace("\\n", "\n")
+    # Unescape literal escape sequences that LLMs send through MCP JSON
+    new_comment = new_comment.replace("\\n", "\n").replace("\\t", "\t")
     if not new_comment:
         raise ValueError("New comment text must not be empty.")
     if not comment_id or not comment_id.strip():
@@ -3425,7 +3425,7 @@ def get_comment_versions(
 
     def do_get_versions():
         result = taiga_client_wrapper.api.get(
-            f"/history/{history_path}/{object_id}/comment_versions/{comment_id}"
+            f"/history/{history_path}/{object_id}/comment_versions/{comment_id}/"
         )
         return {
             "object_type": object_type,
