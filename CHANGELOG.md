@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.14.0 (2026-04-14)
+
+### Bug Fixes
+
+- Eliminate double session resolution and add enrichment tests
+  ([`d16a825`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d16a8257858845f916f3d8dfa97e2dea6f4ebf95))
+
+### Features
+
+- Enrich user story responses with associated tasks
+  ([`3c9c60a`](https://github.com/TETRA-2023/pytaiga-mcp/commit/3c9c60a21184ab7172d187ca9b2b5731314ae189))
+
+
 ## v1.13.0 (2026-03-26)
 
 ### Features
