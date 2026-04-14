@@ -2517,6 +2517,143 @@ class TestResponseFiltering:
         assert "watchers" not in result
 
 
+# ─── User Story Task Enrichment tests ────────────────────────────────
+
+
+class TestEnrichUserStoryTasks:
+    """Tests for the _enrich_user_story_tasks helper."""
+
+    def _make_us_result(self, us_id=606, project_id=21):
+        return {"id": us_id, "ref": 18, "subject": "Test US", "project": project_id, "tasks": []}
+
+    def _make_mock_client(self, tasks=None):
+        mock = MagicMock()
+        mock.list_resources.return_value = tasks or []
+        return mock
+
+    def test_standard_verbosity_includes_tasks_at_minimal_level(self):
+        """Standard verbosity should enrich with tasks filtered to minimal."""
+        raw_tasks = [
+            {
+                "id": 100,
+                "ref": 10,
+                "subject": "Task 1",
+                "status": 1,
+                "project": 21,
+                "description": "should be filtered",
+                "version": 1,
+            },
+            {
+                "id": 101,
+                "ref": 11,
+                "subject": "Task 2",
+                "status": 2,
+                "project": 21,
+                "description": "should be filtered",
+                "version": 1,
+            },
+        ]
+        mock_client = self._make_mock_client(raw_tasks)
+        us_result = self._make_us_result()
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+
+        assert len(result["tasks"]) == 2
+        assert result["tasks"][0] == {
+            "id": 100,
+            "ref": 10,
+            "subject": "Task 1",
+            "status": 1,
+            "project": 21,
+        }
+        # description should be filtered out at minimal level
+        assert "description" not in result["tasks"][0]
+        mock_client.list_resources.assert_called_once_with("tasks", project_id=21, user_story=606)
+
+    def test_full_verbosity_includes_tasks_at_standard_level(self):
+        """Full verbosity should enrich with tasks filtered to standard."""
+        raw_tasks = [
+            {
+                "id": 100,
+                "ref": 10,
+                "subject": "Task 1",
+                "status": 1,
+                "status_extra_info": {"name": "New"},
+                "assigned_to": 9,
+                "assigned_to_extra_info": {"username": "user1"},
+                "user_story": 606,
+                "milestone": 1,
+                "project": 21,
+                "description": "A task",
+                "tags": [],
+                "is_blocked": False,
+                "due_date": None,
+                "version": 1,
+                "watchers": [1],
+            },
+        ]
+        mock_client = self._make_mock_client(raw_tasks)
+        us_result = self._make_us_result()
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "full")
+
+        assert len(result["tasks"]) == 1
+        assert "description" in result["tasks"][0]
+        assert "status_extra_info" in result["tasks"][0]
+        assert "assigned_to" in result["tasks"][0]
+        # watchers should be filtered out at standard level
+        assert "watchers" not in result["tasks"][0]
+
+    def test_minimal_verbosity_skips_enrichment(self):
+        """Minimal verbosity should not fetch tasks at all."""
+        mock_client = self._make_mock_client()
+        us_result = self._make_us_result()
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "minimal")
+
+        assert result["tasks"] == []
+        mock_client.list_resources.assert_not_called()
+
+    def test_graceful_fallback_on_fetch_failure(self):
+        """Should return empty tasks list if fetch fails."""
+        mock_client = MagicMock()
+        mock_client.list_resources.side_effect = Exception("Connection refused")
+        us_result = self._make_us_result()
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+
+        assert result["tasks"] == []
+
+    def test_missing_id_skips_enrichment(self):
+        """Should skip enrichment if US result has no id."""
+        mock_client = self._make_mock_client()
+        us_result = {"ref": 18, "subject": "Test", "project": 21}
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+
+        assert "tasks" not in result
+        mock_client.list_resources.assert_not_called()
+
+    def test_missing_project_skips_enrichment(self):
+        """Should skip enrichment if US result has no project."""
+        mock_client = self._make_mock_client()
+        us_result = {"id": 606, "ref": 18, "subject": "Test"}
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+
+        assert "tasks" not in result
+        mock_client.list_resources.assert_not_called()
+
+    def test_mutates_input_dict(self):
+        """Should mutate the input dict in-place (documented behavior)."""
+        mock_client = self._make_mock_client([])
+        us_result = self._make_us_result()
+
+        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+
+        assert result is us_result
+
+
 # ─── Config tests ─────────────────────────────────────────────────────
 
 
