@@ -3175,6 +3175,8 @@ def add_comment(
         )
     if not comment or not comment.strip():
         raise ValueError("Comment text must not be empty.")
+    # Unescape literal \n sequences that LLMs send through MCP JSON
+    comment = comment.replace("\\n", "\n")
 
     patch_path, _ = _COMMENT_TYPE_MAP[object_type]
     actual_session_id = _get_session_id(session_id)
@@ -3269,6 +3271,8 @@ def edit_comment(
             f"Must be one of: {', '.join(sorted(_COMMENT_TYPE_MAP.keys()))}"
         )
     new_comment = new_comment.strip() if new_comment else ""
+    # Unescape literal \n sequences that LLMs send through MCP JSON
+    new_comment = new_comment.replace("\\n", "\n")
     if not new_comment:
         raise ValueError("New comment text must not be empty.")
     if not comment_id or not comment_id.strip():
@@ -3280,7 +3284,7 @@ def edit_comment(
 
     def do_edit():
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/edit_comment",
+            f"/history/{history_path}/{object_id}/edit_comment/",
             json={"comment_id": comment_id, "comment": new_comment},
         )
         return {
@@ -3327,7 +3331,7 @@ def delete_comment(
 
     def do_delete():
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/delete_comment",
+            f"/history/{history_path}/{object_id}/delete_comment/",
             json={"comment_id": comment_id},
         )
         return {
@@ -3374,7 +3378,7 @@ def undelete_comment(
 
     def do_undelete():
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/undelete_comment",
+            f"/history/{history_path}/{object_id}/undelete_comment/",
             json={"comment_id": comment_id},
         )
         return {

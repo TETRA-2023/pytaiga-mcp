@@ -1866,6 +1866,30 @@ class TestTaigaTools:
         with pytest.raises(ValueError, match="Invalid object_type"):
             src.server.add_comment(1, "invalid_type", "comment", session_id)
 
+    def test_add_comment_unescapes_newlines(self, session_setup):
+        """Test add_comment converts literal \\n to actual newlines."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = {"id": 42, "version": 3}
+        mock_client.api.patch.return_value = {"id": 42, "version": 4}
+
+        src.server.add_comment(42, "issue", "Line 1\\nLine 2\\nLine 3", session_id)
+
+        mock_client.api.patch.assert_called_once_with(
+            "/issues/42", json={"comment": "Line 1\nLine 2\nLine 3", "version": 3}
+        )
+
+    def test_edit_comment_unescapes_newlines(self, session_setup):
+        """Test edit_comment converts literal \\n to actual newlines."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = None
+
+        src.server.edit_comment(42, "issue", "abc", "Line 1\\nLine 2", session_id)
+
+        mock_client.api.post.assert_called_once_with(
+            "/history/issue/42/edit_comment/",
+            json={"comment_id": "abc", "comment": "Line 1\nLine 2"},
+        )
+
     def test_add_comment_missing_version(self, session_setup):
         """Test add_comment raises ValueError when object has no version field."""
         session_id, mock_client = session_setup
@@ -1958,7 +1982,7 @@ class TestTaigaTools:
         result = src.server.edit_comment(42, "issue", "abc123", "Updated text", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/issue/42/edit_comment",
+            "/history/issue/42/edit_comment/",
             json={"comment_id": "abc123", "comment": "Updated text"},
         )
         assert result["status"] == "comment_edited"
@@ -1972,7 +1996,7 @@ class TestTaigaTools:
         src.server.edit_comment(42, "task", "abc", "  trimmed  ", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/task/42/edit_comment",
+            "/history/task/42/edit_comment/",
             json={"comment_id": "abc", "comment": "trimmed"},
         )
 
@@ -1996,7 +2020,7 @@ class TestTaigaTools:
         result = src.server.delete_comment(42, "user_story", "abc123", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/userstory/42/delete_comment",
+            "/history/userstory/42/delete_comment/",
             json={"comment_id": "abc123"},
         )
         assert result["status"] == "comment_deleted"
@@ -2016,7 +2040,7 @@ class TestTaigaTools:
         result = src.server.undelete_comment(42, "epic", "abc123", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/epic/42/undelete_comment",
+            "/history/epic/42/undelete_comment/",
             json={"comment_id": "abc123"},
         )
         assert result["status"] == "comment_restored"
