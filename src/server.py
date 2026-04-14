@@ -553,6 +553,8 @@ def _enrich_user_story_tasks(
     This helper fetches the actual tasks and injects them into the response.
 
     Task verbosity mapping: US standard → task minimal, US full → task standard.
+
+    Note: Mutates us_result in-place (sets the 'tasks' key) and returns it.
     """
     if verbosity == "minimal":
         return us_result
@@ -1096,9 +1098,22 @@ def get_user_story_by_ref(
 ) -> Dict[str, Any]:
     """Retrieves user story details by ref number within a project."""
     actual_session_id = _get_session_id(session_id)
-    result = _get_item_by_ref("user_story", "user_stories", project_id, ref, session_id, verbosity)
+    logger.info(
+        f"Executing get_user_story_by_ref ref #{ref} in project {project_id} "
+        f"for session {actual_session_id[:8]}..."
+    )
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
-    return _enrich_user_story_tasks(result, taiga_client_wrapper, verbosity)
+    api_collection = getattr(taiga_client_wrapper.api, "user_stories")
+
+    result = _execute_taiga_operation(
+        "get_user_story_by_ref",
+        lambda: api_collection.get_by_ref(ref=ref, project=project_id),
+        f"user story ref #{ref} in project {project_id}",
+    )
+    if not result:
+        raise ValueError(f"User story with ref #{ref} not found in project {project_id}")
+    filtered = _filter_response(result, "user_story", verbosity)
+    return _enrich_user_story_tasks(filtered, taiga_client_wrapper, verbosity)
 
 
 @mcp.tool(
