@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.14.1 (2026-04-14)
+
+### Bug Fixes
+
+- Also unescape \t and add trailing slash to comment_versions endpoint
+  ([`e8bbe0c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/e8bbe0ca8417b2f9118bb62d18d078853193dfca))
+
+- Comment edit/delete 404 and literal \n in comment text
+  ([`d47c1f4`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d47c1f40bbaf199d7abbca0de0d111dbc0ba2930))
+
+
 ## v1.14.0 (2026-04-14)
 
 ### Bug Fixes
