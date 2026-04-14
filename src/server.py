@@ -1068,7 +1068,7 @@ def create_user_story(
 
 @mcp.tool(
     "get_user_story",
-    description="Gets detailed information about a specific user story by its internal ID (not the ref number shown in Taiga UI). Use get_user_story_by_ref if you have the '#N' reference number instead. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description="Gets detailed information about a specific user story by its internal ID (not the ref number shown in Taiga UI). Use get_user_story_by_ref if you have the '#N' reference number instead. verbosity: 'minimal', 'standard' (default), 'full'. Note: embedded tasks use one verbosity level lower (standard→task minimal with raw status IDs only, full→task standard with status_extra_info). Uses default session if session_id not provided.",
 )
 def get_user_story(
     user_story_id: int, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -1091,7 +1091,7 @@ def get_user_story(
 
 @mcp.tool(
     "get_user_story_by_ref",
-    description="Gets a user story by its human-readable reference number (the '#N' shown in Taiga UI). Requires the project_id. Use this instead of get_user_story when you have a ref number. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description="Gets a user story by its human-readable reference number (the '#N' shown in Taiga UI). Requires the project_id. Use this instead of get_user_story when you have a ref number. verbosity: 'minimal', 'standard' (default), 'full'. Note: embedded tasks use one verbosity level lower (standard→task minimal with raw status IDs only, full→task standard with status_extra_info). Uses default session if session_id not provided.",
 )
 def get_user_story_by_ref(
     project_id: int, ref: int, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -1118,7 +1118,7 @@ def get_user_story_by_ref(
 
 @mcp.tool(
     "update_user_story",
-    description="Updates details of an existing user story. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description="Updates details of an existing user story. verbosity: 'minimal', 'standard' (default), 'full'. Note: embedded tasks use one verbosity level lower (standard→task minimal with raw status IDs only, full→task standard with status_extra_info). Uses default session if session_id not provided.",
 )
 def update_user_story(
     user_story_id: int,
