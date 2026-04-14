@@ -11,7 +11,7 @@
 [![GHCR](https://img.shields.io/badge/ghcr.io-tetra--2023%2Fpytaiga--mcp-blue?logo=docker)](https://ghcr.io/tetra-2023/pytaiga-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-> **Community fork** of [talhaorak/pytaiga-mcp](https://github.com/talhaorak/pytaiga-mcp) with additional features, CI/CD, and ongoing maintenance.
+> Originally forked from [talhaorak/pytaiga-mcp](https://github.com/talhaorak/pytaiga-mcp), now an independent standalone project. The codebase has diverged significantly with 100+ tools, Docker/CI support, multi-transport modes, and active maintenance.
 
 ## Overview
 
@@ -28,16 +28,25 @@ By using the MCP standard, this bridge allows AI systems to maintain contextual 
 
 ## Features
 
-### Comprehensive Resource Support
+### 100+ MCP Tools
 
-The bridge supports the following Taiga resources with complete CRUD operations:
+The bridge provides comprehensive CRUD operations and advanced features across all Taiga resources:
 
-- **Projects**: Create, update, and manage project settings and metadata
-- **Epics**: Manage large features that span multiple sprints
-- **User Stories**: Handle detailed requirements and acceptance criteria
-- **Tasks**: Track smaller units of work within user stories
+- **Projects**: Create, update, manage settings, tags, and project configuration (statuses, types, priorities, severities)
+- **Epics**: Manage large features, link user stories to epics
+- **User Stories**: Full lifecycle management with automatic task enrichment in responses
+- **Tasks**: Track work within user stories, bulk create and reorder
 - **Issues**: Manage bugs, questions, and enhancement requests
 - **Sprints (Milestones)**: Plan and track work in time-boxed intervals
+- **Wiki Pages**: Create, update, delete, and look up by slug
+- **Comments**: Add, edit, delete, undelete, and view version history on any object
+- **Attachments**: Upload and manage attachments on all entity types
+- **Custom Attributes**: Define and set custom metadata fields per entity type
+- **Bulk Operations**: Batch create epics, user stories, tasks, issues, and memberships
+- **Story Points**: Manage point scales and assignments
+- **History/Audit Trail**: View change history for any object
+- **Global Search**: Search across all project resources
+- **Memberships**: Manage project members and invite users
 
 ### Security & Configuration
 
@@ -240,15 +249,16 @@ uv run python src/server.py --sse
 
 ### Transport Modes
 
-The server supports two transport modes:
+The server supports three transport modes:
 
-1. **stdio (Standard Input/Output)** - Default mode for terminal-based clients
+1. **stdio (Standard Input/Output)** - Default mode for terminal-based clients (Claude Code, Cursor)
 2. **SSE (Server-Sent Events)** - Web-based transport with server push capabilities
+3. **Streamable HTTP** - HTTP-based transport for stateless deployments
 
 You can set the transport mode in several ways:
-- Using the `--sse` flag with run.sh or server.py (default is stdio)
-- Setting the `TAIGA_TRANSPORT` environment variable 
-- Adding `TAIGA_TRANSPORT=sse` to your `.env` file
+- Using `--sse` or `--streamable-http` flags with run.sh or server.py (default is stdio)
+- Setting the `TAIGA_TRANSPORT` environment variable
+- Adding `TAIGA_TRANSPORT=sse` or `TAIGA_TRANSPORT=streamable-http` to your `.env` file
 
 ### Authentication Flow
 
@@ -449,6 +459,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
+- [talhaorak](https://github.com/talhaorak) for the [original pytaiga-mcp](https://github.com/talhaorak/pytaiga-mcp) project that this work builds upon
 - [Taiga](https://www.taiga.io/) for their excellent project management platform
 - [Model Context Protocol (MCP)](https://github.com/mcp-foundation/specification) for the standardized AI communication framework
 - All contributors who have helped shape this project
