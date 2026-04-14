@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.14.2 (2026-04-14)
+
+### Bug Fixes
+
+- Clarify nested task verbosity behavior in US tool descriptions
+  ([`7ff220b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7ff220beb6e6201393102166259baa0018d0a4bf))
+
+### Chores
+
+- Update dependencies to resolve security alerts
+  ([`ff6ff1c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ff6ff1c89c26f89e5a22021f0b21b13ea588d618))
+
+### Documentation
+
+- Update README to reflect standalone status and full feature set
+  ([`5a5e4a6`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5a5e4a65cd9db2ae999112edd7a3acaca8a4e3f4))
+
+
 ## v1.14.1 (2026-04-14)
 
 ### Bug Fixes
