@@ -223,6 +223,7 @@ RESPONSE_FIELDS: Dict[str, Dict[str, Optional[List[str]]]] = {
             "is_closed",
             "due_date",
             "version",
+            "tasks",
         ],
         "full": None,
     },
@@ -539,6 +540,39 @@ def _filter_response(response, resource_type: str, verbosity: str = "standard"):
     if isinstance(response, list):
         return [filter_dict(item) for item in response]
     return filter_dict(response)
+
+
+def _enrich_user_story_tasks(
+    us_result: Dict[str, Any],
+    taiga_client_wrapper,
+    verbosity: str,
+) -> Dict[str, Any]:
+    """Enrich a user story response with its associated tasks.
+
+    The Taiga API returns an empty tasks array in user story detail responses.
+    This helper fetches the actual tasks and injects them into the response.
+
+    Task verbosity mapping: US standard → task minimal, US full → task standard.
+    """
+    if verbosity == "minimal":
+        return us_result
+
+    us_id = us_result.get("id")
+    project_id = us_result.get("project")
+    if not us_id or not project_id:
+        return us_result
+
+    task_verbosity = "minimal" if verbosity == "standard" else "standard"
+    try:
+        tasks = taiga_client_wrapper.list_resources(
+            "tasks", project_id=project_id, user_story=us_id
+        )
+        us_result["tasks"] = _filter_response(tasks, "task", task_verbosity)
+    except Exception as e:
+        logger.warning(f"Failed to fetch tasks for user story {us_id}: {e}")
+        us_result["tasks"] = []
+
+    return us_result
 
 
 def _get_item_by_ref(
@@ -1049,7 +1083,8 @@ def get_user_story(
         lambda: taiga_client_wrapper.api.user_stories.get(user_story_id),
         f"user story {user_story_id}",
     )
-    return _filter_response(result, "user_story", verbosity)
+    filtered = _filter_response(result, "user_story", verbosity)
+    return _enrich_user_story_tasks(filtered, taiga_client_wrapper, verbosity)
 
 
 @mcp.tool(
@@ -1060,7 +1095,10 @@ def get_user_story_by_ref(
     project_id: int, ref: int, session_id: Optional[str] = None, verbosity: str = "standard"
 ) -> Dict[str, Any]:
     """Retrieves user story details by ref number within a project."""
-    return _get_item_by_ref("user_story", "user_stories", project_id, ref, session_id, verbosity)
+    actual_session_id = _get_session_id(session_id)
+    result = _get_item_by_ref("user_story", "user_stories", project_id, ref, session_id, verbosity)
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    return _enrich_user_story_tasks(result, taiga_client_wrapper, verbosity)
 
 
 @mcp.tool(
