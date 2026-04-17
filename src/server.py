@@ -3408,7 +3408,7 @@ def edit_comment(
         # Taiga reads the history entry id from the `id` query string param;
         # only the new comment text goes in the JSON body.
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/edit_comment/?id={comment_id}",
+            f"/history/{history_path}/{object_id}/edit_comment?id={comment_id}",
             json={"comment": new_comment},
         )
         return {
@@ -3457,7 +3457,7 @@ def delete_comment(
         # Taiga reads the history entry id from the `id` query string param;
         # the endpoint has no JSON body.
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/delete_comment/?id={comment_id}",
+            f"/history/{history_path}/{object_id}/delete_comment?id={comment_id}",
         )
         return {
             "status": "comment_deleted",
@@ -3505,7 +3505,7 @@ def undelete_comment(
         # Taiga reads the history entry id from the `id` query string param;
         # the endpoint has no JSON body.
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/undelete_comment/?id={comment_id}",
+            f"/history/{history_path}/{object_id}/undelete_comment?id={comment_id}",
         )
         return {
             "status": "comment_restored",
@@ -3552,7 +3552,7 @@ def get_comment_versions(
     def do_get_versions():
         # Taiga reads the history entry id from the `id` query string param.
         result = taiga_client_wrapper.api.get(
-            f"/history/{history_path}/{object_id}/comment_versions/?id={comment_id}"
+            f"/history/{history_path}/{object_id}/comment_versions?id={comment_id}"
         )
         return {
             "object_type": object_type,

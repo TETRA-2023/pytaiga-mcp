@@ -1912,7 +1912,7 @@ class TestTaigaTools:
         src.server.edit_comment(42, "issue", "abc", "Line 1\\nLine 2\\tindented", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/issue/42/edit_comment/?id=abc",
+            "/history/issue/42/edit_comment?id=abc",
             json={"comment": "Line 1\nLine 2\tindented"},
         )
 
@@ -2008,7 +2008,7 @@ class TestTaigaTools:
         result = src.server.edit_comment(42, "issue", "abc123", "Updated text", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/issue/42/edit_comment/?id=abc123",
+            "/history/issue/42/edit_comment?id=abc123",
             json={"comment": "Updated text"},
         )
         assert result["status"] == "comment_edited"
@@ -2022,7 +2022,7 @@ class TestTaigaTools:
         src.server.edit_comment(42, "task", "abc", "  trimmed  ", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/task/42/edit_comment/?id=abc",
+            "/history/task/42/edit_comment?id=abc",
             json={"comment": "trimmed"},
         )
 
@@ -2046,7 +2046,7 @@ class TestTaigaTools:
         result = src.server.delete_comment(42, "user_story", "abc123", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/userstory/42/delete_comment/?id=abc123",
+            "/history/userstory/42/delete_comment?id=abc123",
         )
         assert result["status"] == "comment_deleted"
         assert result["comment_id"] == "abc123"
@@ -2065,7 +2065,7 @@ class TestTaigaTools:
         result = src.server.undelete_comment(42, "epic", "abc123", session_id)
 
         mock_client.api.post.assert_called_once_with(
-            "/history/epic/42/undelete_comment/?id=abc123",
+            "/history/epic/42/undelete_comment?id=abc123",
         )
         assert result["status"] == "comment_restored"
         assert result["comment_id"] == "abc123"
@@ -2086,7 +2086,7 @@ class TestTaigaTools:
 
         result = src.server.get_comment_versions(42, "task", "abc123", session_id)
 
-        mock_client.api.get.assert_called_once_with("/history/task/42/comment_versions/?id=abc123")
+        mock_client.api.get.assert_called_once_with("/history/task/42/comment_versions?id=abc123")
         assert result["comment_id"] == "abc123"
         assert len(result["versions"]) == 2
 
