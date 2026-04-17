@@ -3405,9 +3405,11 @@ def edit_comment(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_edit():
+        # Taiga reads the history entry id from the `id` query string param;
+        # only the new comment text goes in the JSON body.
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/edit_comment/",
-            json={"comment_id": comment_id, "comment": new_comment},
+            f"/history/{history_path}/{object_id}/edit_comment?id={comment_id}",
+            json={"comment": new_comment},
         )
         return {
             "status": "comment_edited",
@@ -3452,9 +3454,10 @@ def delete_comment(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_delete():
+        # Taiga reads the history entry id from the `id` query string param;
+        # the endpoint has no JSON body.
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/delete_comment/",
-            json={"comment_id": comment_id},
+            f"/history/{history_path}/{object_id}/delete_comment?id={comment_id}",
         )
         return {
             "status": "comment_deleted",
@@ -3499,9 +3502,10 @@ def undelete_comment(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_undelete():
+        # Taiga reads the history entry id from the `id` query string param;
+        # the endpoint has no JSON body.
         taiga_client_wrapper.api.post(
-            f"/history/{history_path}/{object_id}/undelete_comment/",
-            json={"comment_id": comment_id},
+            f"/history/{history_path}/{object_id}/undelete_comment?id={comment_id}",
         )
         return {
             "status": "comment_restored",
@@ -3546,8 +3550,9 @@ def get_comment_versions(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_get_versions():
+        # Taiga reads the history entry id from the `id` query string param.
         result = taiga_client_wrapper.api.get(
-            f"/history/{history_path}/{object_id}/comment_versions/{comment_id}/"
+            f"/history/{history_path}/{object_id}/comment_versions?id={comment_id}"
         )
         return {
             "object_type": object_type,
