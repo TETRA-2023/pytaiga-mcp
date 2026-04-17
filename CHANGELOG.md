@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.14.3 (2026-04-17)
+
+### Bug Fixes
+
+- Address review feedback on PR #51
+  ([`d9d0865`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d9d086515e00247c4bf43c4576b66d415c05e10e))
+
+- Document kwargs JSON pattern and raise on empty-kwargs updates
+  ([`3732dd3`](https://github.com/TETRA-2023/pytaiga-mcp/commit/3732dd30e639013f24ca81e1c9035e0861996c3f))
+
+### Chores
+
+- Sync uv.lock with pyproject v1.14.1
+  ([`673f3e1`](https://github.com/TETRA-2023/pytaiga-mcp/commit/673f3e11b5c87def3672b3e2167411fe53c01e37))
+
+### Documentation
+
+- Document ValueError propagation in _execute_taiga_operation Raises
+  ([`a006fb4`](https://github.com/TETRA-2023/pytaiga-mcp/commit/a006fb4f52782e3fd02832d6b29ab2a097c22957))
+
+
 ## v1.14.2 (2026-04-14)
 
 ### Bug Fixes
