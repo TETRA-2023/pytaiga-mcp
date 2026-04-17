@@ -314,11 +314,11 @@ class TestTaigaTools:
         assert result["name"] == "New Name"
 
     def test_update_project_no_kwargs(self, session_setup):
-        """Test update_project with no kwargs returns current state."""
+        """Test update_project with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.projects.get.return_value = {"id": 123, "name": "Same", "version": 1}
-        result = src.server.update_project(123, "{}", session_id)
-        assert result["name"] == "Same"
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_project(123, "{}", session_id)
+        mock_client.api.projects.get.assert_not_called()
         mock_client.api.projects.update.assert_not_called()
 
     def test_delete_project(self, session_setup):
@@ -531,11 +531,11 @@ class TestTaigaTools:
         )
 
     def test_update_user_story_no_kwargs(self, session_setup):
-        """Test update_user_story with no kwargs returns current state."""
+        """Test update_user_story with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.user_stories.get.return_value = {"id": 456, "subject": "Same", "version": 1}
-        result = src.server.update_user_story(456, "{}", session_id)
-        assert result["subject"] == "Same"
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_user_story(456, "{}", session_id)
+        mock_client.api.user_stories.get.assert_not_called()
         mock_client.api.user_stories.edit.assert_not_called()
 
     def test_delete_user_story(self, session_setup):
@@ -689,11 +689,11 @@ class TestTaigaTools:
         )
 
     def test_update_task_no_kwargs(self, session_setup):
-        """Test update_task with no kwargs returns current state."""
+        """Test update_task with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.tasks.get.return_value = {"id": 789, "subject": "Same", "version": 1}
-        result = src.server.update_task(789, "{}", session_id)
-        assert result["subject"] == "Same"
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_task(789, "{}", session_id)
+        mock_client.api.tasks.get.assert_not_called()
         mock_client.api.tasks.edit.assert_not_called()
 
     def test_delete_task(self, session_setup):
@@ -828,11 +828,11 @@ class TestTaigaTools:
         )
 
     def test_update_issue_no_kwargs(self, session_setup):
-        """Test update_issue with no kwargs returns current state."""
+        """Test update_issue with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.issues.get.return_value = {"id": 100, "subject": "Same", "version": 1}
-        result = src.server.update_issue(100, "{}", session_id)
-        assert result["subject"] == "Same"
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_issue(100, "{}", session_id)
+        mock_client.api.issues.get.assert_not_called()
         mock_client.api.issues.edit.assert_not_called()
 
     def test_delete_issue(self, session_setup):
@@ -1565,11 +1565,11 @@ class TestTaigaTools:
         )
 
     def test_update_epic_no_kwargs(self, session_setup):
-        """Test update_epic with no kwargs returns current state."""
+        """Test update_epic with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.epics.get.return_value = {"id": 200, "subject": "Same", "version": 1}
-        result = src.server.update_epic(200, "{}", session_id)
-        assert result["subject"] == "Same"
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_epic(200, "{}", session_id)
+        mock_client.api.epics.get.assert_not_called()
         mock_client.api.epics.edit.assert_not_called()
 
     def test_delete_epic(self, session_setup):
@@ -1664,11 +1664,11 @@ class TestTaigaTools:
         )
 
     def test_update_milestone_no_kwargs(self, session_setup):
-        """Test update_milestone with no kwargs returns current state."""
+        """Test update_milestone with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.milestones.get.return_value = {"id": 300, "name": "Sprint 1", "version": 1}
-        result = src.server.update_milestone(300, "{}", session_id)
-        assert result["name"] == "Sprint 1"
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_milestone(300, "{}", session_id)
+        mock_client.api.milestones.get.assert_not_called()
         mock_client.api.milestones.edit.assert_not_called()
 
     def test_delete_milestone(self, session_setup):
@@ -1785,17 +1785,11 @@ class TestTaigaTools:
         )
 
     def test_update_wiki_page_no_kwargs(self, session_setup):
-        """Test update_wiki_page with no kwargs returns current state."""
+        """Test update_wiki_page with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
-        mock_client.api.wiki.get.return_value = {
-            "id": 400,
-            "slug": "home",
-            "content": "# Welcome",
-            "project": 123,
-            "version": 1,
-        }
-        result = src.server.update_wiki_page(400, None, session_id)
-        assert result["id"] == 400
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_wiki_page(400, None, session_id)
+        mock_client.api.wiki.get.assert_not_called()
         mock_client.api.wiki.edit.assert_not_called()
 
     def test_delete_wiki_page(self, session_setup):
@@ -1895,7 +1889,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = {"id": 42}
 
-        with pytest.raises(RuntimeError, match="Server error"):
+        with pytest.raises(ValueError, match="Could not determine version"):
             src.server.add_comment(42, "issue", "Test comment", session_id)
 
     def test_list_comments(self, session_setup):
