@@ -484,7 +484,11 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
 
     Raises:
         TaigaException: Re-raised from the API
-        RuntimeError: Wrapped unexpected errors
+        ValueError: Re-raised unwrapped from the operation callable (caller bugs:
+            empty kwargs, missing required fields, ref-not-found, etc.) so callers
+            see the original message rather than a generic "Server error" wrapper.
+        RuntimeError: Wrapped unexpected errors (anything not TaigaException or
+            ValueError)
     """
     context_str = f" for {error_context}" if error_context else ""
     try:
@@ -493,6 +497,9 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
     except TaigaException as e:
         logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error in {operation_name}{context_str}: {e}", exc_info=True)
         raise RuntimeError(f"Server error in {operation_name}: {e}")
@@ -776,7 +783,13 @@ def get_project_by_slug(
 
 @mcp.tool(
     "create_project",
-    description="Creates a new project. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Creates a new project. Optional fields (e.g. is_private, tags, is_kanban_activated, "
+        "is_issues_activated) must be passed as a JSON object via the `kwargs` parameter, NOT "
+        "as top-level arguments — top-level args other than the declared signature params are "
+        "silently dropped by FastMCP. Allowed keys: see ALLOWED_KWARGS['project'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def create_project(
     name: str,
@@ -807,7 +820,13 @@ def create_project(
 
 @mcp.tool(
     "update_project",
-    description="Updates details of an existing project. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Updates details of an existing project. Pass fields to update as a JSON object via "
+        "the `kwargs` parameter, NOT as top-level arguments — top-level args other than the "
+        "declared signature params are silently dropped by FastMCP. Calling with empty `kwargs` "
+        "raises ValueError. Allowed keys: see ALLOWED_KWARGS['project'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def update_project(
     project_id: int,
@@ -825,10 +844,11 @@ def update_project(
     try:
         # Use pytaigaclient update pattern: client.resource.update(id=..., data=...)
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on project {project_id}")
-            # Return current state if no updates provided
-            result = taiga_client_wrapper.api.projects.get(project_id=project_id)
-            return _filter_response(result, "project", verbosity)
+            raise ValueError(
+                f"update_project called with no fields to update for project {project_id}. "
+                'Pass fields inside the `kwargs` JSON object (e.g. kwargs={"name": "..."}), '
+                "not as top-level arguments."
+            )
 
         # First fetch the project to get its current version
         current_project = taiga_client_wrapper.api.projects.get(project_id=project_id)
@@ -850,6 +870,9 @@ def update_project(
     except TaigaException as e:
         logger.error(f"Taiga API error updating project {project_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating project {project_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating project: {e}")
@@ -1037,7 +1060,14 @@ def list_user_stories(
 
 @mcp.tool(
     "create_user_story",
-    description="Creates a new user story within a project. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Creates a new user story within a project. Optional fields (e.g. description, tags, "
+        "status, milestone, assigned_to, points) must be passed as a JSON object via the "
+        "`kwargs` parameter, NOT as top-level arguments — top-level args other than the "
+        "declared signature params are silently dropped by FastMCP. Allowed keys: see "
+        "ALLOWED_KWARGS['user_story'] in server.py. verbosity: 'minimal', 'standard' (default), "
+        "'full'. Uses default session if session_id not provided."
+    ),
 )
 def create_user_story(
     project_id: int,
@@ -1118,7 +1148,16 @@ def get_user_story_by_ref(
 
 @mcp.tool(
     "update_user_story",
-    description="Updates details of an existing user story. verbosity: 'minimal', 'standard' (default), 'full'. Note: embedded tasks use one verbosity level lower (standard→task minimal with raw status IDs only, full→task standard with status_extra_info). Uses default session if session_id not provided.",
+    description=(
+        "Updates details of an existing user story. Pass fields to update as a JSON object via "
+        'the `kwargs` parameter (e.g. kwargs={"description": "...", "tags": [...], '
+        '"status": 2}), NOT as top-level arguments — top-level args other than the declared '
+        "signature params are silently dropped by FastMCP. Calling with empty `kwargs` raises "
+        "ValueError. Allowed keys: see ALLOWED_KWARGS['user_story'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Note: embedded tasks use one "
+        "verbosity level lower (standard→task minimal with raw status IDs only, full→task "
+        "standard with status_extra_info). Uses default session if session_id not provided."
+    ),
 )
 def update_user_story(
     user_story_id: int,
@@ -1135,9 +1174,11 @@ def update_user_story(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
     try:
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on user story {user_story_id}")
-            result = taiga_client_wrapper.api.user_stories.get(user_story_id)
-            return _filter_response(result, "user_story", verbosity)
+            raise ValueError(
+                f"update_user_story called with no fields to update for user story {user_story_id}. "
+                "Pass fields inside the `kwargs` JSON object "
+                '(e.g. kwargs={"description": "...", "tags": [...]}), not as top-level arguments.'
+            )
 
         # Get current user story data to retrieve version
         current_story = taiga_client_wrapper.api.user_stories.get(user_story_id)
@@ -1156,6 +1197,9 @@ def update_user_story(
     except TaigaException as e:
         logger.error(f"Taiga API error updating user story {user_story_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating user story {user_story_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating user story: {e}")
@@ -1266,7 +1310,14 @@ def list_tasks(
 
 @mcp.tool(
     "create_task",
-    description="Creates a new task within a project. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Creates a new task within a project. Optional fields (e.g. description, tags, status, "
+        "milestone, user_story, assigned_to) must be passed as a JSON object via the `kwargs` "
+        "parameter, NOT as top-level arguments — top-level args other than the declared "
+        "signature params are silently dropped by FastMCP. Allowed keys: see "
+        "ALLOWED_KWARGS['task'] in server.py. verbosity: 'minimal', 'standard' (default), "
+        "'full'. Uses default session if session_id not provided."
+    ),
 )
 def create_task(
     project_id: int,
@@ -1343,7 +1394,13 @@ def get_task_by_ref(
 
 @mcp.tool(
     "update_task",
-    description="Updates details of an existing task. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Updates details of an existing task. Pass fields to update as a JSON object via the "
+        "`kwargs` parameter, NOT as top-level arguments — top-level args other than the "
+        "declared signature params are silently dropped by FastMCP. Calling with empty `kwargs` "
+        "raises ValueError. Allowed keys: see ALLOWED_KWARGS['task'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def update_task(
     task_id: int, kwargs: Any = None, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -1358,9 +1415,10 @@ def update_task(
     try:
         # Use pytaigaclient edit pattern for partial updates
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on task {task_id}")
-            result = taiga_client_wrapper.api.tasks.get(task_id)
-            return _filter_response(result, "task", verbosity)
+            raise ValueError(
+                f"update_task called with no fields to update for task {task_id}. "
+                "Pass fields inside the `kwargs` JSON object, not as top-level arguments."
+            )
 
         # Get current task data to retrieve version
         current_task = taiga_client_wrapper.api.tasks.get(task_id)
@@ -1377,6 +1435,9 @@ def update_task(
     except TaigaException as e:
         logger.error(f"Taiga API error updating task {task_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating task {task_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating task: {e}")
@@ -1481,7 +1542,14 @@ def list_issues(
 
 @mcp.tool(
     "create_issue",
-    description="Creates a new issue within a project. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Creates a new issue within a project. Optional fields (e.g. description, tags, "
+        "milestone, assigned_to) must be passed as a JSON object via the `kwargs` parameter, "
+        "NOT as top-level arguments — top-level args other than the declared signature params "
+        "are silently dropped by FastMCP. Required fields (priority_id, status_id, severity_id, "
+        "type_id) remain top-level. Allowed kwargs keys: see ALLOWED_KWARGS['issue'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def create_issue(
     project_id: int,
@@ -1555,7 +1623,13 @@ def get_issue_by_ref(
 
 @mcp.tool(
     "update_issue",
-    description="Updates details of an existing issue. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Updates details of an existing issue. Pass fields to update as a JSON object via the "
+        "`kwargs` parameter, NOT as top-level arguments — top-level args other than the "
+        "declared signature params are silently dropped by FastMCP. Calling with empty `kwargs` "
+        "raises ValueError. Allowed keys: see ALLOWED_KWARGS['issue'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def update_issue(
     issue_id: int, kwargs: Any = None, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -1570,9 +1644,10 @@ def update_issue(
     try:
         # Use pytaigaclient edit pattern for partial updates
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on issue {issue_id}")
-            result = taiga_client_wrapper.api.issues.get(issue_id)
-            return _filter_response(result, "issue", verbosity)
+            raise ValueError(
+                f"update_issue called with no fields to update for issue {issue_id}. "
+                "Pass fields inside the `kwargs` JSON object, not as top-level arguments."
+            )
 
         # Get current issue data to retrieve version
         current_issue = taiga_client_wrapper.api.issues.get(issue_id)
@@ -1589,6 +1664,9 @@ def update_issue(
     except TaigaException as e:
         logger.error(f"Taiga API error updating issue {issue_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating issue {issue_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating issue: {e}")
@@ -2534,7 +2612,13 @@ def list_epics(
 
 @mcp.tool(
     "create_epic",
-    description="Creates a new epic within a project. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Creates a new epic within a project. Optional fields (e.g. description, tags, color, "
+        "status, assigned_to) must be passed as a JSON object via the `kwargs` parameter, NOT "
+        "as top-level arguments — top-level args other than the declared signature params are "
+        "silently dropped by FastMCP. Allowed keys: see ALLOWED_KWARGS['epic'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def create_epic(
     project_id: int,
@@ -2594,7 +2678,13 @@ def get_epic_by_ref(
 
 @mcp.tool(
     "update_epic",
-    description="Updates details of an existing epic. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Updates details of an existing epic. Pass fields to update as a JSON object via the "
+        "`kwargs` parameter, NOT as top-level arguments — top-level args other than the "
+        "declared signature params are silently dropped by FastMCP. Calling with empty `kwargs` "
+        "raises ValueError. Allowed keys: see ALLOWED_KWARGS['epic'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def update_epic(
     epic_id: int, kwargs: Any = None, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -2608,9 +2698,10 @@ def update_epic(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
     try:
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on epic {epic_id}")
-            result = taiga_client_wrapper.api.epics.get(epic_id)
-            return _filter_response(result, "epic", verbosity)
+            raise ValueError(
+                f"update_epic called with no fields to update for epic {epic_id}. "
+                "Pass fields inside the `kwargs` JSON object, not as top-level arguments."
+            )
 
         # Get current epic data to retrieve version
         current_epic = taiga_client_wrapper.api.epics.get(epic_id)
@@ -2627,6 +2718,9 @@ def update_epic(
     except TaigaException as e:
         logger.error(f"Taiga API error updating epic {epic_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating epic {epic_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating epic: {e}")
@@ -2794,7 +2888,13 @@ def get_milestone(
 
 @mcp.tool(
     "update_milestone",
-    description="Updates details of an existing milestone. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Updates details of an existing milestone. Pass fields to update as a JSON object via "
+        "the `kwargs` parameter, NOT as top-level arguments — top-level args other than the "
+        "declared signature params are silently dropped by FastMCP. Calling with empty `kwargs` "
+        "raises ValueError. Allowed keys: see ALLOWED_KWARGS['milestone'] in server.py. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def update_milestone(
     milestone_id: int,
@@ -2811,9 +2911,10 @@ def update_milestone(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
     try:
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on milestone {milestone_id}")
-            result = taiga_client_wrapper.api.milestones.get(milestone_id)
-            return _filter_response(result, "milestone", verbosity)
+            raise ValueError(
+                f"update_milestone called with no fields to update for milestone {milestone_id}. "
+                "Pass fields inside the `kwargs` JSON object, not as top-level arguments."
+            )
 
         # Get current milestone data to retrieve version
         current_milestone = taiga_client_wrapper.api.milestones.get(milestone_id)
@@ -2832,6 +2933,9 @@ def update_milestone(
     except TaigaException as e:
         logger.error(f"Taiga API error updating milestone {milestone_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating milestone {milestone_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating milestone: {e}")
@@ -2959,7 +3063,14 @@ def get_wiki_page(
 
 @mcp.tool(
     "create_wiki_page",
-    description="Creates a new wiki page. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Creates a new wiki page. Required fields (project_id, slug, content) are top-level "
+        "params. The `kwargs` parameter accepts only the keys in ALLOWED_KWARGS['wiki_page'] "
+        "(currently `slug` and `content`, useful for overriding the positional values via JSON); "
+        "any other key is silently dropped by FastMCP if passed at the top level, or stripped by "
+        "_validate_kwargs if passed inside kwargs. verbosity: 'minimal', 'standard' (default), "
+        "'full'. Uses default session if session_id not provided."
+    ),
 )
 def create_wiki_page(
     project_id: int,
@@ -3015,7 +3126,14 @@ def get_wiki_page_by_slug(
 
 @mcp.tool(
     "update_wiki_page",
-    description="Updates an existing wiki page. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description=(
+        "Updates an existing wiki page. Pass fields to update as a JSON object via the "
+        "`kwargs` parameter (allowed keys for wiki pages: `slug`, `content`), NOT as top-level "
+        "arguments — top-level args other than the declared signature params are silently "
+        "dropped by FastMCP. Calling with empty `kwargs` raises ValueError. See "
+        "ALLOWED_KWARGS['wiki_page'] in server.py for the authoritative list. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
+    ),
 )
 def update_wiki_page(
     wiki_page_id: int,
@@ -3032,9 +3150,10 @@ def update_wiki_page(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
     try:
         if not parsed_kwargs:
-            logger.info(f"No fields provided for update on wiki page {wiki_page_id}")
-            result = taiga_client_wrapper.api.wiki.get(wiki_page_id)
-            return _filter_response(result, "wiki_page", verbosity)
+            raise ValueError(
+                f"update_wiki_page called with no fields to update for wiki page {wiki_page_id}. "
+                "Pass fields inside the `kwargs` JSON object, not as top-level arguments."
+            )
 
         # Get current wiki page data to retrieve version
         current_page = taiga_client_wrapper.api.wiki.get(wiki_page_id)
@@ -3051,6 +3170,9 @@ def update_wiki_page(
     except TaigaException as e:
         logger.error(f"Taiga API error updating wiki page {wiki_page_id}: {e}", exc_info=False)
         raise e
+    except ValueError:
+        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error updating wiki page {wiki_page_id}: {e}", exc_info=True)
         raise RuntimeError(f"Server error updating wiki page: {e}")
