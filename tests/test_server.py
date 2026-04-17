@@ -696,6 +696,14 @@ class TestTaigaTools:
         mock_client.api.tasks.get.assert_not_called()
         mock_client.api.tasks.edit.assert_not_called()
 
+    def test_update_task_missing_version(self, session_setup):
+        """Test update_task raises ValueError (not RuntimeError) when version is missing."""
+        session_id, mock_client = session_setup
+        mock_client.api.tasks.get.return_value = {"id": 789, "subject": "x"}
+        with pytest.raises(ValueError, match="Could not determine version"):
+            src.server.update_task(789, '{"subject": "new"}', session_id)
+        mock_client.api.tasks.edit.assert_not_called()
+
     def test_delete_task(self, session_setup):
         """Test delete_task."""
         session_id, mock_client = session_setup
@@ -833,6 +841,14 @@ class TestTaigaTools:
         with pytest.raises(ValueError, match="no fields to update"):
             src.server.update_issue(100, "{}", session_id)
         mock_client.api.issues.get.assert_not_called()
+        mock_client.api.issues.edit.assert_not_called()
+
+    def test_update_issue_missing_version(self, session_setup):
+        """Test update_issue raises ValueError (not RuntimeError) when version is missing."""
+        session_id, mock_client = session_setup
+        mock_client.api.issues.get.return_value = {"id": 100, "subject": "x"}
+        with pytest.raises(ValueError, match="Could not determine version"):
+            src.server.update_issue(100, '{"subject": "new"}', session_id)
         mock_client.api.issues.edit.assert_not_called()
 
     def test_delete_issue(self, session_setup):
@@ -1572,6 +1588,14 @@ class TestTaigaTools:
         mock_client.api.epics.get.assert_not_called()
         mock_client.api.epics.edit.assert_not_called()
 
+    def test_update_epic_missing_version(self, session_setup):
+        """Test update_epic raises ValueError (not RuntimeError) when version is missing."""
+        session_id, mock_client = session_setup
+        mock_client.api.epics.get.return_value = {"id": 200, "subject": "x"}
+        with pytest.raises(ValueError, match="Could not determine version"):
+            src.server.update_epic(200, '{"subject": "new"}', session_id)
+        mock_client.api.epics.edit.assert_not_called()
+
     def test_delete_epic(self, session_setup):
         """Test delete_epic."""
         session_id, mock_client = session_setup
@@ -1790,6 +1814,14 @@ class TestTaigaTools:
         with pytest.raises(ValueError, match="no fields to update"):
             src.server.update_wiki_page(400, None, session_id)
         mock_client.api.wiki.get.assert_not_called()
+        mock_client.api.wiki.edit.assert_not_called()
+
+    def test_update_wiki_page_missing_version(self, session_setup):
+        """Test update_wiki_page raises ValueError (not RuntimeError) when version is missing."""
+        session_id, mock_client = session_setup
+        mock_client.api.wiki.get.return_value = {"id": 400, "slug": "home", "content": "x"}
+        with pytest.raises(ValueError, match="Could not determine version"):
+            src.server.update_wiki_page(400, '{"content": "new"}', session_id)
         mock_client.api.wiki.edit.assert_not_called()
 
     def test_delete_wiki_page(self, session_setup):

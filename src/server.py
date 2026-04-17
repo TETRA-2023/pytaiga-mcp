@@ -698,9 +698,6 @@ def login(
         logger.error(f"Login failed: {e}", exc_info=False)
         # Re-raise the exception - FastMCP will turn it into an error response
         raise e
-    except ValueError:
-        # Caller-bug ValueErrors (e.g. empty kwargs) propagate without being wrapped.
-        raise
     except Exception as e:
         logger.error(f"Unexpected error during login: {e}", exc_info=True)
         raise RuntimeError("An unexpected server error occurred during login.")
@@ -3063,10 +3060,11 @@ def get_wiki_page(
 @mcp.tool(
     "create_wiki_page",
     description=(
-        "Creates a new wiki page. Optional fields (e.g. watchers) must be passed as a JSON "
-        "object via the `kwargs` parameter, NOT as top-level arguments — top-level args other "
-        "than the declared signature params are silently dropped by FastMCP. Allowed keys: see "
-        "ALLOWED_KWARGS['wiki_page'] in server.py. verbosity: 'minimal', 'standard' (default), "
+        "Creates a new wiki page. Required fields (project_id, slug, content) are top-level "
+        "params. The `kwargs` parameter accepts only the keys in ALLOWED_KWARGS['wiki_page'] "
+        "(currently `slug` and `content`, useful for overriding the positional values via JSON); "
+        "any other key is silently dropped by FastMCP if passed at the top level, or stripped by "
+        "_validate_kwargs if passed inside kwargs. verbosity: 'minimal', 'standard' (default), "
         "'full'. Uses default session if session_id not provided."
     ),
 )
@@ -3126,9 +3124,10 @@ def get_wiki_page_by_slug(
     "update_wiki_page",
     description=(
         "Updates an existing wiki page. Pass fields to update as a JSON object via the "
-        "`kwargs` parameter, NOT as top-level arguments — top-level args other than the "
-        "declared signature params are silently dropped by FastMCP. Calling with empty `kwargs` "
-        "raises ValueError. Allowed keys: see ALLOWED_KWARGS['wiki_page'] in server.py. "
+        "`kwargs` parameter (allowed keys for wiki pages: `slug`, `content`), NOT as top-level "
+        "arguments — top-level args other than the declared signature params are silently "
+        "dropped by FastMCP. Calling with empty `kwargs` raises ValueError. See "
+        "ALLOWED_KWARGS['wiki_page'] in server.py for the authoritative list. "
         "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided."
     ),
 )
