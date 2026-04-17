@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.4 (2026-04-17)
+
+### Bug Fixes
+
+- Pass history entry id as query param for comment tools
+  ([#54](https://github.com/TETRA-2023/pytaiga-mcp/pull/54),
+  [`d9136b3`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d9136b3dcc20d19a9f01118f35d567e1022c5712))
+
+
 ## v1.14.3 (2026-04-17)
 
 ### Bug Fixes
