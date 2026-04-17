@@ -484,7 +484,11 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
 
     Raises:
         TaigaException: Re-raised from the API
-        RuntimeError: Wrapped unexpected errors
+        ValueError: Re-raised unwrapped from the operation callable (caller bugs:
+            empty kwargs, missing required fields, ref-not-found, etc.) so callers
+            see the original message rather than a generic "Server error" wrapper.
+        RuntimeError: Wrapped unexpected errors (anything not TaigaException or
+            ValueError)
     """
     context_str = f" for {error_context}" if error_context else ""
     try:
