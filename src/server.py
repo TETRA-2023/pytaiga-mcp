@@ -3078,12 +3078,12 @@ def list_swimlanes(
         "per-swimlane status configuration from the project's user-story statuses. "
         "Note: if this is the first swimlane in the project, Taiga marks it "
         "'default' and the project enters swimlanes-enabled mode; existing user "
-        "stories are auto-assigned to that default swimlane. The default swimlane "
-        "cannot be deleted through any Taiga API call ('The default swimlane "
-        "cannot be deleted') — removing it requires admin UI access. Confirm "
-        "intent before creating the first swimlane on a Kanban project. "
-        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session "
-        "if session_id not provided."
+        "stories are auto-assigned to that default swimlane. To revert to a "
+        "no-swimlanes state, delete all non-default swimlanes first (each with "
+        "move_to=<default_id>) then delete the default — Taiga only blocks "
+        "deleting the default while other swimlanes still exist. verbosity: "
+        "'minimal', 'standard' (default), 'full'. Uses default session if "
+        "session_id not provided."
     ),
 )
 def create_swimlane(
@@ -3182,13 +3182,16 @@ def update_swimlane(
     description=(
         "Deletes a swimlane by its ID. User stories are not deleted — they "
         "migrate (see move_to). Two Taiga API constraints to know: (1) the "
-        "first swimlane created on a project becomes the 'default' and cannot "
-        "be deleted via any API call; removing it requires admin UI access. "
-        "(2) When deleting a non-default swimlane that has user stories "
-        "assigned, you must specify move_to (an existing swimlane ID in the "
-        "same project) to migrate them; without move_to, Taiga rejects with "
-        "'Cannot set swimlane to None if there are available swimlanes'. Uses "
-        "default session if session_id not provided."
+        "default swimlane (first one created on the project) cannot be deleted "
+        "while other swimlanes still exist — Taiga returns 'The default "
+        "swimlane cannot be deleted'. To delete it, first delete all non-default "
+        "swimlanes (each with move_to=<default_id>); once the default is the "
+        "only one left, deletion succeeds and the project reverts to no-"
+        "swimlanes state. (2) Deleting a non-default swimlane that has user "
+        "stories assigned requires move_to (an existing swimlane ID in the same "
+        "project) to migrate them; without move_to, Taiga rejects with 'Cannot "
+        "set swimlane to None if there are available swimlanes'. Uses default "
+        "session if session_id not provided."
     ),
 )
 def delete_swimlane(
@@ -3197,6 +3200,8 @@ def delete_swimlane(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Deletes a swimlane by ID, optionally migrating its user stories to move_to."""
+    if move_to is not None and move_to == swimlane_id:
+        raise ValueError(f"move_to ({move_to}) cannot be the same as swimlane_id ({swimlane_id}).")
     actual_session_id = _get_session_id(session_id)
     logger.warning(
         f"Executing delete_swimlane ID {swimlane_id} "
@@ -3205,10 +3210,8 @@ def delete_swimlane(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_delete():
-        path = f"/swimlanes/{swimlane_id}"
-        if move_to is not None:
-            path = f"{path}?moveTo={move_to}"
-        taiga_client_wrapper.api.delete(path)
+        params = {"moveTo": move_to} if move_to is not None else None
+        taiga_client_wrapper.api.delete(f"/swimlanes/{swimlane_id}", params=params)
         return {"status": "deleted", "swimlane_id": swimlane_id, "moved_to": move_to}
 
     return _execute_taiga_operation("delete_swimlane", do_delete, f"swimlane {swimlane_id}")

@@ -1892,22 +1892,31 @@ class TestTaigaTools:
         assert sent == {"name": "Security"}, f"unexpected payload: {sent}"
 
     def test_delete_swimlane(self, session_setup):
-        """Test delete_swimlane DELETEs /swimlanes/{id} without move_to."""
+        """Test delete_swimlane DELETEs /swimlanes/{id} with params=None when move_to absent."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
         result = src.server.delete_swimlane(1, session_id=session_id)
-        mock_client.api.delete.assert_called_once_with("/swimlanes/1")
+        mock_client.api.delete.assert_called_once_with("/swimlanes/1", params=None)
         assert result["status"] == "deleted"
         assert result["swimlane_id"] == 1
         assert result["moved_to"] is None
 
     def test_delete_swimlane_with_move_to(self, session_setup):
-        """Test delete_swimlane appends ?moveTo= when migrating user stories."""
+        """Test delete_swimlane sends params={'moveTo': ...} when migrating user stories."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
         result = src.server.delete_swimlane(1, move_to=2, session_id=session_id)
-        mock_client.api.delete.assert_called_once_with("/swimlanes/1?moveTo=2")
+        mock_client.api.delete.assert_called_once_with("/swimlanes/1", params={"moveTo": 2})
+        assert result["status"] == "deleted"
+        assert result["swimlane_id"] == 1
         assert result["moved_to"] == 2
+
+    def test_delete_swimlane_move_to_same_id_raises(self, session_setup):
+        """Test delete_swimlane rejects move_to == swimlane_id before any API call."""
+        session_id, mock_client = session_setup
+        with pytest.raises(ValueError, match="move_to .* cannot be the same as swimlane_id"):
+            src.server.delete_swimlane(1, move_to=1, session_id=session_id)
+        mock_client.api.delete.assert_not_called()
 
     def test_user_story_swimlane_kwarg_passes_through(self, session_setup):
         """Adding 'swimlane' to ALLOWED_KWARGS['user_story'] enables update_user_story assignment."""
@@ -2751,11 +2760,36 @@ class TestResponseFiltering:
 
     def test_filter_minimal_includes_project_where_applicable(self):
         """Resources with project association must include project in minimal."""
-        project_resources = ["user_story", "task", "issue", "epic", "milestone", "wiki_page"]
+        project_resources = [
+            "user_story",
+            "task",
+            "issue",
+            "epic",
+            "milestone",
+            "wiki_page",
+            "swimlane",
+        ]
         for resource_type in project_resources:
             assert "project" in src.server.RESPONSE_FIELDS[resource_type]["minimal"], (
                 f"{resource_type} missing project in minimal"
             )
+
+    def test_filter_swimlane_verbosity_levels(self):
+        """Swimlane response filter trims correctly per verbosity (issue #24)."""
+        full = {
+            "id": 1,
+            "name": "Security",
+            "order": 100,
+            "project": 9,
+            "statuses": [{"id": 65, "name": "New"}],  # large nested data, only in 'full'
+        }
+        minimal = src.server._filter_response(full, "swimlane", "minimal")
+        assert set(minimal.keys()) == {"id", "name", "project"}
+        standard = src.server._filter_response(full, "swimlane", "standard")
+        assert set(standard.keys()) == {"id", "name", "order", "project"}
+        result_full = src.server._filter_response(full, "swimlane", "full")
+        assert result_full == full  # untouched
+        assert "statuses" in result_full
 
     def test_filter_response_handles_none(self):
         """_filter_response should return None when given None."""
