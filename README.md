@@ -38,11 +38,12 @@ The bridge provides comprehensive CRUD operations and advanced features across a
 - **Tasks**: Track work within user stories, bulk create and reorder
 - **Issues**: Manage bugs, questions, and enhancement requests
 - **Sprints (Milestones)**: Plan and track work in time-boxed intervals
+- **Swimlanes**: Manage Kanban swimlanes (CRUD), assign user stories individually or in bulk per status
 - **Wiki Pages**: Create, update, delete, and look up by slug
 - **Comments**: Add, edit, delete, undelete, and view version history on any object
 - **Attachments**: Upload and manage attachments on all entity types
 - **Custom Attributes**: Define and set custom metadata fields per entity type
-- **Bulk Operations**: Batch create epics, user stories, tasks, issues, and memberships
+- **Bulk Operations**: Batch create epics, user stories, tasks, issues, and memberships; bulk-update user story milestone, kanban order, and swimlane assignment
 - **Story Points**: Manage point scales and assignments
 - **History/Audit Trail**: View change history for any object
 - **Global Search**: Search across all project resources
