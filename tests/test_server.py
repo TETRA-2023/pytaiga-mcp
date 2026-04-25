@@ -2424,9 +2424,14 @@ class TestTaigaTools:
             src.server.bulk_create_tasks(21, [], milestone_id=89)
 
     def test_bulk_create_tasks_missing_milestone_raises(self):
-        """Test bulk_create_tasks signature requires milestone_id (issue #55)."""
-        with pytest.raises(TypeError, match="milestone_id"):
-            src.server.bulk_create_tasks(21, ["Task A"])  # type: ignore[call-arg]
+        """Test bulk_create_tasks raises a Kanban-aware ValueError when milestone_id missing (#55)."""
+        with pytest.raises(ValueError, match="milestone_id is required"):
+            src.server.bulk_create_tasks(21, ["Task A"])
+
+    def test_bulk_create_tasks_missing_milestone_mentions_kanban_workaround(self):
+        """The missing-milestone error must point Kanban-only callers at create_task."""
+        with pytest.raises(ValueError, match="create_task"):
+            src.server.bulk_create_tasks(21, ["Task A"])
 
     def test_bulk_create_issues(self, session_setup):
         """Test bulk_create_issues calls correct endpoint."""

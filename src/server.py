@@ -3736,22 +3736,33 @@ def bulk_create_user_stories(
         "All tasks are created in the specified project and milestone (sprint), "
         "optionally linked to a user story. Note: Taiga's /tasks/bulk_create "
         "endpoint is sprint-scoped — milestone_id is required by the Taiga API "
-        "(verified on Taiga 2.40+). If user_story_id is provided, the user story "
-        "must belong to the specified milestone — Taiga validates this alignment "
-        "and rejects mismatches with 'Invalid user story id'. Returns the list of "
-        "created tasks. Uses default session if session_id not provided."
+        "(verified on Taiga 2.40+) regardless of project settings. Kanban-only "
+        "projects (backlog not activated) cannot use this endpoint at all; fall "
+        "back to individual create_task calls in a loop. If user_story_id is "
+        "provided, the user story must belong to the specified milestone — "
+        "Taiga validates this alignment and rejects mismatches with 'Invalid "
+        "user story id'. Returns the list of created tasks. Uses default "
+        "session if session_id not provided."
     ),
 )
 def bulk_create_tasks(
     project_id: int,
     subjects: List[str],
-    milestone_id: int,
+    milestone_id: Optional[int] = None,
     user_story_id: Optional[int] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
     """Bulk-creates tasks from a list of subject strings within a sprint."""
     cleaned = _clean_subjects(subjects)
+    if milestone_id is None:
+        raise ValueError(
+            "milestone_id is required by Taiga's /tasks/bulk_create endpoint "
+            "(verified on Taiga 2.40+). The endpoint is sprint-scoped — there "
+            "is no API mode that bulk-creates tasks outside a milestone. "
+            "For Kanban-only projects (backlog not activated, no milestones), "
+            "fall back to individual create_task calls in a loop."
+        )
     actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing bulk_create_tasks: {len(cleaned)} tasks in project {project_id}, "
