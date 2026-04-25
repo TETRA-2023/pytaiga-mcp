@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
-from pytaigaclient.exceptions import TaigaException
+from pytaigaclient.exceptions import TaigaAPIError, TaigaException
 
 from src.config import settings
 from src.taiga_client import TaigaClientWrapper
@@ -470,6 +470,38 @@ def _get_authenticated_client(session_id: str) -> TaigaClientWrapper:
     return client
 
 
+_TAIGA_API_ERROR_PLACEHOLDER = "No error message provided by API."
+
+
+def _repair_taiga_api_error(e: TaigaAPIError) -> None:
+    # Compensate for upstream pytaigaclient bug: TaigaAPIError.__init__ only looks
+    # for the legacy `_error_message` key and discards DRF-style validation bodies
+    # ({"field": ["msg", ...]}), leaving error_detail as a useless placeholder.
+    # See https://github.com/TETRA-2023/pytaiga-mcp/issues/57.
+    if getattr(e, "error_detail", None) != _TAIGA_API_ERROR_PLACEHOLDER:
+        return
+    response = getattr(e, "response", None)
+    if response is None:
+        return
+    try:
+        body = response.json()
+    except Exception:
+        return
+    if not isinstance(body, dict) or not body:
+        return
+    parts = []
+    for k, v in body.items():
+        if isinstance(v, list):
+            parts.append(f"{k}: {'; '.join(map(str, v))}")
+        else:
+            parts.append(f"{k}: {v}")
+    new_detail = " | ".join(parts)
+    if not new_detail:
+        return
+    e.error_detail = new_detail
+    e.args = (f"API Error {e.status_code}: {new_detail}",)
+
+
 def _execute_taiga_operation(operation_name: str, operation_callable, error_context: str = ""):
     """
     Execute a Taiga API operation with standardized error handling.
@@ -483,7 +515,9 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
         The result of the operation
 
     Raises:
-        TaigaException: Re-raised from the API
+        TaigaException: Re-raised from the API. TaigaAPIError messages are repaired
+            in-place when the upstream client dropped a DRF-format error body
+            (see _repair_taiga_api_error).
         ValueError: Re-raised unwrapped from the operation callable (caller bugs:
             empty kwargs, missing required fields, ref-not-found, etc.) so callers
             see the original message rather than a generic "Server error" wrapper.
@@ -494,6 +528,10 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
     try:
         result = operation_callable()
         return result
+    except TaigaAPIError as e:
+        _repair_taiga_api_error(e)
+        logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
+        raise e
     except TaigaException as e:
         logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
         raise e

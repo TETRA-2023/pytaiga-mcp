@@ -165,6 +165,89 @@ class TestTaigaTools:
         with pytest.raises(RuntimeError, match="Server error in test_op"):
             src.server._execute_taiga_operation("test_op", failing)
 
+    # ─── TaigaAPIError repair tests (issue #57) ───────────────────────
+
+    @staticmethod
+    def _make_taiga_api_error(status_code, payload, *, json_decode_error=False):
+        """Build a TaigaAPIError mimicking the upstream init behaviour."""
+        from pytaigaclient.exceptions import TaigaAPIError
+
+        response = MagicMock()
+        response.status_code = status_code
+        if json_decode_error:
+            import requests
+
+            response.json.side_effect = requests.exceptions.JSONDecodeError("e", "doc", 0)
+            response.text = payload
+        else:
+            response.json.return_value = payload
+        return TaigaAPIError(status_code, response)
+
+    def test_repair_taiga_api_error_drf_dict_list(self):
+        """DRF-style {field: [msg, ...]} body should replace the placeholder detail."""
+        err = self._make_taiga_api_error(
+            400, {"milestone_id": ["This field is required.", "Must be int."]}
+        )
+        assert err.error_detail == "No error message provided by API."
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == "milestone_id: This field is required.; Must be int."
+        assert str(err) == "API Error 400: milestone_id: This field is required.; Must be int."
+
+    def test_repair_taiga_api_error_drf_dict_scalar(self):
+        """DRF-style {field: scalar} body should also be formatted, not stringified."""
+        err = self._make_taiga_api_error(400, {"name": "already exists", "slug": "invalid"})
+
+        src.server._repair_taiga_api_error(err)
+
+        assert "name: already exists" in err.error_detail
+        assert "slug: invalid" in err.error_detail
+        assert str(err).startswith("API Error 400: ")
+
+    def test_repair_taiga_api_error_legacy_format_left_alone(self):
+        """Legacy {"_error_message": "..."} bodies are already handled upstream — don't touch."""
+        err = self._make_taiga_api_error(400, {"_error_message": "Legacy message"})
+        assert err.error_detail == "Legacy message"
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == "Legacy message"
+        assert str(err) == "API Error 400: Legacy message"
+
+    def test_repair_taiga_api_error_non_json_body_left_alone(self):
+        """Non-JSON bodies set error_detail from response.text upstream — don't touch."""
+        err = self._make_taiga_api_error(500, "Internal Server Error", json_decode_error=True)
+        assert err.error_detail == "Internal Server Error"
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == "Internal Server Error"
+
+    def test_repair_taiga_api_error_empty_dict_keeps_placeholder(self):
+        """Empty {} body has no fields to extract — placeholder stays."""
+        err = self._make_taiga_api_error(400, {})
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == "No error message provided by API."
+
+    def test_execute_taiga_operation_repairs_drf_error(self):
+        """Errors flowing through the wrapper get repaired before re-raise."""
+        from pytaigaclient.exceptions import TaigaAPIError
+
+        err = self._make_taiga_api_error(400, {"milestone_id": ["This field is required."]})
+
+        def failing():
+            raise err
+
+        with pytest.raises(TaigaAPIError) as excinfo:
+            src.server._execute_taiga_operation("test_op", failing)
+
+        assert excinfo.value is err
+        assert excinfo.value.error_detail == "milestone_id: This field is required."
+        assert "milestone_id: This field is required." in str(excinfo.value)
+
     # ─── kwargs parsing and validation tests ──────────────────────────
 
     def test_parse_mcp_kwargs_empty(self):
