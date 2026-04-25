@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
-from pytaigaclient.exceptions import TaigaException
+from pytaigaclient.exceptions import TaigaAPIError, TaigaException
 
 from src.config import settings
 from src.taiga_client import TaigaClientWrapper
@@ -470,6 +470,66 @@ def _get_authenticated_client(session_id: str) -> TaigaClientWrapper:
     return client
 
 
+# Load-bearing string: must mirror pytaigaclient's TaigaAPIError default literal
+# exactly. If upstream changes the wording, the repair trigger silently no-ops
+# in production. The test_repair_taiga_api_error_drf_dict_list test constructs a
+# real TaigaAPIError and asserts this string, so a wording drift will fail CI.
+_TAIGA_API_ERROR_PLACEHOLDER = "No error message provided by API."
+
+
+def _repair_taiga_api_error(e: TaigaAPIError) -> None:
+    """Rewrite a TaigaAPIError's message in place when pytaigaclient dropped a DRF body.
+
+    pytaigaclient's TaigaAPIError.__init__ only reads the legacy `_error_message`
+    key, replacing modern Taiga dict-shaped DRF validation bodies (e.g.
+    `{"milestone_id": ["This field is required."]}`) with a placeholder string.
+    This helper detects that placeholder, reformats the actual body, and updates
+    both `error_detail` and `args` so `str(e)` reflects the repair.
+
+    Dict bodies render as `field: msg1; msg2 | field2: msg`. Nested non-scalar
+    values are JSON-encoded so they read as `field: {"k": "v"}` rather than
+    Python repr.
+
+    Scope: dict-shaped bodies only. Non-dict bodies (lists, primitives) cannot
+    reach this helper as a TaigaAPIError today — pytaigaclient's __init__ calls
+    `.get()` on the parsed body and raises AttributeError on lists, so they
+    propagate as a different exception class. Adding list handling here would
+    be dead code.
+
+    No-op when the detail is not the placeholder, when `e.response` is missing,
+    when `.json()` fails, when the body is not a non-empty dict, or when no
+    diagnostic content can be extracted. See
+    https://github.com/TETRA-2023/pytaiga-mcp/issues/57.
+    """
+    if getattr(e, "error_detail", None) != _TAIGA_API_ERROR_PLACEHOLDER:
+        return
+    response = getattr(e, "response", None)
+    if response is None:
+        return
+    try:
+        body = response.json()
+    except (ValueError, AttributeError, TypeError):
+        # ValueError covers stdlib json.JSONDecodeError and requests'
+        # JSONDecodeError (both subclasses); AttributeError/TypeError cover
+        # response objects whose .json is missing or not callable.
+        return
+    if not isinstance(body, dict) or not body:
+        return
+    parts = []
+    for k, v in body.items():
+        if isinstance(v, list):
+            parts.append(f"{k}: {'; '.join(map(str, v))}")
+        elif isinstance(v, (str, int, float, bool)) or v is None:
+            parts.append(f"{k}: {v}")
+        else:
+            parts.append(f"{k}: {json.dumps(v)}")
+    new_detail = " | ".join(parts)
+    if not new_detail:
+        return
+    e.error_detail = new_detail
+    e.args = (f"API Error {e.status_code}: {new_detail}",)
+
+
 def _execute_taiga_operation(operation_name: str, operation_callable, error_context: str = ""):
     """
     Execute a Taiga API operation with standardized error handling.
@@ -483,7 +543,9 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
         The result of the operation
 
     Raises:
-        TaigaException: Re-raised from the API
+        TaigaException: Re-raised from the API. TaigaAPIError messages are repaired
+            in-place when the upstream client dropped a DRF-format error body
+            (see _repair_taiga_api_error).
         ValueError: Re-raised unwrapped from the operation callable (caller bugs:
             empty kwargs, missing required fields, ref-not-found, etc.) so callers
             see the original message rather than a generic "Server error" wrapper.
@@ -494,6 +556,12 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
     try:
         result = operation_callable()
         return result
+    except TaigaAPIError as e:
+        # Must precede `except TaigaException` — TaigaAPIError is a subclass and
+        # Python matches the first compatible except clause.
+        _repair_taiga_api_error(e)
+        logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
+        raise e
     except TaigaException as e:
         logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
         raise e
