@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.5 (2026-04-25)
+
+### Bug Fixes
+
+- Surface DRF-format Taiga error bodies dropped by pytaigaclient
+  ([#58](https://github.com/TETRA-2023/pytaiga-mcp/pull/58),
+  [`8623cc9`](https://github.com/TETRA-2023/pytaiga-mcp/commit/8623cc9e0df42c52329726d994b74d285e3c8f5b))
+
+
 ## v1.14.4 (2026-04-17)
 
 ### Bug Fixes
