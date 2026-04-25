@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.15.0 (2026-04-25)
+
+### Features
+
+- Add swimlane CRUD tools and bulk swimlane assignment
+  ([#60](https://github.com/TETRA-2023/pytaiga-mcp/pull/60),
+  [`7c5444e`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7c5444ef9c97423d8b6ac72d43e3a09f5293b2f0))
+
+
 ## v1.14.6 (2026-04-25)
 
 ### Bug Fixes
