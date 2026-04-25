@@ -232,6 +232,35 @@ class TestTaigaTools:
 
         assert err.error_detail == "No error message provided by API."
 
+    def test_repair_taiga_api_error_no_response(self):
+        """If e.response is None, no-op safely (defensive)."""
+        err = self._make_taiga_api_error(400, {"will_not_be_read": "x"})
+        assert err.error_detail == "No error message provided by API."
+        err.response = None
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == "No error message provided by API."
+
+    def test_repair_taiga_api_error_json_raises_during_repair(self):
+        """If response.json() raises during repair, no-op safely."""
+        err = self._make_taiga_api_error(400, {"will_not_be_read": "x"})
+        assert err.error_detail == "No error message provided by API."
+        err.response.json.side_effect = ValueError("boom")
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == "No error message provided by API."
+
+    def test_repair_taiga_api_error_nested_dict_value(self):
+        """Nested non-scalar values are JSON-encoded, not Python-repr'd."""
+        err = self._make_taiga_api_error(400, {"field": {"nested": "msg"}})
+
+        src.server._repair_taiga_api_error(err)
+
+        assert err.error_detail == 'field: {"nested": "msg"}'
+        assert str(err) == 'API Error 400: field: {"nested": "msg"}'
+
     def test_execute_taiga_operation_repairs_drf_error(self):
         """Errors flowing through the wrapper get repaired before re-raise."""
         from pytaigaclient.exceptions import TaigaAPIError

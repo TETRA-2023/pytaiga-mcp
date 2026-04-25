@@ -470,14 +470,37 @@ def _get_authenticated_client(session_id: str) -> TaigaClientWrapper:
     return client
 
 
+# Load-bearing string: must mirror pytaigaclient's TaigaAPIError default literal
+# exactly. If upstream changes the wording, the repair trigger silently no-ops
+# in production. The test_repair_taiga_api_error_drf_dict_list test constructs a
+# real TaigaAPIError and asserts this string, so a wording drift will fail CI.
 _TAIGA_API_ERROR_PLACEHOLDER = "No error message provided by API."
 
 
 def _repair_taiga_api_error(e: TaigaAPIError) -> None:
-    # Compensate for upstream pytaigaclient bug: TaigaAPIError.__init__ only looks
-    # for the legacy `_error_message` key and discards DRF-style validation bodies
-    # ({"field": ["msg", ...]}), leaving error_detail as a useless placeholder.
-    # See https://github.com/TETRA-2023/pytaiga-mcp/issues/57.
+    """Rewrite a TaigaAPIError's message in place when pytaigaclient dropped a DRF body.
+
+    pytaigaclient's TaigaAPIError.__init__ only reads the legacy `_error_message`
+    key, replacing modern Taiga dict-shaped DRF validation bodies (e.g.
+    `{"milestone_id": ["This field is required."]}`) with a placeholder string.
+    This helper detects that placeholder, reformats the actual body, and updates
+    both `error_detail` and `args` so `str(e)` reflects the repair.
+
+    Dict bodies render as `field: msg1; msg2 | field2: msg`. Nested non-scalar
+    values are JSON-encoded so they read as `field: {"k": "v"}` rather than
+    Python repr.
+
+    Scope: dict-shaped bodies only. Non-dict bodies (lists, primitives) cannot
+    reach this helper as a TaigaAPIError today — pytaigaclient's __init__ calls
+    `.get()` on the parsed body and raises AttributeError on lists, so they
+    propagate as a different exception class. Adding list handling here would
+    be dead code.
+
+    No-op when the detail is not the placeholder, when `e.response` is missing,
+    when `.json()` fails, when the body is not a non-empty dict, or when no
+    diagnostic content can be extracted. See
+    https://github.com/TETRA-2023/pytaiga-mcp/issues/57.
+    """
     if getattr(e, "error_detail", None) != _TAIGA_API_ERROR_PLACEHOLDER:
         return
     response = getattr(e, "response", None)
@@ -485,7 +508,10 @@ def _repair_taiga_api_error(e: TaigaAPIError) -> None:
         return
     try:
         body = response.json()
-    except Exception:
+    except (ValueError, AttributeError, TypeError):
+        # ValueError covers stdlib json.JSONDecodeError and requests'
+        # JSONDecodeError (both subclasses); AttributeError/TypeError cover
+        # response objects whose .json is missing or not callable.
         return
     if not isinstance(body, dict) or not body:
         return
@@ -493,8 +519,10 @@ def _repair_taiga_api_error(e: TaigaAPIError) -> None:
     for k, v in body.items():
         if isinstance(v, list):
             parts.append(f"{k}: {'; '.join(map(str, v))}")
-        else:
+        elif isinstance(v, (str, int, float, bool)) or v is None:
             parts.append(f"{k}: {v}")
+        else:
+            parts.append(f"{k}: {json.dumps(v)}")
     new_detail = " | ".join(parts)
     if not new_detail:
         return
@@ -529,6 +557,8 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
         result = operation_callable()
         return result
     except TaigaAPIError as e:
+        # Must precede `except TaigaException` — TaigaAPIError is a subclass and
+        # Python matches the first compatible except clause.
         _repair_taiga_api_error(e)
         logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
         raise e
