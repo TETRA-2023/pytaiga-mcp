@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.6 (2026-04-25)
+
+### Bug Fixes
+
+- Validate milestone_id on bulk_create_tasks with Kanban-aware error
+  ([#59](https://github.com/TETRA-2023/pytaiga-mcp/pull/59),
+  [`230dbc2`](https://github.com/TETRA-2023/pytaiga-mcp/commit/230dbc2fe9ba8cc38f0e818d259dfd16ffccdf87))
+
+
 ## v1.14.5 (2026-04-25)
 
 ### Bug Fixes
