@@ -3731,27 +3731,52 @@ def bulk_create_user_stories(
 
 @mcp.tool(
     "bulk_create_tasks",
-    description="Creates multiple tasks at once from a list of subjects. All tasks are created in the specified project, optionally linked to a user story. Returns the list of created tasks. Uses default session if session_id not provided.",
+    description=(
+        "Creates multiple tasks at once from a list of subjects within a sprint. "
+        "All tasks are created in the specified project and milestone (sprint), "
+        "optionally linked to a user story. Note: Taiga's /tasks/bulk_create "
+        "endpoint is sprint-scoped — milestone_id is required by the Taiga API "
+        "(verified on Taiga 2.40+) regardless of project settings. Kanban-only "
+        "projects (backlog not activated) cannot use this endpoint at all; fall "
+        "back to individual create_task calls in a loop. If user_story_id is "
+        "provided, the user story must belong to the specified milestone — "
+        "Taiga validates this alignment and rejects mismatches with 'Invalid "
+        "user story id'. Returns the list of created tasks. Uses default "
+        "session if session_id not provided."
+    ),
 )
 def bulk_create_tasks(
     project_id: int,
     subjects: List[str],
+    milestone_id: Optional[int] = None,
     user_story_id: Optional[int] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
-    """Bulk-creates tasks from a list of subject strings."""
+    """Bulk-creates tasks from a list of subject strings within a sprint."""
     cleaned = _clean_subjects(subjects)
+    if milestone_id is None:
+        raise ValueError(
+            "milestone_id is required by Taiga's /tasks/bulk_create endpoint "
+            "(verified on Taiga 2.40+). The endpoint is sprint-scoped — there "
+            "is no API mode that bulk-creates tasks outside a milestone. "
+            "For Kanban-only projects (backlog not activated, no milestones), "
+            "fall back to individual create_task calls in a loop."
+        )
     actual_session_id = _get_session_id(session_id)
     logger.info(
         f"Executing bulk_create_tasks: {len(cleaned)} tasks in project {project_id}, "
-        f"session {actual_session_id[:8]}..."
+        f"milestone {milestone_id}, session {actual_session_id[:8]}..."
     )
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_bulk():
         bulk_tasks = "\n".join(cleaned)
-        payload: Dict[str, Any] = {"project_id": project_id, "bulk_tasks": bulk_tasks}
+        payload: Dict[str, Any] = {
+            "project_id": project_id,
+            "bulk_tasks": bulk_tasks,
+            "milestone_id": milestone_id,
+        }
         if user_story_id is not None:
             payload["us_id"] = user_story_id
         result = taiga_client_wrapper.api.post("/tasks/bulk_create", json=payload)

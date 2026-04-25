@@ -2395,13 +2395,15 @@ class TestTaigaTools:
         assert call_json["bulk_stories"] == "Story A"
 
     def test_bulk_create_tasks(self, session_setup):
-        """Test bulk_create_tasks calls correct endpoint."""
+        """Test bulk_create_tasks calls correct endpoint with required milestone_id."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Task A"}]
-        result = src.server.bulk_create_tasks(21, ["Task A"], session_id=session_id)
+        result = src.server.bulk_create_tasks(
+            21, ["Task A"], milestone_id=89, session_id=session_id
+        )
         mock_client.api.post.assert_called_once_with(
             "/tasks/bulk_create",
-            json={"project_id": 21, "bulk_tasks": "Task A"},
+            json={"project_id": 21, "bulk_tasks": "Task A", "milestone_id": 89},
         )
         assert len(result) == 1
 
@@ -2409,14 +2411,27 @@ class TestTaigaTools:
         """Test bulk_create_tasks includes us_id when user_story_id provided."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Task A"}]
-        src.server.bulk_create_tasks(21, ["Task A"], user_story_id=5, session_id=session_id)
+        src.server.bulk_create_tasks(
+            21, ["Task A"], milestone_id=89, user_story_id=5, session_id=session_id
+        )
         call_json = mock_client.api.post.call_args[1]["json"]
         assert call_json["us_id"] == 5
+        assert call_json["milestone_id"] == 89
 
     def test_bulk_create_tasks_empty_raises(self):
         """Test bulk_create_tasks raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_tasks(21, [])
+            src.server.bulk_create_tasks(21, [], milestone_id=89)
+
+    def test_bulk_create_tasks_missing_milestone_raises(self):
+        """Test bulk_create_tasks raises a Kanban-aware ValueError when milestone_id missing (#55)."""
+        with pytest.raises(ValueError, match="milestone_id is required"):
+            src.server.bulk_create_tasks(21, ["Task A"])
+
+    def test_bulk_create_tasks_missing_milestone_mentions_kanban_workaround(self):
+        """The missing-milestone error must point Kanban-only callers at create_task."""
+        with pytest.raises(ValueError, match="create_task"):
+            src.server.bulk_create_tasks(21, ["Task A"])
 
     def test_bulk_create_issues(self, session_setup):
         """Test bulk_create_issues calls correct endpoint."""
