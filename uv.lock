@@ -712,7 +712,7 @@ cli = [
 
 [[package]]
 name = "mcp-taiga-bridge"
-version = "1.14.4"
+version = "1.14.6"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },

@@ -102,6 +102,7 @@ ALLOWED_KWARGS: Dict[str, set] = {
         "due_date",
         "due_date_reason",
         "epics",
+        "swimlane",
     },
     "task": {
         "subject",
@@ -155,6 +156,10 @@ ALLOWED_KWARGS: Dict[str, set] = {
         "slug",
         "order",
         "watchers",
+    },
+    "swimlane": {
+        "name",
+        "order",
     },
     "wiki_page": {
         "slug",
@@ -217,6 +222,7 @@ RESPONSE_FIELDS: Dict[str, Dict[str, Optional[List[str]]]] = {
             "assigned_to",
             "assigned_to_extra_info",
             "milestone",
+            "swimlane",
             "project",
             "tags",
             "is_blocked",
@@ -304,6 +310,11 @@ RESPONSE_FIELDS: Dict[str, Dict[str, Optional[List[str]]]] = {
             "project",
             "version",
         ],
+        "full": None,
+    },
+    "swimlane": {
+        "minimal": ["id", "name", "project"],
+        "standard": ["id", "name", "order", "project"],
         "full": None,
     },
     "member": {
@@ -3028,6 +3039,184 @@ def delete_milestone(milestone_id: int, session_id: Optional[str] = None) -> Dic
     return _execute_taiga_operation("delete_milestone", do_delete, f"milestone {milestone_id}")
 
 
+# --- Swimlane Tools ---
+
+
+@mcp.tool(
+    "list_swimlanes",
+    description=(
+        "Lists kanban swimlanes within a specific project. Swimlanes are horizontal "
+        "groupings on the Kanban board (typically aligned with epics, teams, or "
+        "initiatives). verbosity: 'minimal' (id/name/project), 'standard' (default — "
+        "adds 'order'), 'full' (includes per-swimlane status configuration). Uses "
+        "default session if session_id not provided."
+    ),
+)
+def list_swimlanes(
+    project_id: int, session_id: Optional[str] = None, verbosity: str = "standard"
+) -> List[Dict[str, Any]]:
+    """Lists swimlanes for a project."""
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing list_swimlanes for project {project_id}, session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+
+    result = _execute_taiga_operation(
+        "list_swimlanes",
+        lambda: taiga_client_wrapper.list_resources("swimlanes", project_id=project_id),
+        f"project {project_id}",
+    )
+    return _filter_response(result, "swimlane", verbosity)
+
+
+@mcp.tool(
+    "create_swimlane",
+    description=(
+        "Creates a new kanban swimlane within a project. Required: project_id and "
+        "name. Taiga auto-assigns 'order' (timestamp-based) and auto-populates "
+        "per-swimlane status configuration from the project's user-story statuses. "
+        "Note: if this is the first swimlane in the project, Taiga marks it "
+        "'default' and the project enters swimlanes-enabled mode; existing user "
+        "stories are auto-assigned to that default swimlane. To revert to a "
+        "no-swimlanes state, delete all non-default swimlanes first (each with "
+        "move_to=<default_id>) then delete the default — Taiga only blocks "
+        "deleting the default while other swimlanes still exist. verbosity: "
+        "'minimal', 'standard' (default), 'full'. Uses default session if "
+        "session_id not provided."
+    ),
+)
+def create_swimlane(
+    project_id: int,
+    name: str,
+    session_id: Optional[str] = None,
+    verbosity: str = "standard",
+) -> Dict[str, Any]:
+    """Creates a swimlane. Requires project_id and name."""
+    if not name:
+        raise ValueError("Swimlane requires a non-empty name.")
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing create_swimlane '{name}' in project {project_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+
+    def do_create():
+        return taiga_client_wrapper.api.post(
+            "/swimlanes",
+            json={"project": project_id, "name": name},
+        )
+
+    result = _execute_taiga_operation("create_swimlane", do_create, f"swimlane '{name}'")
+    return _filter_response(result, "swimlane", verbosity)
+
+
+@mcp.tool(
+    "get_swimlane",
+    description=(
+        "Gets details about a specific swimlane by its ID, including its per-status "
+        "configuration. verbosity: 'minimal', 'standard' (default), 'full' (includes "
+        "embedded statuses). Uses default session if session_id not provided."
+    ),
+)
+def get_swimlane(
+    swimlane_id: int, session_id: Optional[str] = None, verbosity: str = "standard"
+) -> Dict[str, Any]:
+    """Retrieves swimlane details by ID."""
+    actual_session_id = _get_session_id(session_id)
+    logger.info(f"Executing get_swimlane ID {swimlane_id} for session {actual_session_id[:8]}...")
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+
+    result = _execute_taiga_operation(
+        "get_swimlane",
+        lambda: taiga_client_wrapper.api.get(f"/swimlanes/{swimlane_id}"),
+        f"swimlane {swimlane_id}",
+    )
+    return _filter_response(result, "swimlane", verbosity)
+
+
+@mcp.tool(
+    "update_swimlane",
+    description=(
+        "Updates a swimlane's name or order. Pass fields to update as a JSON object "
+        "via the `kwargs` parameter, NOT as top-level arguments — top-level args "
+        "other than the declared signature params are silently dropped by FastMCP. "
+        "Calling with empty `kwargs` raises ValueError. Allowed keys: see "
+        "ALLOWED_KWARGS['swimlane'] in server.py (name, order). Swimlanes do not "
+        "use optimistic concurrency control — no version field is required. "
+        "verbosity: 'minimal', 'standard' (default), 'full'. Uses default session "
+        "if session_id not provided."
+    ),
+)
+def update_swimlane(
+    swimlane_id: int,
+    kwargs: Any = None,
+    session_id: Optional[str] = None,
+    verbosity: str = "standard",
+) -> Dict[str, Any]:
+    """Updates a swimlane. Pass fields as kwargs JSON (e.g., {"name": "Security"})."""
+    actual_session_id = _get_session_id(session_id)
+    parsed_kwargs = _validate_kwargs("swimlane", _parse_mcp_kwargs({"kwargs": kwargs}))
+    logger.info(
+        f"Executing update_swimlane ID {swimlane_id} for session {actual_session_id[:8]} "
+        f"with data: {parsed_kwargs}"
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+    if not parsed_kwargs:
+        raise ValueError(
+            f"update_swimlane called with no fields to update for swimlane {swimlane_id}. "
+            "Pass fields inside the `kwargs` JSON object, not as top-level arguments."
+        )
+
+    result = _execute_taiga_operation(
+        "update_swimlane",
+        lambda: taiga_client_wrapper.api.patch(f"/swimlanes/{swimlane_id}", json=parsed_kwargs),
+        f"swimlane {swimlane_id}",
+    )
+    return _filter_response(result, "swimlane", verbosity)
+
+
+@mcp.tool(
+    "delete_swimlane",
+    description=(
+        "Deletes a swimlane by its ID. User stories are not deleted — they "
+        "migrate (see move_to). Two Taiga API constraints to know: (1) the "
+        "default swimlane (first one created on the project) cannot be deleted "
+        "while other swimlanes still exist — Taiga returns 'The default "
+        "swimlane cannot be deleted'. To delete it, first delete all non-default "
+        "swimlanes (each with move_to=<default_id>); once the default is the "
+        "only one left, deletion succeeds and the project reverts to no-"
+        "swimlanes state. (2) Deleting a non-default swimlane that has user "
+        "stories assigned requires move_to (an existing swimlane ID in the same "
+        "project) to migrate them; without move_to, Taiga rejects with 'Cannot "
+        "set swimlane to None if there are available swimlanes'. Uses default "
+        "session if session_id not provided."
+    ),
+)
+def delete_swimlane(
+    swimlane_id: int,
+    move_to: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Deletes a swimlane by ID, optionally migrating its user stories to move_to."""
+    if move_to is not None and move_to == swimlane_id:
+        raise ValueError(f"move_to ({move_to}) cannot be the same as swimlane_id ({swimlane_id}).")
+    actual_session_id = _get_session_id(session_id)
+    logger.warning(
+        f"Executing delete_swimlane ID {swimlane_id} "
+        f"(move_to={move_to}) for session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+
+    def do_delete():
+        params = {"moveTo": move_to} if move_to is not None else None
+        taiga_client_wrapper.api.delete(f"/swimlanes/{swimlane_id}", params=params)
+        return {"status": "deleted", "swimlane_id": swimlane_id, "moved_to": move_to}
+
+    return _execute_taiga_operation("delete_swimlane", do_delete, f"swimlane {swimlane_id}")
+
+
 # --- User Management Tools ---
 
 
@@ -3894,6 +4083,64 @@ def bulk_update_user_story_milestone(
         "bulk_update_user_story_milestone",
         do_bulk,
         f"{len(bulk_stories)} stories to milestone {milestone_id}",
+    )
+
+
+@mcp.tool(
+    "bulk_update_user_story_swimlane",
+    description=(
+        "Assigns multiple user stories to a kanban swimlane in a single call. "
+        "Requires project_id, status_id, swimlane_id, and a list of user story IDs. "
+        "Per-status constraint (Taiga API): all user stories in user_story_ids must "
+        "currently share the given status_id — this endpoint is the same one Taiga's "
+        "Kanban UI uses to drop a column-worth of cards into a swimlane. To move "
+        "stories spanning multiple statuses, group by status and call this tool "
+        "once per status group. The order of IDs in user_story_ids determines "
+        "kanban_order within the (status, swimlane) cell. For single-story "
+        'assignment, use update_user_story with kwargs={"swimlane": <id>} instead. '
+        "Uses default session if session_id not provided."
+    ),
+)
+def bulk_update_user_story_swimlane(
+    project_id: int,
+    status_id: int,
+    swimlane_id: int,
+    user_story_ids: List[int],
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Bulk-assigns user stories sharing a status to a swimlane via Taiga's bulk_update_kanban_order endpoint."""
+    if not user_story_ids:
+        raise ValueError("user_story_ids list cannot be empty.")
+    actual_session_id = _get_session_id(session_id)
+    logger.info(
+        f"Executing bulk_update_user_story_swimlane: {len(user_story_ids)} stories -> "
+        f"swimlane {swimlane_id} (status {status_id}) in project {project_id}, "
+        f"session {actual_session_id[:8]}..."
+    )
+    taiga_client_wrapper = _get_authenticated_client(actual_session_id)
+
+    def do_bulk():
+        taiga_client_wrapper.api.post(
+            "/userstories/bulk_update_kanban_order",
+            json={
+                "project_id": project_id,
+                "status_id": status_id,
+                "swimlane_id": swimlane_id,
+                "bulk_userstories": user_story_ids,
+            },
+        )
+        return {
+            "status": "updated",
+            "project_id": project_id,
+            "swimlane_id": swimlane_id,
+            "status_id": status_id,
+            "stories_moved": len(user_story_ids),
+        }
+
+    return _execute_taiga_operation(
+        "bulk_update_user_story_swimlane",
+        do_bulk,
+        f"{len(user_story_ids)} stories to swimlane {swimlane_id} (status {status_id})",
     )
 
 

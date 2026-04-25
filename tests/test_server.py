@@ -1815,6 +1815,119 @@ class TestTaigaTools:
         assert result["status"] == "deleted"
         assert result["milestone_id"] == 300
 
+    # ─── Swimlane tools tests (issue #24) ─────────────────────────────
+
+    def test_list_swimlanes(self, session_setup):
+        """Test list_swimlanes routes through list_resources('swimlanes', ...)."""
+        session_id, mock_client = session_setup
+        mock_client.list_resources.return_value = [
+            {"id": 1, "name": "Security", "order": 100, "project": 9}
+        ]
+        result = src.server.list_swimlanes(9, session_id)
+        assert len(result) == 1
+        assert result[0]["name"] == "Security"
+        mock_client.list_resources.assert_called_once_with("swimlanes", project_id=9)
+
+    def test_create_swimlane(self, session_setup):
+        """Test create_swimlane POSTs project + name to /swimlanes."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = {
+            "id": 1,
+            "name": "Security",
+            "project": 9,
+            "order": 100,
+        }
+        result = src.server.create_swimlane(9, "Security", session_id=session_id)
+        mock_client.api.post.assert_called_once_with(
+            "/swimlanes", json={"project": 9, "name": "Security"}
+        )
+        assert result["id"] == 1
+        assert result["name"] == "Security"
+
+    def test_create_swimlane_empty_name_raises(self, session_setup):
+        """Test create_swimlane raises on empty name before any API call."""
+        session_id, mock_client = session_setup
+        with pytest.raises(ValueError, match="Swimlane requires a non-empty name"):
+            src.server.create_swimlane(9, "", session_id=session_id)
+        mock_client.api.post.assert_not_called()
+
+    def test_get_swimlane(self, session_setup):
+        """Test get_swimlane GETs /swimlanes/{id}."""
+        session_id, mock_client = session_setup
+        mock_client.api.get.return_value = {"id": 1, "name": "Security", "project": 9, "order": 100}
+        result = src.server.get_swimlane(1, session_id)
+        mock_client.api.get.assert_called_once_with("/swimlanes/1")
+        assert result["id"] == 1
+
+    def test_update_swimlane(self, session_setup):
+        """Test update_swimlane PATCHes /swimlanes/{id} with parsed kwargs (no version handling)."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {
+            "id": 1,
+            "name": "Security renamed",
+            "project": 9,
+            "order": 100,
+        }
+        result = src.server.update_swimlane(1, '{"name": "Security renamed"}', session_id)
+        mock_client.api.patch.assert_called_once_with(
+            "/swimlanes/1", json={"name": "Security renamed"}
+        )
+        assert result["name"] == "Security renamed"
+
+    def test_update_swimlane_no_kwargs_raises(self, session_setup):
+        """Test update_swimlane with no kwargs raises ValueError before any API call."""
+        session_id, mock_client = session_setup
+        with pytest.raises(ValueError, match="no fields to update"):
+            src.server.update_swimlane(1, "{}", session_id)
+        mock_client.api.patch.assert_not_called()
+
+    def test_update_swimlane_strips_unknown_kwargs(self, session_setup):
+        """Test update_swimlane drops kwargs not in ALLOWED_KWARGS['swimlane']."""
+        session_id, mock_client = session_setup
+        mock_client.api.patch.return_value = {"id": 1, "name": "Security", "project": 9, "order": 5}
+        src.server.update_swimlane(
+            1, '{"name": "Security", "statuses": "ignored", "project": "ignored"}', session_id
+        )
+        sent = mock_client.api.patch.call_args[1]["json"]
+        assert sent == {"name": "Security"}, f"unexpected payload: {sent}"
+
+    def test_delete_swimlane(self, session_setup):
+        """Test delete_swimlane DELETEs /swimlanes/{id} with params=None when move_to absent."""
+        session_id, mock_client = session_setup
+        mock_client.api.delete.return_value = None
+        result = src.server.delete_swimlane(1, session_id=session_id)
+        mock_client.api.delete.assert_called_once_with("/swimlanes/1", params=None)
+        assert result["status"] == "deleted"
+        assert result["swimlane_id"] == 1
+        assert result["moved_to"] is None
+
+    def test_delete_swimlane_with_move_to(self, session_setup):
+        """Test delete_swimlane sends params={'moveTo': ...} when migrating user stories."""
+        session_id, mock_client = session_setup
+        mock_client.api.delete.return_value = None
+        result = src.server.delete_swimlane(1, move_to=2, session_id=session_id)
+        mock_client.api.delete.assert_called_once_with("/swimlanes/1", params={"moveTo": 2})
+        assert result["status"] == "deleted"
+        assert result["swimlane_id"] == 1
+        assert result["moved_to"] == 2
+
+    def test_delete_swimlane_move_to_same_id_raises(self, session_setup):
+        """Test delete_swimlane rejects move_to == swimlane_id before any API call."""
+        session_id, mock_client = session_setup
+        with pytest.raises(ValueError, match="move_to .* cannot be the same as swimlane_id"):
+            src.server.delete_swimlane(1, move_to=1, session_id=session_id)
+        mock_client.api.delete.assert_not_called()
+
+    def test_user_story_swimlane_kwarg_passes_through(self, session_setup):
+        """Adding 'swimlane' to ALLOWED_KWARGS['user_story'] enables update_user_story assignment."""
+        session_id, mock_client = session_setup
+        mock_client.api.user_stories.get.return_value = {"id": 805, "version": 3}
+        mock_client.api.user_stories.edit.return_value = {"id": 805, "swimlane": 1, "version": 4}
+        src.server.update_user_story(805, '{"swimlane": 1}', session_id)
+        mock_client.api.user_stories.edit.assert_called_once_with(
+            user_story_id=805, version=3, swimlane=1
+        )
+
     # ─── User management tools tests ─────────────────────────────────
 
     def test_get_project_members(self, session_setup):
@@ -2483,6 +2596,41 @@ class TestTaigaTools:
         with pytest.raises(ValueError, match="bulk_stories list cannot be empty"):
             src.server.bulk_update_user_story_milestone(21, 5, [])
 
+    def test_bulk_update_user_story_swimlane(self, session_setup):
+        """Test bulk_update_user_story_swimlane POSTs to bulk_update_kanban_order with swimlane_id."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.return_value = [
+            {"id": 805, "swimlane": 1, "status": 97, "kanban_order": 1},
+            {"id": 806, "swimlane": 1, "status": 97, "kanban_order": 2},
+        ]
+        result = src.server.bulk_update_user_story_swimlane(
+            project_id=9,
+            status_id=97,
+            swimlane_id=1,
+            user_story_ids=[805, 806],
+            session_id=session_id,
+        )
+        mock_client.api.post.assert_called_once_with(
+            "/userstories/bulk_update_kanban_order",
+            json={
+                "project_id": 9,
+                "status_id": 97,
+                "swimlane_id": 1,
+                "bulk_userstories": [805, 806],
+            },
+        )
+        assert result["status"] == "updated"
+        assert result["stories_moved"] == 2
+        assert result["swimlane_id"] == 1
+        assert result["status_id"] == 97
+
+    def test_bulk_update_user_story_swimlane_empty_raises(self):
+        """Test bulk_update_user_story_swimlane raises on empty list before any API call."""
+        with pytest.raises(ValueError, match="user_story_ids list cannot be empty"):
+            src.server.bulk_update_user_story_swimlane(
+                project_id=9, status_id=97, swimlane_id=1, user_story_ids=[]
+            )
+
     def test_bulk_update_user_story_order_backlog(self, session_setup):
         """Test bulk_update_user_story_order with backlog order type."""
         session_id, mock_client = session_setup
@@ -2592,9 +2740,15 @@ class TestResponseFiltering:
     """Tests for the response filtering functionality."""
 
     def test_filter_standard_always_includes_version(self):
-        """version is required for updates in standard level."""
+        """version is required for updates in standard level.
+
+        Exceptions: member (read-only, no update endpoint) and swimlane
+        (Taiga API does not use optimistic concurrency on /swimlanes —
+        empirically no version field on the resource, see issue #24).
+        """
+        no_version = {"member", "swimlane"}
         for resource_type, levels in src.server.RESPONSE_FIELDS.items():
-            if resource_type != "member":  # member doesn't have version
+            if resource_type not in no_version:
                 assert "version" in levels["standard"], (
                     f"{resource_type} missing version in standard"
                 )
@@ -2606,11 +2760,36 @@ class TestResponseFiltering:
 
     def test_filter_minimal_includes_project_where_applicable(self):
         """Resources with project association must include project in minimal."""
-        project_resources = ["user_story", "task", "issue", "epic", "milestone", "wiki_page"]
+        project_resources = [
+            "user_story",
+            "task",
+            "issue",
+            "epic",
+            "milestone",
+            "wiki_page",
+            "swimlane",
+        ]
         for resource_type in project_resources:
             assert "project" in src.server.RESPONSE_FIELDS[resource_type]["minimal"], (
                 f"{resource_type} missing project in minimal"
             )
+
+    def test_filter_swimlane_verbosity_levels(self):
+        """Swimlane response filter trims correctly per verbosity (issue #24)."""
+        full = {
+            "id": 1,
+            "name": "Security",
+            "order": 100,
+            "project": 9,
+            "statuses": [{"id": 65, "name": "New"}],  # large nested data, only in 'full'
+        }
+        minimal = src.server._filter_response(full, "swimlane", "minimal")
+        assert set(minimal.keys()) == {"id", "name", "project"}
+        standard = src.server._filter_response(full, "swimlane", "standard")
+        assert set(standard.keys()) == {"id", "name", "order", "project"}
+        result_full = src.server._filter_response(full, "swimlane", "full")
+        assert result_full == full  # untouched
+        assert "statuses" in result_full
 
     def test_filter_response_handles_none(self):
         """_filter_response should return None when given None."""
