@@ -24,6 +24,7 @@ _RESOURCE_ENDPOINTS = {
     "priorities": "/priorities",
     "severities": "/severities",
     "points": "/points",
+    "swimlanes": "/swimlanes",
 }
 
 _NO_PAGINATION_HEADERS = {"x-disable-pagination": "True"}
