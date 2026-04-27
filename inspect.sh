@@ -1,9 +1,9 @@
 #!/bin/bash
 # Usage examples:
 # stdio mode: 
-#   npx -y @modelcontextprotocol/inspector uv --directory /Users/talhaorak/Codes/pyTaigaMCP2 run python src/server.py --mode stdio --log-level [DEBUG|INFO|ERROR](default INFO) --log-file <log filename. default server.log>
+#   npx -y @modelcontextprotocol/inspector uv --directory <path/to/pytaiga-mcp> run python src/server.py --mode stdio --log-level [DEBUG|INFO|ERROR](default INFO) --log-file <log filename. default server.log>
 # sse mode:
-#   npx -y @modelcontextprotocol/inspector uv --directory /Users/talhaorak/Codes/pyTaigaMCP2 run python src/server.py --mode sse --port 5001 --log-level [DEBUG|INFO|ERROR](default INFO) --log-file <log filename. default server.log>
+#   npx -y @modelcontextprotocol/inspector uv --directory <path/to/pytaiga-mcp> run python src/server.py --mode sse --port 5001 --log-level [DEBUG|INFO|ERROR](default INFO) --log-file <log filename. default server.log>
 
 
 # Help/usage function
