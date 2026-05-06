@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.15.1 (2026-05-06)
+
+### Bug Fixes
+
+- **deps**: Bump GitPython 3.1.46 -> 3.1.50 to patch CVEs
+  ([#64](https://github.com/TETRA-2023/pytaiga-mcp/pull/64),
+  [`9833cda`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9833cdab928ae5b19c88e09fca097e0cea0c4dc5))
+
+### Chores
+
+- **inspect.sh**: Replace hardcoded upstream-author path with generic placeholder
+  ([`0232251`](https://github.com/TETRA-2023/pytaiga-mcp/commit/0232251dcf2729123780d2f1915170a3ac771077))
+
+### Documentation
+
+- List Swimlanes in README features ([#62](https://github.com/TETRA-2023/pytaiga-mcp/pull/62),
+  [`488d853`](https://github.com/TETRA-2023/pytaiga-mcp/commit/488d853dc00f0b0d7d17b3283693a8ce3a55c833))
+
+
 ## v1.15.0 (2026-04-25)
 
 ### Features
