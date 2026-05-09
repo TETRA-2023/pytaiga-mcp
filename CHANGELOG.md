@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.15.2 (2026-05-09)
+
+### Bug Fixes
+
+- List_user_stories silently drops swimlane filter (upstream taiga-back typo)
+  ([#69](https://github.com/TETRA-2023/pytaiga-mcp/pull/69),
+  [`e5696fb`](https://github.com/TETRA-2023/pytaiga-mcp/commit/e5696fb2657d46eecb3a535c6c2ca27c796c3427))
+
+### Chores
+
+- Add gitleaks to pre-commit ([#65](https://github.com/TETRA-2023/pytaiga-mcp/pull/65),
+  [`8aef1ed`](https://github.com/TETRA-2023/pytaiga-mcp/commit/8aef1ed78a2a718113d72f0afbb58043c19b82e2))
+
+### Continuous Integration
+
+- Add gitleaks job and decouple :stable from default-branch builds
+  ([#66](https://github.com/TETRA-2023/pytaiga-mcp/pull/66),
+  [`b94a6d8`](https://github.com/TETRA-2023/pytaiga-mcp/commit/b94a6d877f6140604456971419a43ec42e1fa5ca))
+
+- Switch default branch references from master to main
+  ([#67](https://github.com/TETRA-2023/pytaiga-mcp/pull/67),
+  [`9f6f52c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9f6f52c2e413896f35a8c88dccf3427f33db7fd5))
+
+
 ## v1.15.1 (2026-05-06)
 
 ### Bug Fixes
