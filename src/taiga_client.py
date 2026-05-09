@@ -123,7 +123,9 @@ class TaigaClientWrapper:
         # both keys keeps us correct before and after upstream fixes the typo,
         # since the dispatcher uses whichever it recognises and ignores the
         # other. Scoped to user_stories list — only that endpoint has the bug.
-        # Ref: taiga/projects/userstories/filters.py#L31-L34
+        # Upstream ref:
+        # https://github.com/taigaio/taiga-back/blob/df14a4bdaee662962e343e3c4cd3fcd6a1339de7/taiga/projects/userstories/filters.py#L31-L34
+        # exclude_swimlane is unaffected (no typo there) and intentionally not translated.
         if resource_type == "user_stories" and "swimlane" in params and "swimnlane" not in params:
             params["swimnlane"] = params["swimlane"]
         result = self.api.get(endpoint, params=params, headers=_NO_PAGINATION_HEADERS)

@@ -3176,6 +3176,19 @@ class TestTaigaClientWrapper:
         assert call_params["swimlane"] == 17
         assert "swimnlane" not in call_params
 
+    def test_list_resources_user_stories_exclude_swimlane_not_translated(self):
+        """Test 'exclude_swimlane' is passed through unchanged (no upstream typo there)."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        wrapper.list_resources("user_stories", project_id=9, exclude_swimlane=17)
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert call_params["exclude_swimlane"] == 17
+        assert "exclude_swimnlane" not in call_params
+        assert "swimlane" not in call_params
+        assert "swimnlane" not in call_params
+
     def test_list_resources_no_project_id(self):
         """Test list_resources omits project key when project_id is None."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
