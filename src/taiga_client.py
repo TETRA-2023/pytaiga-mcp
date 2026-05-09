@@ -117,5 +117,16 @@ class TaigaClientWrapper:
         if project_id is not None:
             params["project"] = project_id
         params.update(filters)
+        # Workaround for upstream taiga-back typo (TETRA-2023/pytaiga-mcp#68):
+        # SwimlanesFilter declares param_name="swimnlane" (extra 'n'), so the
+        # back-end ignores ?swimlane= and only honours ?swimnlane=. Sending
+        # both keys keeps us correct before and after upstream fixes the typo,
+        # since the dispatcher uses whichever it recognises and ignores the
+        # other. Scoped to user_stories list — only that endpoint has the bug.
+        # Upstream ref:
+        # https://github.com/taigaio/taiga-back/blob/df14a4bdaee662962e343e3c4cd3fcd6a1339de7/taiga/projects/userstories/filters.py#L31-L34
+        # exclude_swimlane is unaffected (no typo there) and intentionally not translated.
+        if resource_type == "user_stories" and "swimlane" in params and "swimnlane" not in params:
+            params["swimnlane"] = params["swimlane"]
         result = self.api.get(endpoint, params=params, headers=_NO_PAGINATION_HEADERS)
         return result if isinstance(result, list) else []
