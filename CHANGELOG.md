@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.15.3 (2026-05-09)
+
+### Bug Fixes
+
+- **deps**: Bump python-multipart 0.0.26 -> 0.0.27 to patch DoS CVE
+  ([#71](https://github.com/TETRA-2023/pytaiga-mcp/pull/71),
+  [`2c994a4`](https://github.com/TETRA-2023/pytaiga-mcp/commit/2c994a413a25d06eb35c41f80c86fab1da538f95))
+
+
 ## v1.15.2 (2026-05-09)
 
 ### Bug Fixes
