@@ -32,7 +32,7 @@ The bridge ships two servers in a single image. Select one at runtime via the `T
 
 | Mode | Tools | Best for |
 |---|---|---|
-| `workflow` (default) | ~27 intent tools | Product Owners and team members managing projects daily |
+| `workflow` (default) | ~28 intent tools | Product Owners and team members managing projects daily |
 | `full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
 **Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
@@ -51,7 +51,7 @@ TAIGA_SERVER_MODE=full ./run.sh
 
 ## Features
 
-### Workflow mode tools (~27)
+### Workflow mode tools (~28)
 
 Intent-based tools that resolve names and composite API calls:
 

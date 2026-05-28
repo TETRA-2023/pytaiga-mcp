@@ -1,6 +1,6 @@
 """Workflow-oriented Taiga MCP server.
 
-Exposes ~27 intent-based tools designed for everyday project management:
+Exposes ~28 intent-based tools designed for everyday project management:
 sprint planning, backlog grooming, team workload, epic tracking, task
 breakdown, wiki, and comments. All tools accept human-readable names
 (project slug, sprint name, status name, username) and resolve them to
@@ -875,7 +875,9 @@ def update_story(
     "create_task",
     description=(
         "Add a single task under an existing user story. story_ref is the parent US ref number. "
-        "All name fields are resolved (assignee username, status name). "
+        "By default the task inherits the parent story's sprint; pass sprint=<name|id> to "
+        "place the task in a different sprint, or sprint=0 to keep it out of any sprint. "
+        "All name fields are resolved (assignee username, status name, sprint name). "
         "project accepts slug or ID."
     ),
 )
@@ -886,6 +888,7 @@ def create_task(
     description: Optional[str] = None,
     status: Optional[str] = None,
     assignee: Optional[str] = None,
+    sprint: Optional[Any] = None,
     due_date: Optional[str] = None,
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
@@ -903,7 +906,20 @@ def create_task(
             raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
 
         data: Dict[str, Any] = {"user_story": story["id"]}
-        # Tasks inherit their parent story's milestone by default; let Taiga handle it.
+
+        # Milestone handling: Taiga does NOT auto-copy the parent story's
+        # milestone onto a new task — Task and UserStory are independent FKs.
+        # We replicate the sprint-board UI behaviour by defaulting to the
+        # parent's milestone. Callers can override with sprint=<name|id> or
+        # explicitly opt out with sprint=0.
+        if sprint is None:
+            if story.get("milestone") is not None:
+                data["milestone"] = story["milestone"]
+        elif sprint == 0:
+            pass  # explicit "no sprint"
+        else:
+            data["milestone"] = _resolve_sprint(client, project_id, sprint)["id"]
+
         if description:
             data["description"] = description
         if tags:
@@ -995,15 +1011,29 @@ def update_task(
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
 
 
+_TASK_OVERRIDE_KEYS = {
+    "subject",
+    "description",
+    "status",
+    "assignee",
+    "due_date",
+    "tags",
+    "blocked",
+}
+
+
 @mcp.tool(
     "break_down_story",
     description=(
         "Decompose a user story into multiple tasks in one call. tasks accepts a list of "
         "subject strings (e.g. ['design', 'API', 'tests']) or a list of dicts "
-        "({'subject': str, 'assignee': str?, 'status': str?, 'description': str?}) "
-        "for per-task field overrides. If the parent story is assigned to a sprint, "
-        "tasks are created in that sprint via Taiga's bulk endpoint; otherwise tasks "
-        "are created individually under the story. project accepts slug or ID."
+        "({'subject': str, 'assignee': str?, 'status': str?, 'description': str?, "
+        "'due_date': str?, 'tags': [str]?, 'blocked': bool?}) for per-task overrides. "
+        "Tasks inherit the parent story's sprint. Performance: when the story is in a "
+        "sprint AND no per-task overrides are provided, the bulk endpoint creates all "
+        "tasks in one API call; otherwise (story in backlog OR overrides present) tasks "
+        "are created individually. Unknown override keys raise ValueError. "
+        "project accepts slug or ID."
     ),
 )
 def break_down_story(
@@ -1025,26 +1055,30 @@ def break_down_story(
         if not story:
             raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
 
-        # Normalize: every entry becomes a dict with at least "subject".
+        # Normalize entries into dicts and validate override keys.
         normalized: List[Dict[str, Any]] = []
         for entry in tasks:
             if isinstance(entry, str):
                 normalized.append({"subject": entry})
             elif isinstance(entry, dict) and entry.get("subject"):
+                unknown = set(entry.keys()) - _TASK_OVERRIDE_KEYS
+                if unknown:
+                    raise ValueError(
+                        f"Unknown per-task override keys: {sorted(unknown)}. "
+                        f"Allowed: {sorted(_TASK_OVERRIDE_KEYS)}."
+                    )
                 normalized.append(entry)
             else:
                 raise ValueError(
                     "Each entry in tasks must be a non-empty string or a dict with a 'subject' key."
                 )
 
-        # Need per-task field overrides? Then we must create tasks individually
-        # because Taiga's /tasks/bulk_create only accepts a flat list of subjects.
-        # Otherwise, prefer the bulk endpoint when the parent is in a sprint.
+        # Bulk path requires sprint context AND no per-task overrides — Taiga's
+        # /tasks/bulk_create only accepts a flat subject list scoped to one milestone.
         has_overrides = any(set(e.keys()) - {"subject"} for e in normalized)
         milestone_id = story.get("milestone")
 
         if not has_overrides and milestone_id is not None:
-            # Sprint-scoped bulk path — single API call.
             bulk_tasks = "\n".join(e["subject"] for e in normalized)
             result = client.api.post(
                 "/tasks/bulk_create",
@@ -1055,15 +1089,30 @@ def break_down_story(
                     "us_id": story["id"],
                 },
             )
-            created = result if isinstance(result, list) else []
+            if isinstance(result, list):
+                created = result
+            else:
+                logger.warning(
+                    f"Unexpected /tasks/bulk_create response shape "
+                    f"({type(result).__name__}); reporting 0 created."
+                )
+                created = []
         else:
-            # Loop path: story is in backlog (no milestone) OR caller passed
-            # per-task overrides. Per-call create handles both.
+            # Loop path: story in backlog (no milestone) OR per-task overrides present.
+            # Tasks inherit the parent story's milestone when available.
             created = []
             for entry in normalized:
                 data: Dict[str, Any] = {"user_story": story["id"]}
+                if milestone_id is not None:
+                    data["milestone"] = milestone_id
                 if "description" in entry:
                     data["description"] = entry["description"]
+                if "due_date" in entry:
+                    data["due_date"] = entry["due_date"]
+                if "tags" in entry:
+                    data["tags"] = entry["tags"]
+                if "blocked" in entry:
+                    data["is_blocked"] = entry["blocked"]
                 if "status" in entry:
                     data["status"] = _resolve_status(
                         client, project_id, "task", entry["status"], actual_session_id

@@ -835,3 +835,125 @@ class TestBreakDownStory:
         }
         with pytest.raises(ValueError, match="must be a non-empty string or a dict"):
             wf.break_down_story("p", 42, [{"no_subject": "oops"}], session_id=session)
+
+
+# ---------------------------------------------------------------------------
+# Regression: review round on PR #73
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTaskSprintInheritance:
+    """Regression: create_task must default the task's milestone to the parent's."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_inherits_parent_milestone_when_sprint_not_given(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        # Critical: task lands in the parent story's sprint by default.
+        assert data["milestone"] == 99
+
+    def test_no_milestone_when_parent_in_backlog(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert "milestone" not in data
+
+    def test_sprint_zero_opts_out_even_if_parent_in_sprint(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", sprint=0, session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert "milestone" not in data
+
+    def test_explicit_sprint_overrides_parent(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.list_resources.return_value = [{"id": 77, "name": "Sprint 6", "closed": False}]
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", sprint="Sprint 6", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["milestone"] == 77
+
+
+class TestBreakDownStoryOverrides:
+    """Regression: loop path must honor all documented override keys."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_loop_supports_tags_due_date_blocked(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.break_down_story(
+            "p",
+            42,
+            [
+                {
+                    "subject": "X",
+                    "tags": ["a", "b"],
+                    "due_date": "2026-06-30",
+                    "blocked": True,
+                }
+            ],
+            session_id=session,
+        )
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["tags"] == ["a", "b"]
+        assert data["due_date"] == "2026-06-30"
+        assert data["is_blocked"] is True
+
+    def test_rejects_unknown_override_key(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        with pytest.raises(ValueError, match="Unknown per-task override keys"):
+            wf.break_down_story("p", 42, [{"subject": "X", "color": "red"}], session_id=session)
+        mock_client.api.tasks.create.assert_not_called()
+
+    def test_loop_path_inherits_parent_milestone(self, session, mock_client):
+        """Tasks created via loop path (overrides present) should still inherit milestone."""
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        # Override forces loop path; milestone should still come through.
+        wf.break_down_story(
+            "p", 42, [{"subject": "X", "due_date": "2026-06-30"}], session_id=session
+        )
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["milestone"] == 99
