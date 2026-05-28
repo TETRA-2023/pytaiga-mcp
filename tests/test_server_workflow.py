@@ -957,3 +957,53 @@ class TestBreakDownStoryOverrides:
         )
         data = mock_client.api.tasks.create.call_args.kwargs["data"]
         assert data["milestone"] == 99
+
+
+# ---------------------------------------------------------------------------
+# Regression: round-2 review polish on PR #73
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTaskSprintOptOutString:
+    """The opt-out branch must accept both int 0 and string "0"."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_sprint_string_zero_opts_out(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", sprint="0", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        # str "0" must opt out, NOT fall through to _resolve_sprint(..., "0")
+        # which would look up a non-existent milestone.
+        assert "milestone" not in data
+        mock_client.list_resources.assert_not_called()
+
+
+class TestBreakDownStoryBulkShapeWarn:
+    """Bulk endpoint returning a non-list should warn and coerce to []."""
+
+    def test_warns_and_coerces_on_dict_response(self, session, mock_client, caplog):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 33,
+        }
+        # Simulate an unexpected response shape from /tasks/bulk_create.
+        mock_client.api.post.return_value = {"unexpected": "shape"}
+
+        with caplog.at_level("WARNING", logger="src.server_workflow"):
+            result = wf.break_down_story("p", 42, ["X", "Y"], session_id=session)
+
+        assert result["tasks_created"] == 0
+        assert result["tasks"] == []
+        assert any(
+            "Unexpected /tasks/bulk_create response shape" in rec.message for rec in caplog.records
+        )

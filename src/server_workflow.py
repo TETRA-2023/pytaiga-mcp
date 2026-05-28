@@ -213,6 +213,19 @@ _ISSUE_ATTR_RESOURCE_MAP = {
     "type": "issue_types",
 }
 
+# Allowed override keys for break_down_story per-task dicts. Kept aligned with
+# the kwargs surface of create_task. Adding a field to create_task should
+# update this set too.
+_TASK_OVERRIDE_KEYS = {
+    "subject",
+    "description",
+    "status",
+    "assignee",
+    "due_date",
+    "tags",
+    "blocked",
+}
+
 
 def _resolve_status(
     client: TaigaClientWrapper,
@@ -911,11 +924,14 @@ def create_task(
         # milestone onto a new task — Task and UserStory are independent FKs.
         # We replicate the sprint-board UI behaviour by defaulting to the
         # parent's milestone. Callers can override with sprint=<name|id> or
-        # explicitly opt out with sprint=0.
+        # explicitly opt out with sprint=0 (or "0" — both accepted).
+        # `str(sprint) == "0"` catches int 0 and string "0" without matching
+        # bool False (str(False) == "False"), which keeps the opt-out path
+        # honest about what counts as "no sprint".
         if sprint is None:
             if story.get("milestone") is not None:
                 data["milestone"] = story["milestone"]
-        elif sprint == 0:
+        elif str(sprint) == "0":
             pass  # explicit "no sprint"
         else:
             data["milestone"] = _resolve_sprint(client, project_id, sprint)["id"]
@@ -1009,17 +1025,6 @@ def update_task(
         return _task_summary(result)
 
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
-
-
-_TASK_OVERRIDE_KEYS = {
-    "subject",
-    "description",
-    "status",
-    "assignee",
-    "due_date",
-    "tags",
-    "blocked",
-}
 
 
 @mcp.tool(
