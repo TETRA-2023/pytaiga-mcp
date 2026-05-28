@@ -26,9 +26,56 @@ This bridge provides a comprehensive set of tools and resources for AI agents to
 
 By using the MCP standard, this bridge allows AI systems to maintain contextual awareness about project state and perform complex project management tasks programmatically.
 
+## Two server modes
+
+Starting with v2.0, this bridge ships two servers selectable via `TAIGA_SERVER_MODE`:
+
+| Mode | Image tag | Tools | Best for |
+|---|---|---|---|
+| `workflow` | `:latest`, `:workflow` | ~23 intent tools | Product Owners and team members managing projects daily |
+| `full` | `:full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
+
+**Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
+
+**Full mode** gives direct access to every Taiga API endpoint. Useful when you need precise control, bulk operations, or access to resources not surfaced in workflow mode (swimlanes, custom attributes, attachments, story points).
+
+Switch mode at runtime:
+
+```bash
+# Docker: set env var
+docker run -e TAIGA_SERVER_MODE=full ...
+
+# Local: env var or .env file
+TAIGA_SERVER_MODE=full ./run.sh
+```
+
 ## Features
 
-### 100+ MCP Tools
+### Workflow mode tools (~23)
+
+Intent-based tools that resolve names and composite API calls:
+
+| Tool | What it does |
+|---|---|
+| `get_project_overview` | Project snapshot: team, active sprint, story counts by status |
+| `browse_backlog` | Filtered backlog view with name-based filters (status, assignee, epic) |
+| `create_story` | Create US with optional epic link, sprint, assignee — one call |
+| `update_story` | Update any US field by name (status, assignee, sprint) |
+| `create_issue` | Create issue with smart defaults for type/priority/severity |
+| `get_sprint_board` | Full sprint view: all stories + tasks, summary by status |
+| `plan_sprint` | Create sprint + assign stories in one step |
+| `move_to_sprint` | Move stories by ref to a named sprint |
+| `set_story_status` | Change story status by name (e.g. "Done") |
+| `close_sprint` | Mark a sprint closed |
+| `get_epic_overview` | Epic + all linked stories with progress counts |
+| `create_epic` | Create epic + optionally link existing stories |
+| `get_team_workload` | Per-member story/task counts for a sprint |
+| `assign_item` | Assign any entity by username |
+| `get_wiki` / `upsert_wiki` | Get or create/update wiki pages |
+| `add_comment` | Comment on any entity by ref |
+| `search` | Full-text search across all entity types |
+
+### Full mode tools (107+)
 
 The bridge provides comprehensive CRUD operations and advanced features across all Taiga resources:
 
@@ -117,19 +164,15 @@ uv pip install -e ".[dev]"
 
 ### Docker
 
-Pull the pre-built image from GHCR:
+Image tags:
 
-```bash
-docker pull ghcr.io/tetra-2023/pytaiga-mcp:latest
-```
+| Tag | Mode | Use |
+|---|---|---|
+| `:latest` | workflow | Recommended default |
+| `:workflow` | workflow | Explicit workflow pin |
+| `:full` | full | Full CRUD surface |
 
-Or build locally:
-
-```bash
-docker build -t pytaiga-mcp .
-```
-
-Run with environment variables:
+Pull and run (workflow mode, stdio):
 
 ```bash
 docker run -i --rm \
@@ -139,7 +182,17 @@ docker run -i --rm \
   ghcr.io/tetra-2023/pytaiga-mcp:latest
 ```
 
-To use SSE transport instead of stdio, append `--sse`:
+Full mode:
+
+```bash
+docker run -i --rm \
+  -e TAIGA_API_URL=https://your-taiga-instance.com \
+  -e TAIGA_USERNAME=your_username \
+  -e TAIGA_PASSWORD=your_password \
+  ghcr.io/tetra-2023/pytaiga-mcp:full
+```
+
+SSE transport (append `--sse`, expose a port):
 
 ```bash
 docker run --rm \
@@ -150,12 +203,20 @@ docker run --rm \
   ghcr.io/tetra-2023/pytaiga-mcp:latest --sse
 ```
 
+Or build locally:
+
+```bash
+docker build -t pytaiga-mcp .
+# Run full mode from local build:
+docker run -i --rm -e TAIGA_SERVER_MODE=full -e TAIGA_API_URL=... pytaiga-mcp
+```
+
 Example MCP client configuration (`.mcp.json`) for stdio transport:
 
 ```json
 {
   "mcpServers": {
-    "taigaApi": {
+    "taiga": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
