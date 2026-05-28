@@ -606,3 +606,404 @@ class TestUpdateStoryEpicRelink:
 
         with pytest.raises(ValueError, match="No fields to update"):
             wf.update_story("p", 5, session_id=session)
+
+
+# ---------------------------------------------------------------------------
+# Task tools (v2.1 — task/intent surface)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTask:
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_creates_task_minimal(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 50, "ref": 42}
+        mock_client.api.tasks.create.return_value = {
+            "id": 200,
+            "ref": 7,
+            "subject": "Implement API",
+        }
+        result = wf.create_task("p", 42, "Implement API", session_id=session)
+        assert result["status"] == "created"
+        assert result["ref"] == 7
+        assert result["parent_story_ref"] == 42
+        call = mock_client.api.tasks.create.call_args
+        assert call.kwargs["project"] == 1
+        assert call.kwargs["subject"] == "Implement API"
+        assert call.kwargs["data"]["user_story"] == 50
+
+    def test_creates_task_with_assignee_and_status(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 50, "ref": 42}
+        # Two list_resources calls — one for task_statuses, one for memberships.
+        mock_client.list_resources.side_effect = [
+            [{"id": 11, "name": "In Progress"}],
+            [
+                {
+                    "user": 7,
+                    "full_name": "Alice",
+                    "email": "alice@example.com",
+                    "user_extra_info": {"username": "alice", "full_name_display": "Alice"},
+                }
+            ],
+        ]
+        mock_client.api.tasks.create.return_value = {"id": 200, "ref": 7, "subject": "API"}
+        wf.create_task("p", 42, "API", status="In Progress", assignee="alice", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["status"] == 11
+        assert data["assigned_to"] == 7
+
+    def test_raises_when_parent_story_missing(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = None
+        with pytest.raises(ValueError, match=r"User story #42 not found"):
+            wf.create_task("p", 42, "T", session_id=session)
+
+
+class TestUpdateTask:
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def _task(self):
+        return {"id": 200, "ref": 7, "subject": "T", "version": 3, "user_story": 50}
+
+    def test_resolves_status_by_name(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        mock_client.list_resources.return_value = [{"id": 12, "name": "Done"}]
+        mock_client.api.tasks.edit.return_value = {
+            "ref": 7,
+            "subject": "T",
+            "status_extra_info": {"name": "Done"},
+            "assigned_to_extra_info": None,
+            "is_blocked": False,
+        }
+        wf.update_task("p", 7, status="Done", session_id=session)
+        kwargs = mock_client.api.tasks.edit.call_args.kwargs
+        assert kwargs["status"] == 12
+        assert kwargs["version"] == 3
+
+    def test_reparent_resolves_story_ref(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        # Subsequent get_by_ref call resolves the NEW parent story.
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 99, "ref": 44}
+        mock_client.api.tasks.edit.return_value = {
+            "ref": 7,
+            "subject": "T",
+            "status_extra_info": None,
+            "assigned_to_extra_info": None,
+            "is_blocked": False,
+        }
+        wf.update_task("p", 7, story_ref=44, session_id=session)
+        kwargs = mock_client.api.tasks.edit.call_args.kwargs
+        assert kwargs["user_story"] == 99
+
+    def test_sprint_move_supported(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        mock_client.list_resources.return_value = [{"id": 33, "name": "Sprint 2", "closed": False}]
+        mock_client.api.tasks.edit.return_value = {
+            "ref": 7,
+            "subject": "T",
+            "status_extra_info": None,
+            "assigned_to_extra_info": None,
+            "is_blocked": False,
+        }
+        wf.update_task("p", 7, sprint="Sprint 2", session_id=session)
+        kwargs = mock_client.api.tasks.edit.call_args.kwargs
+        assert kwargs["milestone"] == 33
+
+    def test_no_op_raises(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        with pytest.raises(ValueError, match="No fields to update"):
+            wf.update_task("p", 7, session_id=session)
+
+
+class TestSetTaskStatus:
+    def test_resolves_and_updates(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [{"id": 99, "name": "Done"}]
+        mock_client.api.tasks.get_by_ref.return_value = {"id": 200, "ref": 7, "version": 2}
+        mock_client.api.tasks.edit.return_value = {
+            "ref": 7,
+            "status_extra_info": {"name": "Done"},
+            "is_closed": True,
+        }
+        result = wf.set_task_status("p", 7, "Done", session_id=session)
+        assert result["status"] == "Done"
+        assert result["is_closed"] is True
+        # Confirm uses task_statuses, not userstory_statuses.
+        mock_client.list_resources.assert_called_once_with("task_statuses", project_id=1)
+
+
+class TestBreakDownStory:
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_empty_list_raises(self, session, mock_client):
+        with pytest.raises(ValueError, match="tasks list cannot be empty"):
+            wf.break_down_story("p", 42, [], session_id=session)
+
+    def test_bulk_path_when_story_in_sprint(self, session, mock_client):
+        """No overrides + story has milestone → bulk_create endpoint, one call."""
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 33,
+        }
+        mock_client.api.post.return_value = [
+            {"ref": 10, "subject": "design"},
+            {"ref": 11, "subject": "API"},
+            {"ref": 12, "subject": "tests"},
+        ]
+        result = wf.break_down_story("p", 42, ["design", "API", "tests"], session_id=session)
+        assert result["status"] == "decomposed"
+        assert result["tasks_created"] == 3
+        # Single bulk POST, zero individual tasks.create calls.
+        mock_client.api.post.assert_called_once()
+        args, kwargs = mock_client.api.post.call_args.args, mock_client.api.post.call_args.kwargs
+        assert args[0] == "/tasks/bulk_create"
+        assert kwargs["json"]["us_id"] == 50
+        assert kwargs["json"]["milestone_id"] == 33
+        assert kwargs["json"]["bulk_tasks"] == "design\nAPI\ntests"
+        mock_client.api.tasks.create.assert_not_called()
+
+    def test_loop_path_when_story_in_backlog(self, session, mock_client):
+        """No milestone on story → fall back to individual creates."""
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        mock_client.api.tasks.create.side_effect = [
+            {"ref": 10, "subject": "design"},
+            {"ref": 11, "subject": "API"},
+        ]
+        result = wf.break_down_story("p", 42, ["design", "API"], session_id=session)
+        assert result["tasks_created"] == 2
+        # No bulk endpoint, one create per task.
+        mock_client.api.post.assert_not_called()
+        assert mock_client.api.tasks.create.call_count == 2
+
+    def test_loop_path_when_per_task_overrides(self, session, mock_client):
+        """Per-task overrides force the loop path even with a milestone."""
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 33,
+        }
+        mock_client.list_resources.return_value = [
+            {
+                "user": 7,
+                "full_name": "Alice",
+                "email": "a@x",
+                "user_extra_info": {"username": "alice", "full_name_display": "Alice"},
+            }
+        ]
+        mock_client.api.tasks.create.side_effect = [
+            {"ref": 10, "subject": "design"},
+            {"ref": 11, "subject": "API"},
+        ]
+        result = wf.break_down_story(
+            "p",
+            42,
+            [
+                {"subject": "design"},
+                {"subject": "API", "assignee": "alice"},
+            ],
+            session_id=session,
+        )
+        assert result["tasks_created"] == 2
+        # Per-task override forced the loop, not the bulk endpoint.
+        mock_client.api.post.assert_not_called()
+        # Second call assigned to Alice.
+        assert mock_client.api.tasks.create.call_args_list[1].kwargs["data"]["assigned_to"] == 7
+
+    def test_rejects_malformed_entries(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        with pytest.raises(ValueError, match="must be a non-empty string or a dict"):
+            wf.break_down_story("p", 42, [{"no_subject": "oops"}], session_id=session)
+
+
+# ---------------------------------------------------------------------------
+# Regression: review round on PR #73
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTaskSprintInheritance:
+    """Regression: create_task must default the task's milestone to the parent's."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_inherits_parent_milestone_when_sprint_not_given(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        # Critical: task lands in the parent story's sprint by default.
+        assert data["milestone"] == 99
+
+    def test_no_milestone_when_parent_in_backlog(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert "milestone" not in data
+
+    def test_sprint_zero_opts_out_even_if_parent_in_sprint(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", sprint=0, session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert "milestone" not in data
+
+    def test_explicit_sprint_overrides_parent(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.list_resources.return_value = [{"id": 77, "name": "Sprint 6", "closed": False}]
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", sprint="Sprint 6", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["milestone"] == 77
+
+
+class TestBreakDownStoryOverrides:
+    """Regression: loop path must honor all documented override keys."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_loop_supports_tags_due_date_blocked(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.break_down_story(
+            "p",
+            42,
+            [
+                {
+                    "subject": "X",
+                    "tags": ["a", "b"],
+                    "due_date": "2026-06-30",
+                    "blocked": True,
+                }
+            ],
+            session_id=session,
+        )
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["tags"] == ["a", "b"]
+        assert data["due_date"] == "2026-06-30"
+        assert data["is_blocked"] is True
+
+    def test_rejects_unknown_override_key(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": None,
+        }
+        with pytest.raises(ValueError, match="Unknown per-task override keys"):
+            wf.break_down_story("p", 42, [{"subject": "X", "color": "red"}], session_id=session)
+        mock_client.api.tasks.create.assert_not_called()
+
+    def test_loop_path_inherits_parent_milestone(self, session, mock_client):
+        """Tasks created via loop path (overrides present) should still inherit milestone."""
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        # Override forces loop path; milestone should still come through.
+        wf.break_down_story(
+            "p", 42, [{"subject": "X", "due_date": "2026-06-30"}], session_id=session
+        )
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["milestone"] == 99
+
+
+# ---------------------------------------------------------------------------
+# Regression: round-2 review polish on PR #73
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTaskSprintOptOutString:
+    """The opt-out branch must accept both int 0 and string "0"."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_sprint_string_zero_opts_out(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 99,
+        }
+        mock_client.api.tasks.create.return_value = {"id": 1, "ref": 1, "subject": "X"}
+        wf.create_task("p", 42, "X", sprint="0", session_id=session)
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        # str "0" must opt out, NOT fall through to _resolve_sprint(..., "0")
+        # which would look up a non-existent milestone.
+        assert "milestone" not in data
+        mock_client.list_resources.assert_not_called()
+
+
+class TestBreakDownStoryBulkShapeWarn:
+    """Bulk endpoint returning a non-list should warn and coerce to []."""
+
+    def test_warns_and_coerces_on_dict_response(self, session, mock_client, caplog):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 42,
+            "milestone": 33,
+        }
+        # Simulate an unexpected response shape from /tasks/bulk_create.
+        mock_client.api.post.return_value = {"unexpected": "shape"}
+
+        with caplog.at_level("WARNING", logger="src.server_workflow"):
+            result = wf.break_down_story("p", 42, ["X", "Y"], session_id=session)
+
+        assert result["tasks_created"] == 0
+        assert result["tasks"] == []
+        assert any(
+            "Unexpected /tasks/bulk_create response shape" in rec.message for rec in caplog.records
+        )

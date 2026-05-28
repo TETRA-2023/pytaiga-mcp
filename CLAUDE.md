@@ -11,7 +11,7 @@ MCP (Model Context Protocol) server bridging AI assistants with the Taiga projec
 
 | Mode | Entry point | Tools | Use when |
 |---|---|---|---|
-| `workflow` (default) | `src/server_workflow.py` | ~23 intent tools | Everyday project management: sprint planning, backlog grooming, team workload |
+| `workflow` (default) | `src/server_workflow.py` | ~28 intent tools | Everyday project management: sprint planning, backlog grooming, team workload, task breakdown |
 | `full` | `src/server_full.py` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
 Select mode via `TAIGA_SERVER_MODE=workflow` (default) or `TAIGA_SERVER_MODE=full`.
@@ -20,7 +20,7 @@ Select mode via `TAIGA_SERVER_MODE=workflow` (default) or `TAIGA_SERVER_MODE=ful
 
 ```
 src/
-  server_workflow.py — Workflow/intent tools (~23, v2.0+)
+  server_workflow.py — Workflow/intent tools (~28, intent-based)
   server_full.py     — Full CRUD tools (107, all Taiga API endpoints)
   taiga_client.py    — TaigaClientWrapper: auth, raw API calls, pagination bypass
   config.py          — Pydantic settings (env vars, SecretStr credentials)

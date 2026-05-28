@@ -28,11 +28,11 @@ By using the MCP standard, this bridge allows AI systems to maintain contextual 
 
 ## Two server modes
 
-Starting with v2.0, this bridge ships two servers in a single image. Select one at runtime via the `TAIGA_SERVER_MODE` environment variable:
+The bridge ships two servers in a single image. Select one at runtime via the `TAIGA_SERVER_MODE` environment variable:
 
 | Mode | Tools | Best for |
 |---|---|---|
-| `workflow` (default) | ~23 intent tools | Product Owners and team members managing projects daily |
+| `workflow` (default) | ~28 intent tools | Product Owners and team members managing projects daily |
 | `full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
 **Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
@@ -51,7 +51,7 @@ TAIGA_SERVER_MODE=full ./run.sh
 
 ## Features
 
-### Workflow mode tools (~23)
+### Workflow mode tools (~28)
 
 Intent-based tools that resolve names and composite API calls:
 
@@ -60,8 +60,13 @@ Intent-based tools that resolve names and composite API calls:
 | `get_project_overview` | Project snapshot: team, active sprint, story counts by status |
 | `browse_backlog` | Filtered backlog view with name-based filters (status, assignee, epic) |
 | `create_story` | Create US with optional epic link, sprint, assignee — one call |
-| `update_story` | Update any US field by name (status, assignee, sprint) |
+| `update_story` | Update any US field by name (status, assignee, sprint, epic) |
+| `create_task` | Add a single task under a user story |
+| `update_task` | Update a task by ref (status, assignee, sprint, reparent to another story) |
+| `set_task_status` | Change task status by name |
+| `break_down_story` | Decompose a story into multiple tasks in one call (bulk-aware) |
 | `create_issue` | Create issue with smart defaults for type/priority/severity |
+| `update_issue` | Update any issue field by name |
 | `get_sprint_board` | Full sprint view: all stories + tasks, summary by status |
 | `plan_sprint` | Create sprint + assign stories in one step |
 | `move_to_sprint` | Move stories by ref to a named sprint |
