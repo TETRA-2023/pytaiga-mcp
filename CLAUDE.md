@@ -20,7 +20,7 @@ Select mode via `TAIGA_SERVER_MODE=workflow` (default) or `TAIGA_SERVER_MODE=ful
 
 ```
 src/
-  server_workflow.py — Workflow/intent tools (~23, v2.0+)
+  server_workflow.py — Workflow/intent tools (~27, intent-based)
   server_full.py     — Full CRUD tools (107, all Taiga API endpoints)
   taiga_client.py    — TaigaClientWrapper: auth, raw API calls, pagination bypass
   config.py          — Pydantic settings (env vars, SecretStr credentials)

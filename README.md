@@ -28,7 +28,7 @@ By using the MCP standard, this bridge allows AI systems to maintain contextual 
 
 ## Two server modes
 
-Starting with v2.0, this bridge ships two servers in a single image. Select one at runtime via the `TAIGA_SERVER_MODE` environment variable:
+The bridge ships two servers in a single image. Select one at runtime via the `TAIGA_SERVER_MODE` environment variable:
 
 | Mode | Tools | Best for |
 |---|---|---|
