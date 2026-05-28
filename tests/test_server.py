@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Import the server module instead of specific functions
-import src.server
+import src.server_full as src_server
 from src.taiga_client import TaigaClientWrapper
 
 # Test constants
@@ -24,71 +24,71 @@ class TestTaigaTools:
         session_id = str(uuid.uuid4())
         mock_client = MagicMock()
         mock_client.is_authenticated = True
-        src.server.active_sessions[session_id] = mock_client
+        src_server.active_sessions[session_id] = mock_client
         yield session_id, mock_client
-        src.server.active_sessions.pop(session_id, None)
+        src_server.active_sessions.pop(session_id, None)
 
     # ─── Authentication tests ─────────────────────────────────────────
 
     def test_login(self):
         """Test the login functionality"""
         with patch.object(TaigaClientWrapper, "login", return_value=True):
-            src.server.active_sessions.clear()
-            result = src.server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
+            src_server.active_sessions.clear()
+            result = src_server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
             assert "session_id" in result
-            assert result["session_id"] in src.server.active_sessions
-            src.server.active_sessions.clear()
+            assert result["session_id"] in src_server.active_sessions
+            src_server.active_sessions.clear()
 
     def test_login_missing_host(self):
         """Test login raises error when host is missing."""
-        with patch("src.server.settings") as mock_settings:
+        with patch("src.server_full.settings") as mock_settings:
             mock_settings.host = None
             mock_settings.get_username_value.return_value = TEST_USERNAME
             mock_settings.get_password_value.return_value = TEST_PASSWORD
             with pytest.raises(ValueError, match="Host URL required"):
-                src.server.login(None, TEST_USERNAME, TEST_PASSWORD)
+                src_server.login(None, TEST_USERNAME, TEST_PASSWORD)
 
     def test_login_missing_credentials(self):
         """Test login raises error when credentials are missing."""
-        with patch("src.server.settings") as mock_settings:
+        with patch("src.server_full.settings") as mock_settings:
             mock_settings.host = TEST_HOST
             mock_settings.get_username_value.return_value = None
             mock_settings.get_password_value.return_value = None
             with pytest.raises(ValueError, match="Credentials required"):
-                src.server.login(TEST_HOST, None, None)
+                src_server.login(TEST_HOST, None, None)
 
     def test_login_failure(self):
         """Test login raises error on authentication failure."""
         with patch.object(TaigaClientWrapper, "login", return_value=False):
             with pytest.raises(RuntimeError, match="unexpected server error occurred during login"):
-                src.server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
+                src_server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
 
     # ─── Session management tests ─────────────────────────────────────
 
     def test_get_default_session_available(self, session_setup):
         """Test get_default_session when default session exists."""
         session_id, mock_client = session_setup
-        src.server.active_sessions["default"] = mock_client
+        src_server.active_sessions["default"] = mock_client
         try:
-            result = src.server.get_default_session()
+            result = src_server.get_default_session()
             assert result["status"] == "active"
             assert result["session_id"] == "default"
             assert result["auto_authenticated"] is True
         finally:
-            src.server.active_sessions.pop("default", None)
+            src_server.active_sessions.pop("default", None)
 
     def test_get_default_session_unavailable(self):
         """Test get_default_session when no default session exists."""
-        src.server.active_sessions.pop("default", None)
-        result = src.server.get_default_session()
+        src_server.active_sessions.pop("default", None)
+        result = src_server.get_default_session()
         assert result["status"] == "unavailable"
 
     def test_logout(self, session_setup):
         """Test logout removes session."""
         session_id, mock_client = session_setup
-        result = src.server.logout(session_id)
+        result = src_server.logout(session_id)
         assert result["status"] == "logged_out"
-        assert session_id not in src.server.active_sessions
+        assert session_id not in src_server.active_sessions
 
     def test_logout_nonexistent_session(self):
         """Test logout with a non-existent session."""
@@ -96,18 +96,18 @@ class TestTaigaTools:
         # Need a default session or it will raise ValueError
         mock_client = MagicMock()
         mock_client.is_authenticated = True
-        src.server.active_sessions["default"] = mock_client
+        src_server.active_sessions["default"] = mock_client
         try:
-            result = src.server.logout(fake_id)
+            result = src_server.logout(fake_id)
             assert result["status"] == "session_not_found"
         finally:
-            src.server.active_sessions.pop("default", None)
+            src_server.active_sessions.pop("default", None)
 
     def test_session_status_active(self, session_setup):
         """Test session_status for an active session."""
         session_id, mock_client = session_setup
         mock_client.api.users.get_me.return_value = {"username": "test_user"}
-        result = src.server.session_status(session_id)
+        result = src_server.session_status(session_id)
         assert result["status"] == "active"
         assert result["username"] == "test_user"
 
@@ -116,44 +116,44 @@ class TestTaigaTools:
         fake_id = str(uuid.uuid4())
         mock_client = MagicMock()
         mock_client.is_authenticated = True
-        src.server.active_sessions["default"] = mock_client
+        src_server.active_sessions["default"] = mock_client
         try:
-            result = src.server.session_status(fake_id)
+            result = src_server.session_status(fake_id)
             assert result["status"] == "inactive"
             assert result["reason"] == "not_found"
         finally:
-            src.server.active_sessions.pop("default", None)
+            src_server.active_sessions.pop("default", None)
 
     # ─── Helper function tests ────────────────────────────────────────
 
     def test_get_session_id_with_explicit(self, session_setup):
         """Test _get_session_id returns explicit session_id."""
         session_id, _ = session_setup
-        assert src.server._get_session_id(session_id) == session_id
+        assert src_server._get_session_id(session_id) == session_id
 
     def test_get_session_id_default(self, session_setup):
         """Test _get_session_id returns default when available."""
         _, mock_client = session_setup
-        src.server.active_sessions["default"] = mock_client
+        src_server.active_sessions["default"] = mock_client
         try:
-            assert src.server._get_session_id(None) == "default"
+            assert src_server._get_session_id(None) == "default"
         finally:
-            src.server.active_sessions.pop("default", None)
+            src_server.active_sessions.pop("default", None)
 
     def test_get_session_id_raises_without_default(self):
         """Test _get_session_id raises ValueError when no default session."""
-        src.server.active_sessions.clear()
+        src_server.active_sessions.clear()
         with pytest.raises(ValueError, match="No session_id provided"):
-            src.server._get_session_id(None)
+            src_server._get_session_id(None)
 
     def test_get_authenticated_client_invalid(self):
         """Test _get_authenticated_client raises for invalid session."""
         with pytest.raises(PermissionError, match="Invalid or expired session"):
-            src.server._get_authenticated_client("nonexistent-session")
+            src_server._get_authenticated_client("nonexistent-session")
 
     def test_execute_taiga_operation_success(self):
         """Test _execute_taiga_operation returns result on success."""
-        result = src.server._execute_taiga_operation("test_op", lambda: {"ok": True})
+        result = src_server._execute_taiga_operation("test_op", lambda: {"ok": True})
         assert result == {"ok": True}
 
     def test_execute_taiga_operation_runtime_error(self):
@@ -163,7 +163,7 @@ class TestTaigaTools:
             raise Exception("something broke")
 
         with pytest.raises(RuntimeError, match="Server error in test_op"):
-            src.server._execute_taiga_operation("test_op", failing)
+            src_server._execute_taiga_operation("test_op", failing)
 
     # ─── TaigaAPIError repair tests (issue #57) ───────────────────────
 
@@ -190,7 +190,7 @@ class TestTaigaTools:
         )
         assert err.error_detail == "No error message provided by API."
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == "milestone_id: This field is required.; Must be int."
         assert str(err) == "API Error 400: milestone_id: This field is required.; Must be int."
@@ -199,7 +199,7 @@ class TestTaigaTools:
         """DRF-style {field: scalar} body should also be formatted, not stringified."""
         err = self._make_taiga_api_error(400, {"name": "already exists", "slug": "invalid"})
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert "name: already exists" in err.error_detail
         assert "slug: invalid" in err.error_detail
@@ -210,7 +210,7 @@ class TestTaigaTools:
         err = self._make_taiga_api_error(400, {"_error_message": "Legacy message"})
         assert err.error_detail == "Legacy message"
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == "Legacy message"
         assert str(err) == "API Error 400: Legacy message"
@@ -220,7 +220,7 @@ class TestTaigaTools:
         err = self._make_taiga_api_error(500, "Internal Server Error", json_decode_error=True)
         assert err.error_detail == "Internal Server Error"
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == "Internal Server Error"
 
@@ -228,7 +228,7 @@ class TestTaigaTools:
         """Empty {} body has no fields to extract — placeholder stays."""
         err = self._make_taiga_api_error(400, {})
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == "No error message provided by API."
 
@@ -238,7 +238,7 @@ class TestTaigaTools:
         assert err.error_detail == "No error message provided by API."
         err.response = None
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == "No error message provided by API."
 
@@ -248,7 +248,7 @@ class TestTaigaTools:
         assert err.error_detail == "No error message provided by API."
         err.response.json.side_effect = ValueError("boom")
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == "No error message provided by API."
 
@@ -256,7 +256,7 @@ class TestTaigaTools:
         """Nested non-scalar values are JSON-encoded, not Python-repr'd."""
         err = self._make_taiga_api_error(400, {"field": {"nested": "msg"}})
 
-        src.server._repair_taiga_api_error(err)
+        src_server._repair_taiga_api_error(err)
 
         assert err.error_detail == 'field: {"nested": "msg"}'
         assert str(err) == 'API Error 400: field: {"nested": "msg"}'
@@ -271,7 +271,7 @@ class TestTaigaTools:
             raise err
 
         with pytest.raises(TaigaAPIError) as excinfo:
-            src.server._execute_taiga_operation("test_op", failing)
+            src_server._execute_taiga_operation("test_op", failing)
 
         assert excinfo.value is err
         assert excinfo.value.error_detail == "milestone_id: This field is required."
@@ -281,43 +281,43 @@ class TestTaigaTools:
 
     def test_parse_mcp_kwargs_empty(self):
         """Test parsing empty kwargs."""
-        assert src.server._parse_mcp_kwargs({}) == {}
+        assert src_server._parse_mcp_kwargs({}) == {}
 
     def test_parse_mcp_kwargs_json_string(self):
         """Test parsing kwargs with JSON string."""
-        result = src.server._parse_mcp_kwargs({"kwargs": '{"name": "test"}'})
+        result = src_server._parse_mcp_kwargs({"kwargs": '{"name": "test"}'})
         assert result == {"name": "test"}
 
     def test_parse_mcp_kwargs_dict(self):
         """Test parsing kwargs with dict value."""
-        result = src.server._parse_mcp_kwargs({"kwargs": {"name": "test"}})
+        result = src_server._parse_mcp_kwargs({"kwargs": {"name": "test"}})
         assert result == {"name": "test"}
 
     def test_parse_mcp_kwargs_passthrough(self):
         """Test parsing kwargs with multiple keys passes through."""
         data = {"name": "test", "desc": "value"}
-        assert src.server._parse_mcp_kwargs(data) == data
+        assert src_server._parse_mcp_kwargs(data) == data
 
     def test_validate_kwargs_strips_unexpected(self):
         """Test _validate_kwargs strips unexpected fields."""
-        result = src.server._validate_kwargs("project", {"name": "test", "invalid_field": "value"})
+        result = src_server._validate_kwargs("project", {"name": "test", "invalid_field": "value"})
         assert result == {"name": "test"}
 
     def test_validate_kwargs_strict_raises(self):
         """Test _validate_kwargs raises in strict mode."""
         with pytest.raises(ValueError, match="Unexpected kwargs"):
-            src.server._validate_kwargs(
+            src_server._validate_kwargs(
                 "project", {"name": "test", "invalid_field": "value"}, strict=True
             )
 
     def test_validate_kwargs_empty(self):
         """Test _validate_kwargs with empty dict."""
-        assert src.server._validate_kwargs("project", {}) == {}
+        assert src_server._validate_kwargs("project", {}) == {}
 
     def test_validate_kwargs_unknown_resource(self):
         """Test _validate_kwargs with unknown resource type passes through."""
         data = {"any": "field"}
-        assert src.server._validate_kwargs("unknown_type", data) == data
+        assert src_server._validate_kwargs("unknown_type", data) == data
 
     # ─── Project tools tests ─────────────────────────────────────────
 
@@ -325,7 +325,7 @@ class TestTaigaTools:
         """Test list_projects functionality"""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 123, "name": "Test Project"}]
-        projects = src.server.list_projects(session_id)
+        projects = src_server.list_projects(session_id)
         assert len(projects) == 1
         assert projects[0]["name"] == "Test Project"
         assert projects[0]["id"] == 123
@@ -335,7 +335,7 @@ class TestTaigaTools:
         """Test list_all_projects delegates to list_projects."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 1, "name": "P1"}]
-        projects = src.server.list_all_projects(session_id)
+        projects = src_server.list_all_projects(session_id)
         assert len(projects) == 1
 
     def test_get_project(self, session_setup):
@@ -347,7 +347,7 @@ class TestTaigaTools:
             "slug": "test",
             "version": 1,
         }
-        result = src.server.get_project(123, session_id)
+        result = src_server.get_project(123, session_id)
         assert result["id"] == 123
         mock_client.api.projects.get.assert_called_once_with(123)
 
@@ -360,7 +360,7 @@ class TestTaigaTools:
             "slug": "test-slug",
             "version": 1,
         }
-        result = src.server.get_project_by_slug("test-slug", session_id)
+        result = src_server.get_project_by_slug("test-slug", session_id)
         assert result["slug"] == "test-slug"
         mock_client.api.projects.get_by_slug.assert_called_once_with(slug="test-slug")
 
@@ -373,7 +373,7 @@ class TestTaigaTools:
             "slug": "new-project",
             "version": 1,
         }
-        result = src.server.create_project("New Project", "A description", "{}", session_id)
+        result = src_server.create_project("New Project", "A description", "{}", session_id)
         assert result["id"] == 456
         assert result["name"] == "New Project"
         mock_client.api.projects.create.assert_called_once_with(
@@ -389,7 +389,7 @@ class TestTaigaTools:
             "is_private": True,
             "version": 1,
         }
-        result = src.server.create_project(
+        result = src_server.create_project(
             "Private Project", "Desc", '{"is_private": true}', session_id
         )
         assert result["id"] == 456
@@ -401,14 +401,14 @@ class TestTaigaTools:
         """Test create_project raises error for empty name."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Project name and description are required"):
-            src.server.create_project("", "desc", "{}", session_id)
+            src_server.create_project("", "desc", "{}", session_id)
 
     def test_update_project(self, session_setup):
         """Test update_project functionality with version."""
         session_id, mock_client = session_setup
         mock_client.api.projects.get.return_value = {"id": 123, "name": "Old Name", "version": 1}
         mock_client.api.projects.edit.return_value = {"id": 123, "name": "New Name", "version": 2}
-        result = src.server.update_project(123, '{"name": "New Name"}', session_id)
+        result = src_server.update_project(123, '{"name": "New Name"}', session_id)
         mock_client.api.projects.edit.assert_called_once_with(
             project_id=123, version=1, name="New Name"
         )
@@ -419,7 +419,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.projects.get.return_value = {"id": 123, "name": "Old Name"}
         mock_client.api.projects.edit.return_value = {"id": 123, "name": "New Name"}
-        result = src.server.update_project(123, '{"name": "New Name"}', session_id)
+        result = src_server.update_project(123, '{"name": "New Name"}', session_id)
         mock_client.api.projects.edit.assert_called_once_with(
             project_id=123, version=None, name="New Name"
         )
@@ -429,7 +429,7 @@ class TestTaigaTools:
         """Test update_project with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_project(123, "{}", session_id)
+            src_server.update_project(123, "{}", session_id)
         mock_client.api.projects.get.assert_not_called()
         mock_client.api.projects.update.assert_not_called()
 
@@ -437,7 +437,7 @@ class TestTaigaTools:
         """Test delete_project."""
         session_id, mock_client = session_setup
         mock_client.api.projects.delete.return_value = None
-        result = src.server.delete_project(123, session_id)
+        result = src_server.delete_project(123, session_id)
         assert result["status"] == "deleted"
         assert result["project_id"] == 123
         mock_client.api.projects.delete.assert_called_once_with(project_id=123)
@@ -449,7 +449,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = {"bug": "#FF0000", "feature": "#00FF00"}
 
-        result = src.server.get_project_tags_colors(21, session_id)
+        result = src_server.get_project_tags_colors(21, session_id)
 
         mock_client.api.get.assert_called_once_with("/projects/21/tags_colors")
         assert result == {"bug": "#FF0000", "feature": "#00FF00"}
@@ -459,7 +459,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.edit_project_tag(
+        result = src_server.edit_project_tag(
             21, "old-name", new_tag="new-name", session_id=session_id
         )
 
@@ -474,7 +474,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.edit_project_tag(21, "bug", color="#FF0000", session_id=session_id)
+        result = src_server.edit_project_tag(21, "bug", color="#FF0000", session_id=session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/projects/21/edit_tag", json={"tag": "bug", "color": "#FF0000"}
@@ -486,14 +486,14 @@ class TestTaigaTools:
         """Test edit_project_tag raises ValueError for empty tag name."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Tag name cannot be empty"):
-            src.server.edit_project_tag(21, "", color="#FF0000", session_id=session_id)
+            src_server.edit_project_tag(21, "", color="#FF0000", session_id=session_id)
 
     def test_edit_project_tag_rename_and_recolor(self, session_setup):
         """Test edit_project_tag with both color and new_tag."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.edit_project_tag(
+        result = src_server.edit_project_tag(
             21, "bug", color="#0000FF", new_tag="defect", session_id=session_id
         )
 
@@ -509,14 +509,14 @@ class TestTaigaTools:
         """Test edit_project_tag raises ValueError when neither color nor new_tag provided."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="At least one of"):
-            src.server.edit_project_tag(21, "bug", session_id=session_id)
+            src_server.edit_project_tag(21, "bug", session_id=session_id)
 
     def test_mix_project_tags(self, session_setup):
         """Test mix_project_tags merges tags."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.mix_project_tags(21, ["bug", "defect"], "bug", session_id)
+        result = src_server.mix_project_tags(21, ["bug", "defect"], "bug", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/projects/21/mix_tags", json={"from_tags": ["bug", "defect"], "to_tag": "bug"}
@@ -529,20 +529,20 @@ class TestTaigaTools:
         """Test mix_project_tags raises ValueError for empty target tag."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Target tag name"):
-            src.server.mix_project_tags(21, ["bug"], "", session_id)
+            src_server.mix_project_tags(21, ["bug"], "", session_id)
 
     def test_mix_project_tags_empty_from_tags_raises(self, session_setup):
         """Test mix_project_tags raises ValueError for empty from_tags list."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="from_tags"):
-            src.server.mix_project_tags(21, [], "bug", session_id)
+            src_server.mix_project_tags(21, [], "bug", session_id)
 
     def test_mix_project_tags_strips_whitespace(self, session_setup):
         """Test mix_project_tags strips whitespace from tag names."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        src.server.mix_project_tags(21, ["  bug  ", "defect", "  "], "  merged  ", session_id)
+        src_server.mix_project_tags(21, ["  bug  ", "defect", "  "], "  merged  ", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/projects/21/mix_tags", json={"from_tags": ["bug", "defect"], "to_tag": "merged"}
@@ -554,7 +554,7 @@ class TestTaigaTools:
         """Test list_user_stories functionality"""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 456, "subject": "Test User Story"}]
-        stories = src.server.list_user_stories(123, "{}", session_id)
+        stories = src_server.list_user_stories(123, "{}", session_id)
         assert len(stories) == 1
         assert stories[0]["subject"] == "Test User Story"
         mock_client.list_resources.assert_called_once_with("user_stories", project_id=123)
@@ -563,14 +563,14 @@ class TestTaigaTools:
         """Test list_user_stories with filters."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 1, "subject": "Filtered"}]
-        src.server.list_user_stories(123, '{"status": 1}', session_id)
+        src_server.list_user_stories(123, '{"status": 1}', session_id)
         mock_client.list_resources.assert_called_once_with("user_stories", project_id=123, status=1)
 
     def test_create_user_story(self, session_setup):
         """Test create_user_story functionality"""
         session_id, mock_client = session_setup
         mock_client.api.user_stories.create.return_value = {"id": 456, "subject": "New Story"}
-        story = src.server.create_user_story(
+        story = src_server.create_user_story(
             123, "New Story", '{"description": "Test description"}', session_id
         )
         assert story["subject"] == "New Story"
@@ -583,7 +583,7 @@ class TestTaigaTools:
         """Test create_user_story raises for empty subject."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="User story subject cannot be empty"):
-            src.server.create_user_story(123, "", "{}", session_id)
+            src_server.create_user_story(123, "", "{}", session_id)
 
     def test_get_user_story(self, session_setup):
         """Test get_user_story returns story by ID."""
@@ -596,7 +596,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_user_story(456, session_id)
+        result = src_server.get_user_story(456, session_id)
         assert result["id"] == 456
         mock_client.api.user_stories.get.assert_called_once_with(456)
 
@@ -611,7 +611,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_user_story_by_ref(123, 1, session_id)
+        result = src_server.get_user_story_by_ref(123, 1, session_id)
         assert result["id"] == 456
         assert result["ref"] == 1
         mock_client.api.user_stories.get_by_ref.assert_called_once_with(ref=1, project=123)
@@ -621,7 +621,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.user_stories.get_by_ref.return_value = None
         with pytest.raises(ValueError, match="not found"):
-            src.server.get_user_story_by_ref(123, 999, session_id)
+            src_server.get_user_story_by_ref(123, 999, session_id)
 
     def test_update_user_story(self, session_setup):
         """Test update_user_story."""
@@ -636,7 +636,7 @@ class TestTaigaTools:
             "description": "New desc",
             "version": 2,
         }
-        result = src.server.update_user_story(456, '{"description": "New desc"}', session_id)
+        result = src_server.update_user_story(456, '{"description": "New desc"}', session_id)
         assert result["description"] == "New desc"
         mock_client.api.user_stories.edit.assert_called_once_with(
             user_story_id=456, version=1, description="New desc"
@@ -646,7 +646,7 @@ class TestTaigaTools:
         """Test update_user_story with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_user_story(456, "{}", session_id)
+            src_server.update_user_story(456, "{}", session_id)
         mock_client.api.user_stories.get.assert_not_called()
         mock_client.api.user_stories.edit.assert_not_called()
 
@@ -654,7 +654,7 @@ class TestTaigaTools:
         """Test delete_user_story."""
         session_id, mock_client = session_setup
         mock_client.api.user_stories.delete.return_value = None
-        result = src.server.delete_user_story(456, session_id)
+        result = src_server.delete_user_story(456, session_id)
         assert result["status"] == "deleted"
         assert result["user_story_id"] == 456
 
@@ -671,7 +671,7 @@ class TestTaigaTools:
             "assigned_to": 10,
             "version": 2,
         }
-        src.server.assign_user_story_to_user(456, 10, session_id)
+        src_server.assign_user_story_to_user(456, 10, session_id)
         mock_client.api.user_stories.edit.assert_called_once_with(
             user_story_id=456, version=1, assigned_to=10
         )
@@ -685,7 +685,7 @@ class TestTaigaTools:
             "assigned_to": None,
             "version": 2,
         }
-        src.server.unassign_user_story_from_user(456, session_id)
+        src_server.unassign_user_story_from_user(456, session_id)
         mock_client.api.user_stories.edit.assert_called_once_with(
             user_story_id=456, version=1, assigned_to=None
         )
@@ -697,7 +697,7 @@ class TestTaigaTools:
             {"id": 1, "name": "New"},
             {"id": 2, "name": "In Progress"},
         ]
-        result = src.server.get_user_story_statuses(123, session_id)
+        result = src_server.get_user_story_statuses(123, session_id)
         assert len(result) == 2
         mock_client.list_resources.assert_called_once_with("userstory_statuses", project_id=123)
 
@@ -707,7 +707,7 @@ class TestTaigaTools:
         """Test list_tasks functionality"""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 789, "subject": "Test Task"}]
-        tasks = src.server.list_tasks(123, "{}", session_id)
+        tasks = src_server.list_tasks(123, "{}", session_id)
         assert len(tasks) == 1
         assert tasks[0]["subject"] == "Test Task"
         mock_client.list_resources.assert_called_once_with("tasks", project_id=123)
@@ -716,7 +716,7 @@ class TestTaigaTools:
         """Test list_tasks with filters."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 1, "subject": "Filtered"}]
-        src.server.list_tasks(123, '{"milestone": 5}', session_id)
+        src_server.list_tasks(123, '{"milestone": 5}', session_id)
         mock_client.list_resources.assert_called_once_with("tasks", project_id=123, milestone=5)
 
     def test_create_task(self, session_setup):
@@ -727,7 +727,7 @@ class TestTaigaTools:
             "subject": "New Task",
             "project": 123,
         }
-        result = src.server.create_task(123, "New Task", "{}", session_id)
+        result = src_server.create_task(123, "New Task", "{}", session_id)
         assert result["id"] == 789
         assert result["subject"] == "New Task"
         mock_client.api.tasks.create.assert_called_once_with(
@@ -738,7 +738,7 @@ class TestTaigaTools:
         """Test create_task with extra kwargs."""
         session_id, mock_client = session_setup
         mock_client.api.tasks.create.return_value = {"id": 789, "subject": "Task"}
-        src.server.create_task(123, "Task", '{"description": "Some desc"}', session_id)
+        src_server.create_task(123, "Task", '{"description": "Some desc"}', session_id)
         mock_client.api.tasks.create.assert_called_once_with(
             project=123, subject="Task", data={"description": "Some desc"}
         )
@@ -747,7 +747,7 @@ class TestTaigaTools:
         """Test create_task raises for empty subject."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Task subject cannot be empty"):
-            src.server.create_task(123, "", "{}", session_id)
+            src_server.create_task(123, "", "{}", session_id)
 
     def test_get_task(self, session_setup):
         """Test get_task returns task by ID."""
@@ -760,7 +760,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_task(789, session_id)
+        result = src_server.get_task(789, session_id)
         assert result["id"] == 789
         mock_client.api.tasks.get.assert_called_once_with(789)
 
@@ -775,7 +775,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_task_by_ref(123, 5, session_id)
+        result = src_server.get_task_by_ref(123, 5, session_id)
         assert result["id"] == 789
         assert result["ref"] == 5
         mock_client.api.get.assert_called_once_with(
@@ -787,14 +787,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = None
         with pytest.raises(ValueError, match="not found"):
-            src.server.get_task_by_ref(123, 999, session_id)
+            src_server.get_task_by_ref(123, 999, session_id)
 
     def test_update_task(self, session_setup):
         """Test update_task."""
         session_id, mock_client = session_setup
         mock_client.api.tasks.get.return_value = {"id": 789, "description": "Old", "version": 1}
         mock_client.api.tasks.edit.return_value = {"id": 789, "description": "New", "version": 2}
-        result = src.server.update_task(789, '{"description": "New"}', session_id)
+        result = src_server.update_task(789, '{"description": "New"}', session_id)
         assert result["description"] == "New"
         mock_client.api.tasks.edit.assert_called_once_with(
             task_id=789, version=1, data={"description": "New"}
@@ -804,7 +804,7 @@ class TestTaigaTools:
         """Test update_task with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_task(789, "{}", session_id)
+            src_server.update_task(789, "{}", session_id)
         mock_client.api.tasks.get.assert_not_called()
         mock_client.api.tasks.edit.assert_not_called()
 
@@ -813,14 +813,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.tasks.get.return_value = {"id": 789, "subject": "x"}
         with pytest.raises(ValueError, match="Could not determine version"):
-            src.server.update_task(789, '{"subject": "new"}', session_id)
+            src_server.update_task(789, '{"subject": "new"}', session_id)
         mock_client.api.tasks.edit.assert_not_called()
 
     def test_delete_task(self, session_setup):
         """Test delete_task."""
         session_id, mock_client = session_setup
         mock_client.api.tasks.delete.return_value = None
-        result = src.server.delete_task(789, session_id)
+        result = src_server.delete_task(789, session_id)
         assert result["status"] == "deleted"
         assert result["task_id"] == 789
 
@@ -829,7 +829,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.tasks.get.return_value = {"id": 789, "version": 1}
         mock_client.api.tasks.edit.return_value = {"id": 789, "assigned_to": 10, "version": 2}
-        src.server.assign_task_to_user(789, 10, session_id)
+        src_server.assign_task_to_user(789, 10, session_id)
         mock_client.api.tasks.edit.assert_called_once_with(
             task_id=789, version=1, data={"assigned_to": 10}
         )
@@ -839,7 +839,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.tasks.get.return_value = {"id": 789, "version": 1}
         mock_client.api.tasks.edit.return_value = {"id": 789, "assigned_to": None, "version": 2}
-        src.server.unassign_task_from_user(789, session_id)
+        src_server.unassign_task_from_user(789, session_id)
         mock_client.api.tasks.edit.assert_called_once_with(
             task_id=789, version=1, data={"assigned_to": None}
         )
@@ -850,7 +850,7 @@ class TestTaigaTools:
         """Test list_issues."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 100, "subject": "Bug"}]
-        result = src.server.list_issues(123, "{}", session_id)
+        result = src_server.list_issues(123, "{}", session_id)
         assert len(result) == 1
         assert result[0]["subject"] == "Bug"
         mock_client.list_resources.assert_called_once_with("issues", project_id=123)
@@ -859,7 +859,7 @@ class TestTaigaTools:
         """Test list_issues with filters."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = []
-        src.server.list_issues(123, '{"priority": 3}', session_id)
+        src_server.list_issues(123, '{"priority": 3}', session_id)
         mock_client.list_resources.assert_called_once_with("issues", project_id=123, priority=3)
 
     def test_create_issue(self, session_setup):
@@ -870,7 +870,7 @@ class TestTaigaTools:
             "subject": "New Bug",
             "project": 123,
         }
-        result = src.server.create_issue(
+        result = src_server.create_issue(
             project_id=123,
             subject="New Bug",
             priority_id=1,
@@ -892,7 +892,7 @@ class TestTaigaTools:
         """Test create_issue raises for empty subject."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Issue subject cannot be empty"):
-            src.server.create_issue(123, "", 1, 1, 1, 1, "{}", session_id)
+            src_server.create_issue(123, "", 1, 1, 1, 1, "{}", session_id)
 
     def test_get_issue(self, session_setup):
         """Test get_issue returns issue by ID."""
@@ -907,7 +907,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_issue(100, session_id)
+        result = src_server.get_issue(100, session_id)
         assert result["id"] == 100
         mock_client.api.issues.get.assert_called_once_with(100)
 
@@ -924,7 +924,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_issue_by_ref(123, 10, session_id)
+        result = src_server.get_issue_by_ref(123, 10, session_id)
         assert result["id"] == 100
         assert result["ref"] == 10
         mock_client.api.issues.get_by_ref.assert_called_once_with(ref=10, project=123)
@@ -934,14 +934,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.issues.get_by_ref.return_value = {}
         with pytest.raises(ValueError, match="not found"):
-            src.server.get_issue_by_ref(123, 999, session_id)
+            src_server.get_issue_by_ref(123, 999, session_id)
 
     def test_update_issue(self, session_setup):
         """Test update_issue."""
         session_id, mock_client = session_setup
         mock_client.api.issues.get.return_value = {"id": 100, "description": "Old", "version": 1}
         mock_client.api.issues.edit.return_value = {"id": 100, "description": "New", "version": 2}
-        result = src.server.update_issue(100, '{"description": "New"}', session_id)
+        result = src_server.update_issue(100, '{"description": "New"}', session_id)
         assert result["description"] == "New"
         mock_client.api.issues.edit.assert_called_once_with(
             issue_id=100, version=1, data={"description": "New"}
@@ -951,7 +951,7 @@ class TestTaigaTools:
         """Test update_issue with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_issue(100, "{}", session_id)
+            src_server.update_issue(100, "{}", session_id)
         mock_client.api.issues.get.assert_not_called()
         mock_client.api.issues.edit.assert_not_called()
 
@@ -960,14 +960,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.issues.get.return_value = {"id": 100, "subject": "x"}
         with pytest.raises(ValueError, match="Could not determine version"):
-            src.server.update_issue(100, '{"subject": "new"}', session_id)
+            src_server.update_issue(100, '{"subject": "new"}', session_id)
         mock_client.api.issues.edit.assert_not_called()
 
     def test_delete_issue(self, session_setup):
         """Test delete_issue."""
         session_id, mock_client = session_setup
         mock_client.api.issues.delete.return_value = None
-        result = src.server.delete_issue(100, session_id)
+        result = src_server.delete_issue(100, session_id)
         assert result["status"] == "deleted"
         assert result["issue_id"] == 100
 
@@ -976,7 +976,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.issues.get.return_value = {"id": 100, "version": 1}
         mock_client.api.issues.edit.return_value = {"id": 100, "assigned_to": 10, "version": 2}
-        src.server.assign_issue_to_user(100, 10, session_id)
+        src_server.assign_issue_to_user(100, 10, session_id)
         mock_client.api.issues.edit.assert_called_once_with(
             issue_id=100, version=1, data={"assigned_to": 10}
         )
@@ -986,7 +986,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.issues.get.return_value = {"id": 100, "version": 1}
         mock_client.api.issues.edit.return_value = {"id": 100, "assigned_to": None, "version": 2}
-        src.server.unassign_issue_from_user(100, session_id)
+        src_server.unassign_issue_from_user(100, session_id)
         mock_client.api.issues.edit.assert_called_once_with(
             issue_id=100, version=1, data={"assigned_to": None}
         )
@@ -998,7 +998,7 @@ class TestTaigaTools:
             {"id": 1, "name": "New"},
             {"id": 2, "name": "Closed"},
         ]
-        result = src.server.get_issue_statuses(123, session_id)
+        result = src_server.get_issue_statuses(123, session_id)
         assert len(result) == 2
         mock_client.list_resources.assert_called_once_with("issue_statuses", project_id=123)
 
@@ -1010,7 +1010,7 @@ class TestTaigaTools:
             {"id": 2, "name": "Normal"},
             {"id": 3, "name": "High"},
         ]
-        result = src.server.get_issue_priorities(123, session_id)
+        result = src_server.get_issue_priorities(123, session_id)
         assert len(result) == 3
         assert result[0]["name"] == "Low"
         mock_client.list_resources.assert_called_once_with("priorities", project_id=123)
@@ -1023,7 +1023,7 @@ class TestTaigaTools:
             {"id": 2, "name": "Minor"},
             {"id": 3, "name": "Normal"},
         ]
-        result = src.server.get_issue_severities(123, session_id)
+        result = src_server.get_issue_severities(123, session_id)
         assert len(result) == 3
         assert result[0]["name"] == "Wishlist"
         mock_client.list_resources.assert_called_once_with("severities", project_id=123)
@@ -1035,7 +1035,7 @@ class TestTaigaTools:
             {"id": 1, "name": "Bug"},
             {"id": 2, "name": "Enhancement"},
         ]
-        result = src.server.get_issue_types(123, session_id)
+        result = src_server.get_issue_types(123, session_id)
         assert len(result) == 2
         mock_client.list_resources.assert_called_once_with("issue_types", project_id=123)
 
@@ -1045,7 +1045,7 @@ class TestTaigaTools:
         """Test create_project_config for issue_status."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 10, "name": "In Review"}
-        result = src.server.create_project_config(
+        result = src_server.create_project_config(
             21, "issue_status", "In Review", session_id=session_id
         )
         mock_client.api.post.assert_called_once_with(
@@ -1058,7 +1058,7 @@ class TestTaigaTools:
         """Test create_project_config with all optional fields."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 11}
-        src.server.create_project_config(
+        src_server.create_project_config(
             21,
             "task_status",
             "Done",
@@ -1077,7 +1077,7 @@ class TestTaigaTools:
         """Test create_project_config for priority."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 12}
-        src.server.create_project_config(21, "priority", "Urgent", session_id=session_id)
+        src_server.create_project_config(21, "priority", "Urgent", session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/priorities",
             json={"project": 21, "name": "Urgent", "color": "#999999"},
@@ -1087,7 +1087,7 @@ class TestTaigaTools:
         """Test create_project_config for severity."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 13}
-        src.server.create_project_config(21, "severity", "Critical", session_id=session_id)
+        src_server.create_project_config(21, "severity", "Critical", session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/severities",
             json={"project": 21, "name": "Critical", "color": "#999999"},
@@ -1097,7 +1097,7 @@ class TestTaigaTools:
         """Test create_project_config for issue_type."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 14}
-        src.server.create_project_config(21, "issue_type", "Security", session_id=session_id)
+        src_server.create_project_config(21, "issue_type", "Security", session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/issue-types",
             json={"project": 21, "name": "Security", "color": "#999999"},
@@ -1107,7 +1107,7 @@ class TestTaigaTools:
         """Test create_project_config for epic_status."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 15}
-        src.server.create_project_config(21, "epic_status", "Backlog", session_id=session_id)
+        src_server.create_project_config(21, "epic_status", "Backlog", session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/epic-statuses",
             json={"project": 21, "name": "Backlog", "color": "#999999"},
@@ -1116,25 +1116,25 @@ class TestTaigaTools:
     def test_create_project_config_empty_name_raises(self):
         """Test create_project_config raises on empty name."""
         with pytest.raises(ValueError, match="Name cannot be empty"):
-            src.server.create_project_config(21, "issue_status", "  ")
+            src_server.create_project_config(21, "issue_status", "  ")
 
     def test_create_project_config_invalid_type_raises(self):
         """Test create_project_config raises on invalid config_type."""
         with pytest.raises(ValueError, match="Invalid config_type"):
-            src.server.create_project_config(21, "bogus", "Name")
+            src_server.create_project_config(21, "bogus", "Name")
 
     def test_create_project_config_user_story_status_alias(self, session_setup):
         """Test user_story_status alias maps to userstory-statuses."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 16}
-        src.server.create_project_config(21, "user_story_status", "New", session_id=session_id)
+        src_server.create_project_config(21, "user_story_status", "New", session_id=session_id)
         assert mock_client.api.post.call_args[0][0] == "/userstory-statuses"
 
     def test_update_project_config(self, session_setup):
         """Test update_project_config calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 10, "name": "Reviewed"}
-        result = src.server.update_project_config(
+        result = src_server.update_project_config(
             10, "issue_status", name="Reviewed", session_id=session_id
         )
         mock_client.api.patch.assert_called_once_with(
@@ -1146,7 +1146,7 @@ class TestTaigaTools:
         """Test update_project_config with multiple fields."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 10}
-        src.server.update_project_config(
+        src_server.update_project_config(
             10, "priority", name="Critical", color="#FF0000", order=1, session_id=session_id
         )
         call_json = mock_client.api.patch.call_args[1]["json"]
@@ -1157,23 +1157,23 @@ class TestTaigaTools:
     def test_update_project_config_empty_name_raises(self):
         """Test update_project_config raises on empty name."""
         with pytest.raises(ValueError, match="Name cannot be empty"):
-            src.server.update_project_config(10, "issue_status", name="  ")
+            src_server.update_project_config(10, "issue_status", name="  ")
 
     def test_update_project_config_no_fields_raises(self):
         """Test update_project_config raises when no fields provided."""
         with pytest.raises(ValueError, match="At least one field"):
-            src.server.update_project_config(10, "issue_status")
+            src_server.update_project_config(10, "issue_status")
 
     def test_update_project_config_invalid_type_raises(self):
         """Test update_project_config raises on invalid config_type."""
         with pytest.raises(ValueError, match="Invalid config_type"):
-            src.server.update_project_config(10, "bogus", name="X")
+            src_server.update_project_config(10, "bogus", name="X")
 
     def test_delete_project_config(self, session_setup):
         """Test delete_project_config calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
-        result = src.server.delete_project_config(10, "severity", session_id=session_id)
+        result = src_server.delete_project_config(10, "severity", session_id=session_id)
         mock_client.api.delete.assert_called_once_with("/severities/10")
         assert result["status"] == "deleted"
         assert result["item_id"] == 10
@@ -1181,13 +1181,13 @@ class TestTaigaTools:
     def test_delete_project_config_invalid_type_raises(self):
         """Test delete_project_config raises on invalid config_type."""
         with pytest.raises(ValueError, match="Invalid config_type"):
-            src.server.delete_project_config(10, "bogus")
+            src_server.delete_project_config(10, "bogus")
 
     def test_bulk_update_order_project_config(self, session_setup):
         """Test bulk_update_order_project_config calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
-        result = src.server.bulk_update_order_project_config(
+        result = src_server.bulk_update_order_project_config(
             21, "issue_status", [[1, 1], [2, 2], [3, 3]], session_id=session_id
         )
         mock_client.api.post.assert_called_once_with(
@@ -1200,17 +1200,17 @@ class TestTaigaTools:
     def test_bulk_update_order_project_config_empty_raises(self):
         """Test bulk_update_order_project_config raises on empty list."""
         with pytest.raises(ValueError, match="bulk_orders cannot be empty"):
-            src.server.bulk_update_order_project_config(21, "priority", [])
+            src_server.bulk_update_order_project_config(21, "priority", [])
 
     def test_bulk_update_order_project_config_invalid_pair_raises(self):
         """Test bulk_update_order_project_config raises on malformed pair."""
         with pytest.raises(ValueError, match="must be a \\[id, order\\] pair"):
-            src.server.bulk_update_order_project_config(21, "priority", [[1]])
+            src_server.bulk_update_order_project_config(21, "priority", [[1]])
 
     def test_bulk_update_order_project_config_invalid_type_raises(self):
         """Test bulk_update_order_project_config raises on invalid config_type."""
         with pytest.raises(ValueError, match="Invalid config_type"):
-            src.server.bulk_update_order_project_config(21, "bogus", [[1, 1]])
+            src_server.bulk_update_order_project_config(21, "bogus", [[1, 1]])
 
     # ─── Story Points tools tests ─────────────────────────────────────
 
@@ -1222,7 +1222,7 @@ class TestTaigaTools:
             {"id": 2, "name": "3", "value": 3.0},
         ]
 
-        result = src.server.list_points(21, session_id)
+        result = src_server.list_points(21, session_id)
 
         assert len(result) == 2
         mock_client.list_resources.assert_called_once_with("points", project_id=21)
@@ -1232,7 +1232,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 10, "name": "5", "value": 5.0}
 
-        result = src.server.create_point(21, "5", value=5.0, session_id=session_id)
+        result = src_server.create_point(21, "5", value=5.0, session_id=session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/points", json={"project": 21, "name": "5", "value": 5.0}
@@ -1244,7 +1244,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 11, "name": "?"}
 
-        src.server.create_point(21, "?", session_id=session_id)
+        src_server.create_point(21, "?", session_id=session_id)
 
         mock_client.api.post.assert_called_once_with("/points", json={"project": 21, "name": "?"})
 
@@ -1252,14 +1252,14 @@ class TestTaigaTools:
         """Test create_point raises ValueError for empty name."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Point name cannot be empty"):
-            src.server.create_point(21, "", session_id=session_id)
+            src_server.create_point(21, "", session_id=session_id)
 
     def test_update_point(self, session_setup):
         """Test update_point updates a point value."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 10, "name": "8", "value": 8.0}
 
-        result = src.server.update_point(10, name="8", value=8.0, session_id=session_id)
+        result = src_server.update_point(10, name="8", value=8.0, session_id=session_id)
 
         mock_client.api.patch.assert_called_once_with(
             "/points/10", json={"name": "8", "value": 8.0}
@@ -1270,20 +1270,20 @@ class TestTaigaTools:
         """Test update_point raises ValueError when no fields provided."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="At least one of"):
-            src.server.update_point(10, session_id=session_id)
+            src_server.update_point(10, session_id=session_id)
 
     def test_update_point_empty_name_raises(self, session_setup):
         """Test update_point raises ValueError for empty name."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Point name cannot be empty"):
-            src.server.update_point(10, name="  ", session_id=session_id)
+            src_server.update_point(10, name="  ", session_id=session_id)
 
     def test_delete_point(self, session_setup):
         """Test delete_point deletes a point value."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
 
-        result = src.server.delete_point(10, session_id)
+        result = src_server.delete_point(10, session_id)
 
         mock_client.api.delete.assert_called_once_with("/points/10")
         assert result["status"] == "deleted"
@@ -1295,7 +1295,7 @@ class TestTaigaTools:
         """Test list_custom_attributes calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = [{"id": 1, "name": "Patent Number"}]
-        result = src.server.list_custom_attributes(21, "user_story", session_id=session_id)
+        result = src_server.list_custom_attributes(21, "user_story", session_id=session_id)
         mock_client.api.get.assert_called_once_with(
             "/userstory-custom-attributes", params={"project": 21}
         )
@@ -1305,7 +1305,7 @@ class TestTaigaTools:
         """Test list_custom_attributes for issues."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
-        src.server.list_custom_attributes(21, "issue", session_id=session_id)
+        src_server.list_custom_attributes(21, "issue", session_id=session_id)
         mock_client.api.get.assert_called_once_with(
             "/issue-custom-attributes", params={"project": 21}
         )
@@ -1313,13 +1313,13 @@ class TestTaigaTools:
     def test_list_custom_attributes_invalid_type_raises(self):
         """Test list_custom_attributes raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.list_custom_attributes(21, "invalid")
+            src_server.list_custom_attributes(21, "invalid")
 
     def test_create_custom_attribute(self, session_setup):
         """Test create_custom_attribute calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 1, "name": "Patent Number", "type": "text"}
-        result = src.server.create_custom_attribute(
+        result = src_server.create_custom_attribute(
             21, "task", "Patent Number", session_id=session_id
         )
         mock_client.api.post.assert_called_once_with(
@@ -1332,7 +1332,7 @@ class TestTaigaTools:
         """Test create_custom_attribute with all optional fields."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = {"id": 1}
-        src.server.create_custom_attribute(
+        src_server.create_custom_attribute(
             21,
             "epic",
             "Status",
@@ -1351,18 +1351,18 @@ class TestTaigaTools:
     def test_create_custom_attribute_empty_name_raises(self):
         """Test create_custom_attribute raises on empty name."""
         with pytest.raises(ValueError, match="Attribute name cannot be empty"):
-            src.server.create_custom_attribute(21, "task", "  ")
+            src_server.create_custom_attribute(21, "task", "  ")
 
     def test_create_custom_attribute_invalid_type_raises(self):
         """Test create_custom_attribute raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.create_custom_attribute(21, "bogus", "Name")
+            src_server.create_custom_attribute(21, "bogus", "Name")
 
     def test_update_custom_attribute(self, session_setup):
         """Test update_custom_attribute calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 5, "name": "New Name"}
-        result = src.server.update_custom_attribute(
+        result = src_server.update_custom_attribute(
             5, "user_story", name="New Name", session_id=session_id
         )
         mock_client.api.patch.assert_called_once_with(
@@ -1373,18 +1373,18 @@ class TestTaigaTools:
     def test_update_custom_attribute_no_fields_raises(self):
         """Test update_custom_attribute raises when no fields provided."""
         with pytest.raises(ValueError, match="At least one field"):
-            src.server.update_custom_attribute(5, "task")
+            src_server.update_custom_attribute(5, "task")
 
     def test_update_custom_attribute_empty_name_raises(self):
         """Test update_custom_attribute raises on empty name."""
         with pytest.raises(ValueError, match="Attribute name cannot be empty"):
-            src.server.update_custom_attribute(5, "task", name="  ")
+            src_server.update_custom_attribute(5, "task", name="  ")
 
     def test_delete_custom_attribute(self, session_setup):
         """Test delete_custom_attribute calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
-        result = src.server.delete_custom_attribute(5, "issue", session_id=session_id)
+        result = src_server.delete_custom_attribute(5, "issue", session_id=session_id)
         mock_client.api.delete.assert_called_once_with("/issue-custom-attributes/5")
         assert result["status"] == "deleted"
         assert result["attribute_id"] == 5
@@ -1392,7 +1392,7 @@ class TestTaigaTools:
     def test_delete_custom_attribute_invalid_type_raises(self):
         """Test delete_custom_attribute raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.delete_custom_attribute(5, "bogus")
+            src_server.delete_custom_attribute(5, "bogus")
 
     def test_get_custom_attribute_values(self, session_setup):
         """Test get_custom_attribute_values calls correct endpoint."""
@@ -1401,7 +1401,7 @@ class TestTaigaTools:
             "attributes_values": {"1": "US2024/001234", "2": "USPTO"},
             "version": 3,
         }
-        result = src.server.get_custom_attribute_values(100, "user_story", session_id=session_id)
+        result = src_server.get_custom_attribute_values(100, "user_story", session_id=session_id)
         mock_client.api.get.assert_called_once_with("/userstories/custom-attributes-values/100")
         assert result["version"] == 3
         assert result["attributes_values"]["1"] == "US2024/001234"
@@ -1410,13 +1410,13 @@ class TestTaigaTools:
         """Test get_custom_attribute_values for epics."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = {"attributes_values": {}, "version": 1}
-        src.server.get_custom_attribute_values(50, "epic", session_id=session_id)
+        src_server.get_custom_attribute_values(50, "epic", session_id=session_id)
         mock_client.api.get.assert_called_once_with("/epics/custom-attributes-values/50")
 
     def test_get_custom_attribute_values_invalid_type_raises(self):
         """Test get_custom_attribute_values raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.get_custom_attribute_values(100, "bogus")
+            src_server.get_custom_attribute_values(100, "bogus")
 
     def test_set_custom_attribute_values(self, session_setup):
         """Test set_custom_attribute_values calls correct endpoint with version."""
@@ -1425,7 +1425,7 @@ class TestTaigaTools:
             "attributes_values": {"1": "EP2024/5678"},
             "version": 4,
         }
-        result = src.server.set_custom_attribute_values(
+        result = src_server.set_custom_attribute_values(
             100, "task", {"1": "EP2024/5678"}, version=3, session_id=session_id
         )
         mock_client.api.patch.assert_called_once_with(
@@ -1437,18 +1437,18 @@ class TestTaigaTools:
     def test_set_custom_attribute_values_empty_raises(self):
         """Test set_custom_attribute_values raises on empty attributes_values."""
         with pytest.raises(ValueError, match="attributes_values cannot be empty"):
-            src.server.set_custom_attribute_values(100, "task", {}, version=1)
+            src_server.set_custom_attribute_values(100, "task", {}, version=1)
 
     def test_set_custom_attribute_values_invalid_type_raises(self):
         """Test set_custom_attribute_values raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.set_custom_attribute_values(100, "bogus", {"1": "x"}, version=1)
+            src_server.set_custom_attribute_values(100, "bogus", {"1": "x"}, version=1)
 
     def test_custom_attributes_userstory_alias(self, session_setup):
         """Test that 'userstory' alias works same as 'user_story'."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
-        src.server.list_custom_attributes(21, "userstory", session_id=session_id)
+        src_server.list_custom_attributes(21, "userstory", session_id=session_id)
         mock_client.api.get.assert_called_once_with(
             "/userstory-custom-attributes", params={"project": 21}
         )
@@ -1459,7 +1459,7 @@ class TestTaigaTools:
         """Test list_attachments calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = [{"id": 1, "name": "doc.pdf"}]
-        result = src.server.list_attachments(100, "user_story", session_id=session_id)
+        result = src_server.list_attachments(100, "user_story", session_id=session_id)
         mock_client.api.get.assert_called_once_with(
             "/userstories/attachments", params={"object_id": 100}
         )
@@ -1469,7 +1469,7 @@ class TestTaigaTools:
         """Test list_attachments passes project_id when provided."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
-        src.server.list_attachments(100, "task", project_id=21, session_id=session_id)
+        src_server.list_attachments(100, "task", project_id=21, session_id=session_id)
         mock_client.api.get.assert_called_once_with(
             "/tasks/attachments", params={"object_id": 100, "project": 21}
         )
@@ -1478,26 +1478,26 @@ class TestTaigaTools:
         """Test list_attachments for wiki entity type."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
-        src.server.list_attachments(10, "wiki", session_id=session_id)
+        src_server.list_attachments(10, "wiki", session_id=session_id)
         mock_client.api.get.assert_called_once_with("/wiki/attachments", params={"object_id": 10})
 
     def test_list_attachments_invalid_type_raises(self):
         """Test list_attachments raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.list_attachments(100, "bogus")
+            src_server.list_attachments(100, "bogus")
 
     def test_get_attachment(self, session_setup):
         """Test get_attachment calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = {"id": 5, "name": "spec.pdf", "url": "https://..."}
-        result = src.server.get_attachment(5, "issue", session_id=session_id)
+        result = src_server.get_attachment(5, "issue", session_id=session_id)
         mock_client.api.get.assert_called_once_with("/issues/attachments/5")
         assert result["id"] == 5
 
     def test_get_attachment_invalid_type_raises(self):
         """Test get_attachment raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.get_attachment(5, "bogus")
+            src_server.get_attachment(5, "bogus")
 
     def test_create_attachment(self, session_setup, tmp_path):
         """Test create_attachment uploads file via multipart."""
@@ -1507,7 +1507,7 @@ class TestTaigaTools:
         test_file.write_text("fake pdf content")
         mock_client.api.post.return_value = {"id": 10, "name": "test.pdf"}
 
-        result = src.server.create_attachment(
+        result = src_server.create_attachment(
             21, 100, "epic", str(test_file), session_id=session_id
         )
         assert result["id"] == 10
@@ -1525,7 +1525,7 @@ class TestTaigaTools:
         test_file.write_text("notes")
         mock_client.api.post.return_value = {"id": 11}
 
-        src.server.create_attachment(
+        src_server.create_attachment(
             21, 50, "task", str(test_file), description="Design notes", session_id=session_id
         )
         call_data = mock_client.api.post.call_args[1]["data"]
@@ -1534,23 +1534,23 @@ class TestTaigaTools:
     def test_create_attachment_empty_path_raises(self):
         """Test create_attachment raises on empty file_path."""
         with pytest.raises(ValueError, match="file_path cannot be empty"):
-            src.server.create_attachment(21, 100, "task", "  ")
+            src_server.create_attachment(21, 100, "task", "  ")
 
     def test_create_attachment_file_not_found_raises(self):
         """Test create_attachment raises when file doesn't exist."""
         with pytest.raises(ValueError, match="File not found"):
-            src.server.create_attachment(21, 100, "task", "/nonexistent/file.pdf")
+            src_server.create_attachment(21, 100, "task", "/nonexistent/file.pdf")
 
     def test_create_attachment_invalid_type_raises(self):
         """Test create_attachment raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.create_attachment(21, 100, "bogus", "/some/file.pdf")
+            src_server.create_attachment(21, 100, "bogus", "/some/file.pdf")
 
     def test_update_attachment(self, session_setup):
         """Test update_attachment calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 5, "description": "Updated"}
-        result = src.server.update_attachment(
+        result = src_server.update_attachment(
             5, "user_story", description="Updated", session_id=session_id
         )
         mock_client.api.patch.assert_called_once_with(
@@ -1562,7 +1562,7 @@ class TestTaigaTools:
         """Test update_attachment with is_deprecated flag."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 5, "is_deprecated": True}
-        src.server.update_attachment(5, "issue", is_deprecated=True, session_id=session_id)
+        src_server.update_attachment(5, "issue", is_deprecated=True, session_id=session_id)
         mock_client.api.patch.assert_called_once_with(
             "/issues/attachments/5", json={"is_deprecated": True}
         )
@@ -1570,18 +1570,18 @@ class TestTaigaTools:
     def test_update_attachment_no_fields_raises(self):
         """Test update_attachment raises when no fields provided."""
         with pytest.raises(ValueError, match="At least one field"):
-            src.server.update_attachment(5, "task")
+            src_server.update_attachment(5, "task")
 
     def test_update_attachment_invalid_type_raises(self):
         """Test update_attachment raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.update_attachment(5, "bogus", description="x")
+            src_server.update_attachment(5, "bogus", description="x")
 
     def test_delete_attachment(self, session_setup):
         """Test delete_attachment calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
-        result = src.server.delete_attachment(5, "wiki", session_id=session_id)
+        result = src_server.delete_attachment(5, "wiki", session_id=session_id)
         mock_client.api.delete.assert_called_once_with("/wiki/attachments/5")
         assert result["status"] == "deleted"
         assert result["attachment_id"] == 5
@@ -1589,13 +1589,13 @@ class TestTaigaTools:
     def test_delete_attachment_invalid_type_raises(self):
         """Test delete_attachment raises on invalid entity_type."""
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            src.server.delete_attachment(5, "bogus")
+            src_server.delete_attachment(5, "bogus")
 
     def test_attachments_wiki_page_alias(self, session_setup):
         """Test that 'wiki_page' alias works same as 'wiki'."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
-        src.server.list_attachments(10, "wiki_page", session_id=session_id)
+        src_server.list_attachments(10, "wiki_page", session_id=session_id)
         mock_client.api.get.assert_called_once_with("/wiki/attachments", params={"object_id": 10})
 
     # ─── Epic tools tests ────────────────────────────────────────────
@@ -1604,7 +1604,7 @@ class TestTaigaTools:
         """Test list_epics."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 200, "subject": "Epic 1"}]
-        result = src.server.list_epics(123, "{}", session_id)
+        result = src_server.list_epics(123, "{}", session_id)
         assert len(result) == 1
         assert result[0]["subject"] == "Epic 1"
         mock_client.list_resources.assert_called_once_with("epics", project_id=123)
@@ -1613,7 +1613,7 @@ class TestTaigaTools:
         """Test list_epics with filters."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = []
-        src.server.list_epics(123, '{"status": 2}', session_id)
+        src_server.list_epics(123, '{"status": 2}', session_id)
         mock_client.list_resources.assert_called_once_with("epics", project_id=123, status=2)
 
     def test_create_epic(self, session_setup):
@@ -1624,7 +1624,7 @@ class TestTaigaTools:
             "subject": "New Epic",
             "project": 123,
         }
-        result = src.server.create_epic(123, "New Epic", "{}", session_id)
+        result = src_server.create_epic(123, "New Epic", "{}", session_id)
         assert result["id"] == 200
         mock_client.api.epics.create.assert_called_once_with(project=123, subject="New Epic")
 
@@ -1632,7 +1632,7 @@ class TestTaigaTools:
         """Test create_epic with extra kwargs."""
         session_id, mock_client = session_setup
         mock_client.api.epics.create.return_value = {"id": 200, "subject": "Epic"}
-        src.server.create_epic(123, "Epic", '{"color": "#FF0000"}', session_id)
+        src_server.create_epic(123, "Epic", '{"color": "#FF0000"}', session_id)
         mock_client.api.epics.create.assert_called_once_with(
             project=123, subject="Epic", color="#FF0000"
         )
@@ -1641,7 +1641,7 @@ class TestTaigaTools:
         """Test create_epic raises for empty subject."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Epic subject cannot be empty"):
-            src.server.create_epic(123, "", "{}", session_id)
+            src_server.create_epic(123, "", "{}", session_id)
 
     def test_get_epic(self, session_setup):
         """Test get_epic returns epic by ID."""
@@ -1654,7 +1654,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_epic(200, session_id)
+        result = src_server.get_epic(200, session_id)
         assert result["id"] == 200
         mock_client.api.epics.get.assert_called_once_with(200)
 
@@ -1669,7 +1669,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_epic_by_ref(123, 1, session_id)
+        result = src_server.get_epic_by_ref(123, 1, session_id)
         assert result["id"] == 200
         assert result["ref"] == 1
         mock_client.api.epics.get_by_ref.assert_called_once_with(ref=1, project=123)
@@ -1679,14 +1679,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.epics.get_by_ref.return_value = {}
         with pytest.raises(ValueError, match="not found"):
-            src.server.get_epic_by_ref(123, 999, session_id)
+            src_server.get_epic_by_ref(123, 999, session_id)
 
     def test_update_epic(self, session_setup):
         """Test update_epic."""
         session_id, mock_client = session_setup
         mock_client.api.epics.get.return_value = {"id": 200, "description": "Old", "version": 1}
         mock_client.api.epics.edit.return_value = {"id": 200, "description": "New", "version": 2}
-        result = src.server.update_epic(200, '{"description": "New"}', session_id)
+        result = src_server.update_epic(200, '{"description": "New"}', session_id)
         assert result["description"] == "New"
         mock_client.api.epics.edit.assert_called_once_with(
             epic_id=200, version=1, description="New"
@@ -1696,7 +1696,7 @@ class TestTaigaTools:
         """Test update_epic with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_epic(200, "{}", session_id)
+            src_server.update_epic(200, "{}", session_id)
         mock_client.api.epics.get.assert_not_called()
         mock_client.api.epics.edit.assert_not_called()
 
@@ -1705,14 +1705,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.epics.get.return_value = {"id": 200, "subject": "x"}
         with pytest.raises(ValueError, match="Could not determine version"):
-            src.server.update_epic(200, '{"subject": "new"}', session_id)
+            src_server.update_epic(200, '{"subject": "new"}', session_id)
         mock_client.api.epics.edit.assert_not_called()
 
     def test_delete_epic(self, session_setup):
         """Test delete_epic."""
         session_id, mock_client = session_setup
         mock_client.api.epics.delete.return_value = None
-        result = src.server.delete_epic(200, session_id)
+        result = src_server.delete_epic(200, session_id)
         assert result["status"] == "deleted"
         assert result["epic_id"] == 200
 
@@ -1721,7 +1721,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.epics.get.return_value = {"id": 200, "version": 1}
         mock_client.api.epics.edit.return_value = {"id": 200, "assigned_to": 10, "version": 2}
-        src.server.assign_epic_to_user(200, 10, session_id)
+        src_server.assign_epic_to_user(200, 10, session_id)
         mock_client.api.epics.edit.assert_called_once_with(epic_id=200, version=1, assigned_to=10)
 
     def test_unassign_epic_from_user(self, session_setup):
@@ -1729,7 +1729,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.epics.get.return_value = {"id": 200, "version": 1}
         mock_client.api.epics.edit.return_value = {"id": 200, "assigned_to": None, "version": 2}
-        src.server.unassign_epic_from_user(200, session_id)
+        src_server.unassign_epic_from_user(200, session_id)
         mock_client.api.epics.edit.assert_called_once_with(epic_id=200, version=1, assigned_to=None)
 
     # ─── Milestone tools tests ───────────────────────────────────────
@@ -1740,7 +1740,7 @@ class TestTaigaTools:
         mock_client.list_resources.return_value = [
             {"id": 300, "name": "Sprint 1", "slug": "sprint-1", "project": 123}
         ]
-        result = src.server.list_milestones(123, session_id)
+        result = src_server.list_milestones(123, session_id)
         assert len(result) == 1
         assert result[0]["name"] == "Sprint 1"
         mock_client.list_resources.assert_called_once_with("milestones", project_id=123)
@@ -1753,7 +1753,7 @@ class TestTaigaTools:
             "name": "Sprint 1",
             "project": 123,
         }
-        result = src.server.create_milestone(
+        result = src_server.create_milestone(
             123, "Sprint 1", "2025-01-01", "2025-01-14", session_id
         )
         assert result["id"] == 300
@@ -1768,7 +1768,7 @@ class TestTaigaTools:
         """Test create_milestone raises when required fields are missing."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Milestone requires"):
-            src.server.create_milestone(123, "", "2025-01-01", "2025-01-14", session_id)
+            src_server.create_milestone(123, "", "2025-01-01", "2025-01-14", session_id)
 
     def test_get_milestone(self, session_setup):
         """Test get_milestone."""
@@ -1780,7 +1780,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_milestone(300, session_id)
+        result = src_server.get_milestone(300, session_id)
         assert result["id"] == 300
         mock_client.api.milestones.get.assert_called_once_with(300)
 
@@ -1793,7 +1793,7 @@ class TestTaigaTools:
             "name": "Sprint 1 Updated",
             "version": 2,
         }
-        result = src.server.update_milestone(300, '{"name": "Sprint 1 Updated"}', session_id)
+        result = src_server.update_milestone(300, '{"name": "Sprint 1 Updated"}', session_id)
         assert result["name"] == "Sprint 1 Updated"
         mock_client.api.milestones.edit.assert_called_once_with(
             milestone_id=300, version=1, name="Sprint 1 Updated"
@@ -1803,7 +1803,7 @@ class TestTaigaTools:
         """Test update_milestone with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_milestone(300, "{}", session_id)
+            src_server.update_milestone(300, "{}", session_id)
         mock_client.api.milestones.get.assert_not_called()
         mock_client.api.milestones.edit.assert_not_called()
 
@@ -1811,7 +1811,7 @@ class TestTaigaTools:
         """Test delete_milestone."""
         session_id, mock_client = session_setup
         mock_client.api.milestones.delete.return_value = None
-        result = src.server.delete_milestone(300, session_id)
+        result = src_server.delete_milestone(300, session_id)
         assert result["status"] == "deleted"
         assert result["milestone_id"] == 300
 
@@ -1823,7 +1823,7 @@ class TestTaigaTools:
         mock_client.list_resources.return_value = [
             {"id": 1, "name": "Security", "order": 100, "project": 9}
         ]
-        result = src.server.list_swimlanes(9, session_id)
+        result = src_server.list_swimlanes(9, session_id)
         assert len(result) == 1
         assert result[0]["name"] == "Security"
         mock_client.list_resources.assert_called_once_with("swimlanes", project_id=9)
@@ -1837,7 +1837,7 @@ class TestTaigaTools:
             "project": 9,
             "order": 100,
         }
-        result = src.server.create_swimlane(9, "Security", session_id=session_id)
+        result = src_server.create_swimlane(9, "Security", session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/swimlanes", json={"project": 9, "name": "Security"}
         )
@@ -1848,14 +1848,14 @@ class TestTaigaTools:
         """Test create_swimlane raises on empty name before any API call."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="Swimlane requires a non-empty name"):
-            src.server.create_swimlane(9, "", session_id=session_id)
+            src_server.create_swimlane(9, "", session_id=session_id)
         mock_client.api.post.assert_not_called()
 
     def test_get_swimlane(self, session_setup):
         """Test get_swimlane GETs /swimlanes/{id}."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = {"id": 1, "name": "Security", "project": 9, "order": 100}
-        result = src.server.get_swimlane(1, session_id)
+        result = src_server.get_swimlane(1, session_id)
         mock_client.api.get.assert_called_once_with("/swimlanes/1")
         assert result["id"] == 1
 
@@ -1868,7 +1868,7 @@ class TestTaigaTools:
             "project": 9,
             "order": 100,
         }
-        result = src.server.update_swimlane(1, '{"name": "Security renamed"}', session_id)
+        result = src_server.update_swimlane(1, '{"name": "Security renamed"}', session_id)
         mock_client.api.patch.assert_called_once_with(
             "/swimlanes/1", json={"name": "Security renamed"}
         )
@@ -1878,14 +1878,14 @@ class TestTaigaTools:
         """Test update_swimlane with no kwargs raises ValueError before any API call."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_swimlane(1, "{}", session_id)
+            src_server.update_swimlane(1, "{}", session_id)
         mock_client.api.patch.assert_not_called()
 
     def test_update_swimlane_strips_unknown_kwargs(self, session_setup):
         """Test update_swimlane drops kwargs not in ALLOWED_KWARGS['swimlane']."""
         session_id, mock_client = session_setup
         mock_client.api.patch.return_value = {"id": 1, "name": "Security", "project": 9, "order": 5}
-        src.server.update_swimlane(
+        src_server.update_swimlane(
             1, '{"name": "Security", "statuses": "ignored", "project": "ignored"}', session_id
         )
         sent = mock_client.api.patch.call_args[1]["json"]
@@ -1895,7 +1895,7 @@ class TestTaigaTools:
         """Test delete_swimlane DELETEs /swimlanes/{id} with params=None when move_to absent."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
-        result = src.server.delete_swimlane(1, session_id=session_id)
+        result = src_server.delete_swimlane(1, session_id=session_id)
         mock_client.api.delete.assert_called_once_with("/swimlanes/1", params=None)
         assert result["status"] == "deleted"
         assert result["swimlane_id"] == 1
@@ -1905,7 +1905,7 @@ class TestTaigaTools:
         """Test delete_swimlane sends params={'moveTo': ...} when migrating user stories."""
         session_id, mock_client = session_setup
         mock_client.api.delete.return_value = None
-        result = src.server.delete_swimlane(1, move_to=2, session_id=session_id)
+        result = src_server.delete_swimlane(1, move_to=2, session_id=session_id)
         mock_client.api.delete.assert_called_once_with("/swimlanes/1", params={"moveTo": 2})
         assert result["status"] == "deleted"
         assert result["swimlane_id"] == 1
@@ -1915,7 +1915,7 @@ class TestTaigaTools:
         """Test delete_swimlane rejects move_to == swimlane_id before any API call."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="move_to .* cannot be the same as swimlane_id"):
-            src.server.delete_swimlane(1, move_to=1, session_id=session_id)
+            src_server.delete_swimlane(1, move_to=1, session_id=session_id)
         mock_client.api.delete.assert_not_called()
 
     def test_user_story_swimlane_kwarg_passes_through(self, session_setup):
@@ -1923,7 +1923,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.user_stories.get.return_value = {"id": 805, "version": 3}
         mock_client.api.user_stories.edit.return_value = {"id": 805, "swimlane": 1, "version": 4}
-        src.server.update_user_story(805, '{"swimlane": 1}', session_id)
+        src_server.update_user_story(805, '{"swimlane": 1}', session_id)
         mock_client.api.user_stories.edit.assert_called_once_with(
             user_story_id=805, version=3, swimlane=1
         )
@@ -1936,7 +1936,7 @@ class TestTaigaTools:
         mock_client.list_resources.return_value = [
             {"id": 1, "user": 10, "full_name": "John Doe", "role_name": "Admin"}
         ]
-        result = src.server.get_project_members(123, session_id)
+        result = src_server.get_project_members(123, session_id)
         assert len(result) == 1
         assert result[0]["full_name"] == "John Doe"
         mock_client.list_resources.assert_called_once_with("memberships", project_id=123)
@@ -1949,7 +1949,7 @@ class TestTaigaTools:
             "email": "user@test.com",
             "role": 5,
         }
-        result = src.server.invite_project_user(123, "user@test.com", 5, session_id)
+        result = src_server.invite_project_user(123, "user@test.com", 5, session_id)
         assert result["email"] == "user@test.com"
         mock_client.api.memberships.invite.assert_called_once_with(
             project=123, email="user@test.com", role_id=5
@@ -1959,7 +1959,7 @@ class TestTaigaTools:
         """Test invite_project_user raises for empty email."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Email cannot be empty"):
-            src.server.invite_project_user(123, "", 5, session_id)
+            src_server.invite_project_user(123, "", 5, session_id)
 
     # ─── Wiki tools tests ────────────────────────────────────────────
 
@@ -1967,7 +1967,7 @@ class TestTaigaTools:
         """Test list_wiki_pages."""
         session_id, mock_client = session_setup
         mock_client.list_resources.return_value = [{"id": 400, "slug": "home", "project": 123}]
-        result = src.server.list_wiki_pages(123, session_id)
+        result = src_server.list_wiki_pages(123, session_id)
         assert len(result) == 1
         assert result[0]["slug"] == "home"
         mock_client.list_resources.assert_called_once_with("wiki", project_id=123)
@@ -1982,7 +1982,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_wiki_page(400, session_id)
+        result = src_server.get_wiki_page(400, session_id)
         assert result["id"] == 400
         assert result["slug"] == "home"
         mock_client.api.wiki.get.assert_called_once_with(400)
@@ -1997,7 +1997,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 1,
         }
-        result = src.server.get_wiki_page_by_slug(123, "home", session_id)
+        result = src_server.get_wiki_page_by_slug(123, "home", session_id)
         assert result["id"] == 400
         assert result["slug"] == "home"
         mock_client.api.wiki.get_by_slug.assert_called_once_with(slug="home", project=123)
@@ -2007,7 +2007,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.wiki.get_by_slug.return_value = {}
         with pytest.raises(ValueError, match="not found"):
-            src.server.get_wiki_page_by_slug(123, "nonexistent", session_id)
+            src_server.get_wiki_page_by_slug(123, "nonexistent", session_id)
 
     def test_update_wiki_page(self, session_setup):
         """Test update_wiki_page."""
@@ -2026,7 +2026,7 @@ class TestTaigaTools:
             "project": 123,
             "version": 2,
         }
-        result = src.server.update_wiki_page(400, json.dumps({"content": "# Updated"}), session_id)
+        result = src_server.update_wiki_page(400, json.dumps({"content": "# Updated"}), session_id)
         assert result["content"] == "# Updated"
         assert result["version"] == 2
         mock_client.api.wiki.edit.assert_called_once_with(
@@ -2037,7 +2037,7 @@ class TestTaigaTools:
         """Test update_wiki_page with no kwargs raises ValueError (caller bug)."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="no fields to update"):
-            src.server.update_wiki_page(400, None, session_id)
+            src_server.update_wiki_page(400, None, session_id)
         mock_client.api.wiki.get.assert_not_called()
         mock_client.api.wiki.edit.assert_not_called()
 
@@ -2046,14 +2046,14 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.wiki.get.return_value = {"id": 400, "slug": "home", "content": "x"}
         with pytest.raises(ValueError, match="Could not determine version"):
-            src.server.update_wiki_page(400, '{"content": "new"}', session_id)
+            src_server.update_wiki_page(400, '{"content": "new"}', session_id)
         mock_client.api.wiki.edit.assert_not_called()
 
     def test_delete_wiki_page(self, session_setup):
         """Test delete_wiki_page."""
         session_id, mock_client = session_setup
         mock_client.api.wiki.delete.return_value = None
-        result = src.server.delete_wiki_page(400, session_id)
+        result = src_server.delete_wiki_page(400, session_id)
         assert result["status"] == "deleted"
         assert result["wiki_page_id"] == 400
         mock_client.api.wiki.delete.assert_called_once_with(wiki_page_id=400)
@@ -2066,7 +2066,7 @@ class TestTaigaTools:
         mock_client.list_resources.return_value = [
             {"id": 1, "name": "P1", "slug": "p1", "description": "Long desc", "version": 1}
         ]
-        result = src.server.list_projects(session_id, verbosity="minimal")
+        result = src_server.list_projects(session_id, verbosity="minimal")
         assert result == [{"id": 1, "name": "P1", "slug": "p1"}]
 
     def test_get_project_verbosity_full(self, session_setup):
@@ -2074,7 +2074,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         full_data = {"id": 1, "name": "P1", "extra": "value", "version": 1}
         mock_client.api.projects.get.return_value = full_data
-        result = src.server.get_project(1, session_id, verbosity="full")
+        result = src_server.get_project(1, session_id, verbosity="full")
         assert result == full_data
 
     # ─── Comment tests ─────────────────────────────────────────────────
@@ -2085,7 +2085,7 @@ class TestTaigaTools:
         mock_client.api.get.return_value = {"id": 42, "version": 3}
         mock_client.api.patch.return_value = {"id": 42, "version": 4}
 
-        result = src.server.add_comment(42, "issue", "Test comment", session_id)
+        result = src_server.add_comment(42, "issue", "Test comment", session_id)
 
         mock_client.api.get.assert_called_once_with("/issues/42")
         mock_client.api.patch.assert_called_once_with(
@@ -2103,7 +2103,7 @@ class TestTaigaTools:
         mock_client.api.get.return_value = {"id": 10, "version": 1}
         mock_client.api.patch.return_value = {"id": 10, "version": 2}
 
-        result = src.server.add_comment(10, "user_story", "A comment", session_id)
+        result = src_server.add_comment(10, "user_story", "A comment", session_id)
 
         mock_client.api.get.assert_called_once_with("/userstories/10")
         mock_client.api.patch.assert_called_once_with(
@@ -2115,7 +2115,7 @@ class TestTaigaTools:
         """Test add_comment raises ValueError for invalid object_type."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="Invalid object_type"):
-            src.server.add_comment(1, "invalid_type", "comment", session_id)
+            src_server.add_comment(1, "invalid_type", "comment", session_id)
 
     def test_add_comment_unescapes_newlines_and_tabs(self, session_setup):
         """Test add_comment converts literal \\n and \\t to actual characters."""
@@ -2123,7 +2123,7 @@ class TestTaigaTools:
         mock_client.api.get.return_value = {"id": 42, "version": 3}
         mock_client.api.patch.return_value = {"id": 42, "version": 4}
 
-        src.server.add_comment(42, "issue", "Line 1\\nLine 2\\tindented", session_id)
+        src_server.add_comment(42, "issue", "Line 1\\nLine 2\\tindented", session_id)
 
         mock_client.api.patch.assert_called_once_with(
             "/issues/42", json={"comment": "Line 1\nLine 2\tindented", "version": 3}
@@ -2134,7 +2134,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        src.server.edit_comment(42, "issue", "abc", "Line 1\\nLine 2\\tindented", session_id)
+        src_server.edit_comment(42, "issue", "abc", "Line 1\\nLine 2\\tindented", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/history/issue/42/edit_comment?id=abc",
@@ -2147,7 +2147,7 @@ class TestTaigaTools:
         mock_client.api.get.return_value = {"id": 42}
 
         with pytest.raises(ValueError, match="Could not determine version"):
-            src.server.add_comment(42, "issue", "Test comment", session_id)
+            src_server.add_comment(42, "issue", "Test comment", session_id)
 
     def test_list_comments(self, session_setup):
         """Test list_comments filters history to non-empty comments."""
@@ -2191,7 +2191,7 @@ class TestTaigaTools:
             },
         ]
 
-        result = src.server.list_comments(42, "issue", session_id)
+        result = src_server.list_comments(42, "issue", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/issue/42")
         assert len(result) == 2
@@ -2204,7 +2204,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
 
-        src.server.list_comments(5, "userstory", session_id)
+        src_server.list_comments(5, "userstory", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/userstory/5")
 
@@ -2212,14 +2212,14 @@ class TestTaigaTools:
         """Test list_comments raises ValueError for invalid object_type."""
         session_id, mock_client = session_setup
         with pytest.raises(ValueError, match="Invalid object_type"):
-            src.server.list_comments(1, "invalid_type", session_id)
+            src_server.list_comments(1, "invalid_type", session_id)
 
     def test_list_comments_empty_history(self, session_setup):
         """Test list_comments returns empty list for empty history."""
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
 
-        result = src.server.list_comments(1, "task", session_id)
+        result = src_server.list_comments(1, "task", session_id)
 
         assert result == []
 
@@ -2230,7 +2230,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.edit_comment(42, "issue", "abc123", "Updated text", session_id)
+        result = src_server.edit_comment(42, "issue", "abc123", "Updated text", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/history/issue/42/edit_comment?id=abc123",
@@ -2244,7 +2244,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        src.server.edit_comment(42, "task", "abc", "  trimmed  ", session_id)
+        src_server.edit_comment(42, "task", "abc", "  trimmed  ", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/history/task/42/edit_comment?id=abc",
@@ -2255,20 +2255,20 @@ class TestTaigaTools:
         """Test edit_comment raises ValueError for empty new comment."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="New comment text must not be empty"):
-            src.server.edit_comment(42, "issue", "abc", "", session_id)
+            src_server.edit_comment(42, "issue", "abc", "", session_id)
 
     def test_edit_comment_invalid_type_raises(self, session_setup):
         """Test edit_comment raises ValueError for invalid object_type."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Invalid object_type"):
-            src.server.edit_comment(42, "invalid", "abc", "text", session_id)
+            src_server.edit_comment(42, "invalid", "abc", "text", session_id)
 
     def test_delete_comment(self, session_setup):
         """Test delete_comment posts to the correct history endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.delete_comment(42, "user_story", "abc123", session_id)
+        result = src_server.delete_comment(42, "user_story", "abc123", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/history/userstory/42/delete_comment?id=abc123",
@@ -2280,14 +2280,14 @@ class TestTaigaTools:
         """Test delete_comment raises ValueError for empty comment_id."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Comment ID must not be empty"):
-            src.server.delete_comment(42, "issue", "", session_id)
+            src_server.delete_comment(42, "issue", "", session_id)
 
     def test_undelete_comment(self, session_setup):
         """Test undelete_comment posts to the correct history endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
 
-        result = src.server.undelete_comment(42, "epic", "abc123", session_id)
+        result = src_server.undelete_comment(42, "epic", "abc123", session_id)
 
         mock_client.api.post.assert_called_once_with(
             "/history/epic/42/undelete_comment?id=abc123",
@@ -2299,7 +2299,7 @@ class TestTaigaTools:
         """Test undelete_comment raises ValueError for invalid object_type."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Invalid object_type"):
-            src.server.undelete_comment(42, "wiki", "abc", session_id)
+            src_server.undelete_comment(42, "wiki", "abc", session_id)
 
     def test_get_comment_versions(self, session_setup):
         """Test get_comment_versions returns version history."""
@@ -2309,7 +2309,7 @@ class TestTaigaTools:
             {"date": "2026-01-02T00:00:00Z", "comment": "v2"},
         ]
 
-        result = src.server.get_comment_versions(42, "task", "abc123", session_id)
+        result = src_server.get_comment_versions(42, "task", "abc123", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/task/42/comment_versions?id=abc123")
         assert result["comment_id"] == "abc123"
@@ -2319,7 +2319,7 @@ class TestTaigaTools:
         """Test get_comment_versions raises ValueError for empty comment_id."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Comment ID must not be empty"):
-            src.server.get_comment_versions(42, "issue", "", session_id)
+            src_server.get_comment_versions(42, "issue", "", session_id)
 
     # ─── History / Audit Trail tests ───────────────────────────────────
 
@@ -2331,7 +2331,7 @@ class TestTaigaTools:
             {"id": "b", "type": 1, "comment": "Some comment"},
         ]
 
-        result = src.server.get_history(42, "issue", session_id)
+        result = src_server.get_history(42, "issue", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/issue/42")
         assert result["object_type"] == "issue"
@@ -2343,7 +2343,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
 
-        result = src.server.get_history(10, "wiki", session_id)
+        result = src_server.get_history(10, "wiki", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/wiki/10")
         assert result["history"] == []
@@ -2353,7 +2353,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = []
 
-        src.server.get_history(10, "wiki_page", session_id)
+        src_server.get_history(10, "wiki_page", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/wiki/10")
 
@@ -2362,7 +2362,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.get.return_value = [{"id": "x"}]
 
-        result = src.server.get_history(5, "user_story", session_id)
+        result = src_server.get_history(5, "user_story", session_id)
 
         mock_client.api.get.assert_called_once_with("/history/userstory/5")
         assert len(result["history"]) == 1
@@ -2371,43 +2371,43 @@ class TestTaigaTools:
         """Test get_history raises ValueError for invalid object_type."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Invalid object_type"):
-            src.server.get_history(42, "project", session_id)
+            src_server.get_history(42, "project", session_id)
 
     def test_get_history_no_session_raises(self):
         """Test get_history raises ValueError when no session available."""
-        src.server.active_sessions.clear()
+        src_server.active_sessions.clear()
         with pytest.raises(ValueError, match="No session_id provided"):
-            src.server.get_history(42, "issue")
+            src_server.get_history(42, "issue")
 
     # ─── Login default session tests (PR: fix/login-default-session-and-slug) ──
 
     def test_login_sets_default_session_when_none_exists(self):
         """Test that login() sets the default session when no default exists."""
         with patch.object(TaigaClientWrapper, "login", return_value=True):
-            src.server.active_sessions.clear()
-            result = src.server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
+            src_server.active_sessions.clear()
+            result = src_server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
             assert "session_id" in result
             # Default session should have been set
-            assert src.server.DEFAULT_SESSION_ID in src.server.active_sessions
+            assert src_server.DEFAULT_SESSION_ID in src_server.active_sessions
             # The default session wrapper should be the same object as the new session's
-            new_session_wrapper = src.server.active_sessions[result["session_id"]]
-            default_wrapper = src.server.active_sessions[src.server.DEFAULT_SESSION_ID]
+            new_session_wrapper = src_server.active_sessions[result["session_id"]]
+            default_wrapper = src_server.active_sessions[src_server.DEFAULT_SESSION_ID]
             assert new_session_wrapper is default_wrapper
-            src.server.active_sessions.clear()
+            src_server.active_sessions.clear()
 
     def test_login_does_not_overwrite_existing_default_session(self):
         """Test that login() does NOT overwrite an existing default session."""
         existing_default = MagicMock()
         existing_default.is_authenticated = True
-        src.server.active_sessions.clear()
-        src.server.active_sessions[src.server.DEFAULT_SESSION_ID] = existing_default
+        src_server.active_sessions.clear()
+        src_server.active_sessions[src_server.DEFAULT_SESSION_ID] = existing_default
 
         with patch.object(TaigaClientWrapper, "login", return_value=True):
-            result = src.server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
+            result = src_server.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
             assert "session_id" in result
             # Default session should still be the original one
-            assert src.server.active_sessions[src.server.DEFAULT_SESSION_ID] is existing_default
-            src.server.active_sessions.clear()
+            assert src_server.active_sessions[src_server.DEFAULT_SESSION_ID] is existing_default
+            src_server.active_sessions.clear()
 
     # ─── Search tests ──────────────────────────────────────────────────
 
@@ -2423,7 +2423,7 @@ class TestTaigaTools:
             "epics": [],
         }
 
-        result = src.server.search_project(21, "match", session_id)
+        result = src_server.search_project(21, "match", session_id)
 
         mock_client.api.get.assert_called_once_with(
             "/search", params={"project": 21, "text": "match"}
@@ -2439,13 +2439,13 @@ class TestTaigaTools:
         """Test search_project raises ValueError for empty search text."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Search text cannot be empty"):
-            src.server.search_project(21, "", session_id)
+            src_server.search_project(21, "", session_id)
 
     def test_search_project_whitespace_text_raises(self, session_setup):
         """Test search_project raises ValueError for whitespace-only search text."""
         session_id, _ = session_setup
         with pytest.raises(ValueError, match="Search text cannot be empty"):
-            src.server.search_project(21, "   ", session_id)
+            src_server.search_project(21, "   ", session_id)
 
     def test_search_project_strips_text(self, session_setup):
         """Test search_project strips whitespace from search text."""
@@ -2459,7 +2459,7 @@ class TestTaigaTools:
             "epics": [],
         }
 
-        src.server.search_project(21, "  hello  ", session_id)
+        src_server.search_project(21, "  hello  ", session_id)
 
         mock_client.api.get.assert_called_once_with(
             "/search", params={"project": 21, "text": "hello"}
@@ -2467,9 +2467,9 @@ class TestTaigaTools:
 
     def test_search_project_no_session_raises(self):
         """Test search_project raises ValueError when no session available."""
-        src.server.active_sessions.clear()
+        src_server.active_sessions.clear()
         with pytest.raises(ValueError, match="No session_id provided"):
-            src.server.search_project(21, "query")
+            src_server.search_project(21, "query")
 
     # ─── Bulk Operations tests ────────────────────────────────────────
 
@@ -2480,7 +2480,7 @@ class TestTaigaTools:
             {"id": 1, "subject": "Story A"},
             {"id": 2, "subject": "Story B"},
         ]
-        result = src.server.bulk_create_user_stories(
+        result = src_server.bulk_create_user_stories(
             21, ["Story A", "Story B"], session_id=session_id
         )
         mock_client.api.post.assert_called_once_with(
@@ -2492,18 +2492,18 @@ class TestTaigaTools:
     def test_bulk_create_user_stories_empty_raises(self):
         """Test bulk_create_user_stories raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_user_stories(21, [])
+            src_server.bulk_create_user_stories(21, [])
 
     def test_bulk_create_user_stories_whitespace_only_raises(self):
         """Test bulk_create_user_stories raises when all subjects are whitespace."""
         with pytest.raises(ValueError, match="only empty strings"):
-            src.server.bulk_create_user_stories(21, ["  ", "", " "])
+            src_server.bulk_create_user_stories(21, ["  ", "", " "])
 
     def test_bulk_create_user_stories_strips_subjects(self, session_setup):
         """Test bulk_create_user_stories strips whitespace from subjects."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Story A"}]
-        src.server.bulk_create_user_stories(21, ["  Story A  "], session_id=session_id)
+        src_server.bulk_create_user_stories(21, ["  Story A  "], session_id=session_id)
         call_json = mock_client.api.post.call_args[1]["json"]
         assert call_json["bulk_stories"] == "Story A"
 
@@ -2511,7 +2511,7 @@ class TestTaigaTools:
         """Test bulk_create_tasks calls correct endpoint with required milestone_id."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Task A"}]
-        result = src.server.bulk_create_tasks(
+        result = src_server.bulk_create_tasks(
             21, ["Task A"], milestone_id=89, session_id=session_id
         )
         mock_client.api.post.assert_called_once_with(
@@ -2524,7 +2524,7 @@ class TestTaigaTools:
         """Test bulk_create_tasks includes us_id when user_story_id provided."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Task A"}]
-        src.server.bulk_create_tasks(
+        src_server.bulk_create_tasks(
             21, ["Task A"], milestone_id=89, user_story_id=5, session_id=session_id
         )
         call_json = mock_client.api.post.call_args[1]["json"]
@@ -2534,23 +2534,23 @@ class TestTaigaTools:
     def test_bulk_create_tasks_empty_raises(self):
         """Test bulk_create_tasks raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_tasks(21, [], milestone_id=89)
+            src_server.bulk_create_tasks(21, [], milestone_id=89)
 
     def test_bulk_create_tasks_missing_milestone_raises(self):
         """Test bulk_create_tasks raises a Kanban-aware ValueError when milestone_id missing (#55)."""
         with pytest.raises(ValueError, match="milestone_id is required"):
-            src.server.bulk_create_tasks(21, ["Task A"])
+            src_server.bulk_create_tasks(21, ["Task A"])
 
     def test_bulk_create_tasks_missing_milestone_mentions_kanban_workaround(self):
         """The missing-milestone error must point Kanban-only callers at create_task."""
         with pytest.raises(ValueError, match="create_task"):
-            src.server.bulk_create_tasks(21, ["Task A"])
+            src_server.bulk_create_tasks(21, ["Task A"])
 
     def test_bulk_create_issues(self, session_setup):
         """Test bulk_create_issues calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Issue A"}]
-        result = src.server.bulk_create_issues(21, ["Issue A"], session_id=session_id)
+        result = src_server.bulk_create_issues(21, ["Issue A"], session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/issues/bulk_create",
             json={"project_id": 21, "bulk_issues": "Issue A"},
@@ -2560,13 +2560,13 @@ class TestTaigaTools:
     def test_bulk_create_issues_empty_raises(self):
         """Test bulk_create_issues raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_issues(21, [])
+            src_server.bulk_create_issues(21, [])
 
     def test_bulk_create_epics(self, session_setup):
         """Test bulk_create_epics calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "subject": "Epic A"}]
-        result = src.server.bulk_create_epics(21, ["Epic A"], session_id=session_id)
+        result = src_server.bulk_create_epics(21, ["Epic A"], session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/epics/bulk_create",
             json={"project_id": 21, "bulk_epics": "Epic A"},
@@ -2576,14 +2576,14 @@ class TestTaigaTools:
     def test_bulk_create_epics_empty_raises(self):
         """Test bulk_create_epics raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Subjects list cannot be empty"):
-            src.server.bulk_create_epics(21, [])
+            src_server.bulk_create_epics(21, [])
 
     def test_bulk_update_user_story_milestone(self, session_setup):
         """Test bulk_update_user_story_milestone calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
         stories = [{"us_id": 1, "order": 1}, {"us_id": 2, "order": 2}]
-        result = src.server.bulk_update_user_story_milestone(21, 5, stories, session_id=session_id)
+        result = src_server.bulk_update_user_story_milestone(21, 5, stories, session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/userstories/bulk_update_milestone",
             json={"project_id": 21, "milestone_id": 5, "bulk_stories": stories},
@@ -2594,7 +2594,7 @@ class TestTaigaTools:
     def test_bulk_update_user_story_milestone_empty_raises(self):
         """Test bulk_update_user_story_milestone raises on empty list before checking session."""
         with pytest.raises(ValueError, match="bulk_stories list cannot be empty"):
-            src.server.bulk_update_user_story_milestone(21, 5, [])
+            src_server.bulk_update_user_story_milestone(21, 5, [])
 
     def test_bulk_update_user_story_swimlane(self, session_setup):
         """Test bulk_update_user_story_swimlane POSTs to bulk_update_kanban_order with swimlane_id."""
@@ -2603,7 +2603,7 @@ class TestTaigaTools:
             {"id": 805, "swimlane": 1, "status": 97, "kanban_order": 1},
             {"id": 806, "swimlane": 1, "status": 97, "kanban_order": 2},
         ]
-        result = src.server.bulk_update_user_story_swimlane(
+        result = src_server.bulk_update_user_story_swimlane(
             project_id=9,
             status_id=97,
             swimlane_id=1,
@@ -2627,7 +2627,7 @@ class TestTaigaTools:
     def test_bulk_update_user_story_swimlane_empty_raises(self):
         """Test bulk_update_user_story_swimlane raises on empty list before any API call."""
         with pytest.raises(ValueError, match="user_story_ids list cannot be empty"):
-            src.server.bulk_update_user_story_swimlane(
+            src_server.bulk_update_user_story_swimlane(
                 project_id=9, status_id=97, swimlane_id=1, user_story_ids=[]
             )
 
@@ -2636,7 +2636,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
         stories = [{"us_id": 1, "order": 10}]
-        result = src.server.bulk_update_user_story_order(
+        result = src_server.bulk_update_user_story_order(
             21, "backlog", stories, session_id=session_id
         )
         mock_client.api.post.assert_called_once_with(
@@ -2651,7 +2651,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
         stories = [{"us_id": 1, "order": 10}]
-        src.server.bulk_update_user_story_order(21, "kanban", stories, session_id=session_id)
+        src_server.bulk_update_user_story_order(21, "kanban", stories, session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/userstories/bulk_update_kanban_order",
             json={"project_id": 21, "bulk_stories": stories},
@@ -2662,7 +2662,7 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
         stories = [{"us_id": 1, "order": 10}]
-        src.server.bulk_update_user_story_order(21, "sprint", stories, session_id=session_id)
+        src_server.bulk_update_user_story_order(21, "sprint", stories, session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/userstories/bulk_update_sprint_order",
             json={"project_id": 21, "bulk_stories": stories},
@@ -2671,19 +2671,19 @@ class TestTaigaTools:
     def test_bulk_update_user_story_order_invalid_type_raises(self):
         """Test bulk_update_user_story_order raises on invalid order type before session."""
         with pytest.raises(ValueError, match="Invalid order_type"):
-            src.server.bulk_update_user_story_order(21, "invalid", [{"us_id": 1, "order": 1}])
+            src_server.bulk_update_user_story_order(21, "invalid", [{"us_id": 1, "order": 1}])
 
     def test_bulk_update_user_story_order_empty_raises(self):
         """Test bulk_update_user_story_order raises on empty list before session."""
         with pytest.raises(ValueError, match="bulk_stories list cannot be empty"):
-            src.server.bulk_update_user_story_order(21, "backlog", [])
+            src_server.bulk_update_user_story_order(21, "backlog", [])
 
     def test_bulk_create_memberships(self, session_setup):
         """Test bulk_create_memberships calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1, "email": "a@b.com"}]
         members = [{"email": "a@b.com", "role_id": 3}]
-        result = src.server.bulk_create_memberships(21, members, session_id=session_id)
+        result = src_server.bulk_create_memberships(21, members, session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/memberships/bulk_create",
             json={"project_id": 21, "bulk_memberships": members},
@@ -2694,26 +2694,26 @@ class TestTaigaTools:
     def test_bulk_create_memberships_empty_raises(self):
         """Test bulk_create_memberships raises on empty list before checking session."""
         with pytest.raises(ValueError, match="Members list cannot be empty"):
-            src.server.bulk_create_memberships(21, [])
+            src_server.bulk_create_memberships(21, [])
 
     def test_bulk_create_memberships_missing_fields_raises(self):
         """Test bulk_create_memberships raises when member dict missing required fields."""
         with pytest.raises(ValueError, match="must have 'email' and 'role_id'"):
-            src.server.bulk_create_memberships(21, [{"email": "a@b.com"}])
+            src_server.bulk_create_memberships(21, [{"email": "a@b.com"}])
 
     def test_bulk_create_memberships_role_id_zero_accepted(self, session_setup):
         """Test bulk_create_memberships accepts role_id=0 (falsy but present)."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = [{"id": 1}]
         members = [{"email": "a@b.com", "role_id": 0}]
-        result = src.server.bulk_create_memberships(21, members, session_id=session_id)
+        result = src_server.bulk_create_memberships(21, members, session_id=session_id)
         assert result["status"] == "invited"
 
     def test_bulk_link_user_stories_to_epic(self, session_setup):
         """Test bulk_link_user_stories_to_epic calls correct endpoint."""
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
-        result = src.server.bulk_link_user_stories_to_epic(21, 10, [1, 2, 3], session_id=session_id)
+        result = src_server.bulk_link_user_stories_to_epic(21, 10, [1, 2, 3], session_id=session_id)
         mock_client.api.post.assert_called_once_with(
             "/epics/10/related_userstories/bulk_create",
             json={"project_id": 21, "bulk_userstories": [1, 2, 3]},
@@ -2724,13 +2724,13 @@ class TestTaigaTools:
     def test_bulk_link_user_stories_to_epic_empty_raises(self):
         """Test bulk_link_user_stories_to_epic raises on empty list before session."""
         with pytest.raises(ValueError, match="user_story_ids list cannot be empty"):
-            src.server.bulk_link_user_stories_to_epic(21, 10, [])
+            src_server.bulk_link_user_stories_to_epic(21, 10, [])
 
     def test_bulk_create_user_stories_no_session_raises(self):
         """Test bulk_create_user_stories raises when no session available."""
-        src.server.active_sessions.clear()
+        src_server.active_sessions.clear()
         with pytest.raises(ValueError, match="No session_id provided"):
-            src.server.bulk_create_user_stories(21, ["Story A"])
+            src_server.bulk_create_user_stories(21, ["Story A"])
 
 
 # ─── Response Filtering tests ─────────────────────────────────────────
@@ -2747,7 +2747,7 @@ class TestResponseFiltering:
         empirically no version field on the resource, see issue #24).
         """
         no_version = {"member", "swimlane"}
-        for resource_type, levels in src.server.RESPONSE_FIELDS.items():
+        for resource_type, levels in src_server.RESPONSE_FIELDS.items():
             if resource_type not in no_version:
                 assert "version" in levels["standard"], (
                     f"{resource_type} missing version in standard"
@@ -2755,7 +2755,7 @@ class TestResponseFiltering:
 
     def test_filter_minimal_includes_id(self):
         """All minimal levels must include id."""
-        for resource_type, levels in src.server.RESPONSE_FIELDS.items():
+        for resource_type, levels in src_server.RESPONSE_FIELDS.items():
             assert "id" in levels["minimal"], f"{resource_type} missing id in minimal"
 
     def test_filter_minimal_includes_project_where_applicable(self):
@@ -2770,7 +2770,7 @@ class TestResponseFiltering:
             "swimlane",
         ]
         for resource_type in project_resources:
-            assert "project" in src.server.RESPONSE_FIELDS[resource_type]["minimal"], (
+            assert "project" in src_server.RESPONSE_FIELDS[resource_type]["minimal"], (
                 f"{resource_type} missing project in minimal"
             )
 
@@ -2783,26 +2783,26 @@ class TestResponseFiltering:
             "project": 9,
             "statuses": [{"id": 65, "name": "New"}],  # large nested data, only in 'full'
         }
-        minimal = src.server._filter_response(full, "swimlane", "minimal")
+        minimal = src_server._filter_response(full, "swimlane", "minimal")
         assert set(minimal.keys()) == {"id", "name", "project"}
-        standard = src.server._filter_response(full, "swimlane", "standard")
+        standard = src_server._filter_response(full, "swimlane", "standard")
         assert set(standard.keys()) == {"id", "name", "order", "project"}
-        result_full = src.server._filter_response(full, "swimlane", "full")
+        result_full = src_server._filter_response(full, "swimlane", "full")
         assert result_full == full  # untouched
         assert "statuses" in result_full
 
     def test_filter_response_handles_none(self):
         """_filter_response should return None when given None."""
-        assert src.server._filter_response(None, "user_story") is None
+        assert src_server._filter_response(None, "user_story") is None
 
     def test_filter_response_handles_empty_list(self):
         """_filter_response should return empty list when given empty list."""
-        assert src.server._filter_response([], "user_story") == []
+        assert src_server._filter_response([], "user_story") == []
 
     def test_filter_response_unknown_type_returns_full(self):
         """Unknown resource types should return full response."""
         data = {"id": 1, "extra": "field"}
-        assert src.server._filter_response(data, "unknown_type") == data
+        assert src_server._filter_response(data, "unknown_type") == data
 
     def test_filter_response_full_verbosity_returns_all(self):
         """Full verbosity should return all fields."""
@@ -2813,7 +2813,7 @@ class TestResponseFiltering:
             "watchers": [1, 2],
             "extra_field": "value",
         }
-        result = src.server._filter_response(data, "user_story", verbosity="full")
+        result = src_server._filter_response(data, "user_story", verbosity="full")
         assert result == data
 
     def test_filter_response_standard_filters_fields(self):
@@ -2828,7 +2828,7 @@ class TestResponseFiltering:
             "watchers": [1, 2],
             "extra_internal_field": "should_be_filtered",
         }
-        result = src.server._filter_response(data, "user_story", verbosity="standard")
+        result = src_server._filter_response(data, "user_story", verbosity="standard")
         assert "id" in result
         assert "ref" in result
         assert "subject" in result
@@ -2848,7 +2848,7 @@ class TestResponseFiltering:
             "version": 2,
             "watchers": [1, 2],
         }
-        result = src.server._filter_response(data, "user_story", verbosity="minimal")
+        result = src_server._filter_response(data, "user_story", verbosity="minimal")
         assert result == {"id": 1, "ref": 123, "subject": "Test", "status": 1, "project": 10}
 
     def test_filter_response_list_filters_each_item(self):
@@ -2857,7 +2857,7 @@ class TestResponseFiltering:
             {"id": 1, "subject": "Story 1", "watchers": [1]},
             {"id": 2, "subject": "Story 2", "watchers": [2]},
         ]
-        result = src.server._filter_response(data, "user_story", verbosity="minimal")
+        result = src_server._filter_response(data, "user_story", verbosity="minimal")
         assert len(result) == 2
         assert "watchers" not in result[0]
         assert "watchers" not in result[1]
@@ -2865,7 +2865,7 @@ class TestResponseFiltering:
     def test_filter_response_invalid_verbosity_falls_back_to_standard(self):
         """Typos in verbosity should warn and use standard."""
         data = {"id": 1, "subject": "Test", "version": 1, "watchers": [1, 2]}
-        result = src.server._filter_response(data, "user_story", verbosity="stanard")  # typo
+        result = src_server._filter_response(data, "user_story", verbosity="stanard")  # typo
         assert "id" in result
         assert "version" in result
         assert "watchers" not in result
@@ -2910,7 +2910,7 @@ class TestEnrichUserStoryTasks:
         mock_client = self._make_mock_client(raw_tasks)
         us_result = self._make_us_result()
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "standard")
 
         assert len(result["tasks"]) == 2
         assert result["tasks"][0] == {
@@ -2949,7 +2949,7 @@ class TestEnrichUserStoryTasks:
         mock_client = self._make_mock_client(raw_tasks)
         us_result = self._make_us_result()
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "full")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "full")
 
         assert len(result["tasks"]) == 1
         assert "description" in result["tasks"][0]
@@ -2963,7 +2963,7 @@ class TestEnrichUserStoryTasks:
         mock_client = self._make_mock_client()
         us_result = self._make_us_result()
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "minimal")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "minimal")
 
         assert result["tasks"] == []
         mock_client.list_resources.assert_not_called()
@@ -2974,7 +2974,7 @@ class TestEnrichUserStoryTasks:
         mock_client.list_resources.side_effect = Exception("Connection refused")
         us_result = self._make_us_result()
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "standard")
 
         assert result["tasks"] == []
 
@@ -2983,7 +2983,7 @@ class TestEnrichUserStoryTasks:
         mock_client = self._make_mock_client()
         us_result = {"ref": 18, "subject": "Test", "project": 21}
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "standard")
 
         assert "tasks" not in result
         mock_client.list_resources.assert_not_called()
@@ -2993,7 +2993,7 @@ class TestEnrichUserStoryTasks:
         mock_client = self._make_mock_client()
         us_result = {"id": 606, "ref": 18, "subject": "Test"}
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "standard")
 
         assert "tasks" not in result
         mock_client.list_resources.assert_not_called()
@@ -3003,7 +3003,7 @@ class TestEnrichUserStoryTasks:
         mock_client = self._make_mock_client([])
         us_result = self._make_us_result()
 
-        result = src.server._enrich_user_story_tasks(us_result, mock_client, "standard")
+        result = src_server._enrich_user_story_tasks(us_result, mock_client, "standard")
 
         assert result is us_result
 
@@ -3211,20 +3211,20 @@ class TestTaigaClientWrapper:
 
     def test_parse_mcp_kwargs_valid_json(self):
         """Test that valid JSON in kwargs is parsed correctly."""
-        result = src.server._parse_mcp_kwargs({"kwargs": '{"key": "value"}'})
+        result = src_server._parse_mcp_kwargs({"kwargs": '{"key": "value"}'})
         assert result == {"key": "value"}
 
     def test_parse_mcp_kwargs_invalid_json_raises_valueerror(self):
         """Test that invalid JSON raises ValueError with descriptive message."""
         with pytest.raises(ValueError, match="Invalid JSON in 'kwargs' parameter"):
-            src.server._parse_mcp_kwargs({"kwargs": "{1: 3}"})
+            src_server._parse_mcp_kwargs({"kwargs": "{1: 3}"})
 
     def test_parse_mcp_kwargs_filters_invalid_json_raises_valueerror(self):
         """Test that invalid JSON in 'filters' key raises ValueError with correct key name."""
         with pytest.raises(ValueError, match="Invalid JSON in 'filters' parameter"):
-            src.server._parse_mcp_kwargs({"filters": "{bad}"})
+            src_server._parse_mcp_kwargs({"filters": "{bad}"})
 
     def test_parse_mcp_kwargs_empty_string_returns_empty_dict(self):
         """Test that empty string returns empty dict."""
-        result = src.server._parse_mcp_kwargs({"kwargs": ""})
+        result = src_server._parse_mcp_kwargs({"kwargs": ""})
         assert result == {}

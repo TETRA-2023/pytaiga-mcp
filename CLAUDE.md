@@ -6,18 +6,28 @@ MCP (Model Context Protocol) server bridging AI assistants with the Taiga projec
 
 - **Package**: `mcp-taiga-bridge`
 - **Python**: >= 3.12
-- **Upstream**: `talhaorak/pytaiga-mcp` (origin: `TETRA-2023/pytaiga-mcp`)
+
+## Two server modes
+
+| Mode | Entry point | Tools | Use when |
+|---|---|---|---|
+| `workflow` (default) | `src/server_workflow.py` | ~23 intent tools | Everyday project management: sprint planning, backlog grooming, team workload |
+| `full` | `src/server_full.py` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
+
+Select mode via `TAIGA_SERVER_MODE=workflow` (default) or `TAIGA_SERVER_MODE=full`.
 
 ## Architecture
 
 ```
 src/
-  server.py        — MCP tool definitions (all 64+ tools registered via @mcp.tool())
-  taiga_client.py  — TaigaClientWrapper: auth, raw API calls, pagination bypass
-  config.py        — Pydantic settings (env vars, SecretStr credentials)
+  server_workflow.py — Workflow/intent tools (~23, v2.0+)
+  server_full.py     — Full CRUD tools (107, all Taiga API endpoints)
+  taiga_client.py    — TaigaClientWrapper: auth, raw API calls, pagination bypass
+  config.py          — Pydantic settings (env vars, SecretStr credentials)
 ```
 
-- `server.py` is the main file (~2300 lines). Tools are grouped by resource type: auth, projects, user stories, tasks, issues, epics, milestones, wiki, memberships, comments.
+- `server_workflow.py` — intent-oriented tools that accept human-readable names (project slug, sprint name, status name, username) and resolve them internally. Tools composite multiple API calls to answer PO-level questions in one step.
+- `server_full.py` — 1:1 mapping of Taiga REST API. Tools are grouped by resource type: auth, projects, user stories, tasks, issues, epics, milestones, wiki, memberships, comments.
 - `taiga_client.py` wraps `pytaigaclient.TaigaClient` and adds `list_resources()` with `x-disable-pagination` header.
 - Session management: `active_sessions` dict keyed by UUID (or `"default"` for auto-auth).
 
@@ -31,19 +41,22 @@ cp .env.example .env  # Configure TAIGA_API_URL, TAIGA_USERNAME, TAIGA_PASSWORD
 ## Running
 
 ```bash
-./run.sh              # stdio transport (default)
-./run.sh --sse        # SSE transport
+./run.sh                                    # workflow mode, stdio (default)
+TAIGA_SERVER_MODE=full ./run.sh             # full mode, stdio
+./run.sh --sse                              # workflow mode, SSE transport
 # Or directly:
-uv run python src/server.py [--sse | --streamable-http]
+uv run python src/server_workflow.py [--sse | --streamable-http]
+uv run python src/server_full.py     [--sse | --streamable-http]
 ```
 
-Environment variables: `TAIGA_TRANSPORT`, `TAIGA_API_URL`, `TAIGA_USERNAME`, `TAIGA_PASSWORD`, `MCP_HOST`, `MCP_PORT`.
+Environment variables: `TAIGA_SERVER_MODE` (`workflow`|`full`), `TAIGA_TRANSPORT`, `TAIGA_API_URL`, `TAIGA_USERNAME`, `TAIGA_PASSWORD`, `MCP_HOST`, `MCP_PORT`.
 
 ## Testing
 
 ```bash
-./run_unit_tests.sh                                        # Unit tests only
-uv run pytest tests/test_server.py -v                      # Unit tests
+./run_unit_tests.sh                                        # Unit tests (server_full + server_workflow + transport)
+uv run pytest tests/test_server.py -v                      # Full server tests
+uv run pytest tests/test_server_workflow.py -v             # Workflow server tests
 uv run pytest tests/test_integration.py -v -m integration  # Integration tests (needs running Taiga)
 ```
 
@@ -54,12 +67,17 @@ Pre-commit hooks run ruff (lint + format) and unit tests automatically.
 - **Linter/formatter**: ruff (line-length=100, target py312, rules: E, F, W, I)
 - **Commit messages**: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, etc.) — used by `python-semantic-release` for auto-versioning
 - **Branch naming**: `feature/<name>`, `fix/<name>`
-- **Tool pattern**: Each Taiga resource follows a consistent CRUD pattern:
+- **Full server tool pattern**: Each Taiga resource follows a consistent CRUD pattern:
   - `list_{resource}`, `create_{resource}`, `get_{resource}`, `get_{resource}_by_ref`, `update_{resource}`, `delete_{resource}`
   - `assign_{resource}_to_user` / `unassign_{resource}_from_user` where applicable
   - `get_{resource}_statuses` for status lookups
-- **Kwargs validation**: All create/update tools validate kwargs against `ALLOWED_KWARGS[resource_type]`
-- **Response filtering**: `verbosity` parameter ("minimal", "standard", "full") controls returned fields via `RESPONSE_FIELDS` dict
+- **Workflow server tool pattern**: Intent-based, name-resolution first:
+  - All tools accept project slug or ID; status, sprint, assignee accepted by name
+  - Name resolution uses `_resolve_project`, `_resolve_sprint`, `_resolve_status`, `_resolve_user` helpers
+  - Resolution results are cached per-session in `_session_cache` (cleared on logout)
+  - Composite reads (e.g. `get_sprint_board`) batch sub-queries for efficiency
+- **Kwargs validation** (full server): All create/update tools validate kwargs against `ALLOWED_KWARGS[resource_type]`
+- **Response filtering** (full server): `verbosity` parameter ("minimal", "standard", "full") controls returned fields via `RESPONSE_FIELDS` dict
 - **Error handling**: All tools use `_execute_taiga_operation()` wrapper for consistent error handling
 - **Security**: Never log credentials. Use `SecretStr` for passwords. Validate kwargs against allowlists.
 

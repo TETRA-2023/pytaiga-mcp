@@ -4,8 +4,8 @@ import uuid
 
 import pytest
 
-import src.server
-from src.server import (
+import src.server_full
+from src.server_full import (
     add_comment,
     create_user_story,
     delete_comment,

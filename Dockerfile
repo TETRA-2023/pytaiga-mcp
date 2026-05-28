@@ -27,4 +27,8 @@ ENV UV_CACHE_DIR=/tmp/uv-cache
 # Run as non-root
 USER appuser
 
-ENTRYPOINT ["/app/.venv/bin/python", "src/server.py"]
+# TAIGA_SERVER_MODE selects which server to run: workflow (default) or full.
+# ENTRYPOINT uses sh -c "... $@" with "--" so additional `docker run image <args>`
+# (e.g. --sse, --streamable-http) are forwarded to the chosen binary.
+ENV TAIGA_SERVER_MODE=workflow
+ENTRYPOINT ["/bin/sh", "-c", "exec /app/.venv/bin/mcp-taiga-${TAIGA_SERVER_MODE} \"$@\"", "--"]
