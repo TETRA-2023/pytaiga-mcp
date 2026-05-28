@@ -515,3 +515,94 @@ class TestGetEpicOverviewBatched:
         # One list call, zero per-story user_stories.get() calls.
         mock_client.list_resources.assert_called_once_with("user_stories", project_id=1, epic=50)
         mock_client.api.user_stories.get.assert_not_called()
+
+
+class TestUpdateStoryEpicRelink:
+    """Regression tests for the update_story epic= parameter (round-2 review)."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def _story_with_epics(self, epic_dicts):
+        return {
+            "id": 100,
+            "ref": 5,
+            "subject": "Story",
+            "version": 1,
+            "epics": epic_dicts,
+        }
+
+    def test_epic_zero_unlinks_all_no_post(self, session, mock_client):
+        # /projects/by_slug → project
+        mock_client.api.get.return_value = self._project()
+        # get_by_ref → story currently linked to two epics
+        mock_client.api.user_stories.get_by_ref.return_value = self._story_with_epics(
+            [{"id": 50, "ref": 1}, {"id": 51, "ref": 2}]
+        )
+
+        wf.update_story("p", 5, epic=0, session_id=session)
+
+        # Two DELETEs (extracted from dict[id]), no POST, no new-epic lookup.
+        assert mock_client.api.delete.call_count == 2
+        mock_client.api.delete.assert_any_call("/epics/50/related_userstories/100")
+        mock_client.api.delete.assert_any_call("/epics/51/related_userstories/100")
+        mock_client.api.post.assert_not_called()
+
+    def test_epic_relink_lookup_before_delete(self, session, mock_client):
+        # First api.get call: /projects/by_slug → project
+        # Second api.get call: /epics/by_ref → new epic
+        mock_client.api.get.side_effect = [
+            self._project(),
+            {"id": 99, "ref": 7, "subject": "New Epic"},
+        ]
+        mock_client.api.user_stories.get_by_ref.return_value = self._story_with_epics(
+            [{"id": 50, "ref": 1}]
+        )
+
+        wf.update_story("p", 5, epic=7, session_id=session)
+
+        # Old link removed (one DELETE), new link created (one POST).
+        mock_client.api.delete.assert_called_once_with("/epics/50/related_userstories/100")
+        mock_client.api.post.assert_called_once_with(
+            "/epics/99/related_userstories",
+            json={"epic": 99, "user_story": 100},
+        )
+
+    def test_epic_not_found_does_not_unlink(self, session, mock_client):
+        mock_client.api.get.side_effect = [
+            self._project(),
+            None,  # /epics/by_ref → not found
+        ]
+        mock_client.api.user_stories.get_by_ref.return_value = self._story_with_epics(
+            [{"id": 50, "ref": 1}]
+        )
+
+        with pytest.raises(ValueError, match="Epic #7 not found"):
+            wf.update_story("p", 5, epic=7, session_id=session)
+
+        # Critical: validation runs BEFORE any mutation. The story's existing
+        # link to epic #50 must be intact when the call fails.
+        mock_client.api.delete.assert_not_called()
+        mock_client.api.post.assert_not_called()
+
+    def test_epic_link_when_story_has_none(self, session, mock_client):
+        mock_client.api.get.side_effect = [
+            self._project(),
+            {"id": 99, "ref": 7, "subject": "New Epic"},
+        ]
+        mock_client.api.user_stories.get_by_ref.return_value = self._story_with_epics([])
+
+        wf.update_story("p", 5, epic=7, session_id=session)
+
+        mock_client.api.delete.assert_not_called()
+        mock_client.api.post.assert_called_once_with(
+            "/epics/99/related_userstories",
+            json={"epic": 99, "user_story": 100},
+        )
+
+    def test_no_op_when_no_fields_and_no_epic(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = self._story_with_epics([])
+
+        with pytest.raises(ValueError, match="No fields to update"):
+            wf.update_story("p", 5, session_id=session)

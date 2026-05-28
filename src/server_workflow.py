@@ -829,30 +829,37 @@ def update_story(
         if len(payload) == 1 and epic is None:
             raise ValueError("No fields to update were provided.")
 
-        result = current
-        if len(payload) > 1:
-            result = client.api.user_stories.edit(current["id"], **payload)
-
         if epic is not None:
-            # Unlink from any currently-linked epics, then link to the new one
-            # (unless epic == 0, which means "unlink only").
-            for old_epic_id in current.get("epics") or []:
-                client.api.delete(f"/epics/{old_epic_id}/related_userstories/{current['id']}")
+            # Validate the target epic BEFORE any mutation. If we deleted old
+            # links first and the lookup then failed, the story would be left
+            # orphaned despite the caller seeing an error.
+            new_epic = None
             if epic != 0:
                 new_epic = client.api.get(
                     "/epics/by_ref", params={"ref": epic, "project": project_id}
                 )
                 if not new_epic:
                     raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
+
+            # Taiga's UserStorySerializer returns `epics` as a list of dicts
+            # ({"id": <epic_id>, "ref": ..., "subject": ..., "color": ...}),
+            # not bare IDs — extract `id` from each entry.
+            for old_epic in current.get("epics") or []:
+                client.api.delete(f"/epics/{old_epic['id']}/related_userstories/{current['id']}")
+            if new_epic is not None:
                 client.api.post(
                     f"/epics/{new_epic['id']}/related_userstories",
                     json={"epic": new_epic["id"], "user_story": current["id"]},
                 )
             epic_changed = True
 
+        result = current
+        if len(payload) > 1:
+            result = client.api.user_stories.edit(current["id"], **payload)
+
         summary = _story_summary(result)
         if epic_changed:
-            summary["epic"] = epic if epic and epic != 0 else None
+            summary["epic"] = epic if epic else None
         return summary
 
     return _execute_taiga_operation("update_story", do_update, f"#{ref} in {project}")
