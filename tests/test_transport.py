@@ -1,6 +1,6 @@
 """Tests for transport resolution logic."""
 
-from src.server import _resolve_transport
+from src.server_full import _resolve_transport
 
 
 class TestResolveTransport:
