@@ -4353,7 +4353,11 @@ def _resolve_transport(argv: list[str] | None = None, env: dict[str, str] | None
 
 
 # --- Run the server ---
-if __name__ == "__main__":
+def main() -> None:
     transport = _resolve_transport()
-    logger.info(f"Starting server with {transport} transport")
+    logger.info(f"Starting Taiga Full server with {transport} transport")
     mcp.run(transport=transport)
+
+
+if __name__ == "__main__":
+    main()
