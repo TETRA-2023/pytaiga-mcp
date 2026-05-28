@@ -1,9 +1,10 @@
 """Workflow-oriented Taiga MCP server.
 
-Exposes ~23 intent-based tools designed for everyday project management:
-sprint planning, backlog grooming, team workload, epic tracking, wiki, and
-comments. All tools accept human-readable names (project slug, sprint name,
-status name, username) and resolve them to API IDs internally.
+Exposes ~27 intent-based tools designed for everyday project management:
+sprint planning, backlog grooming, team workload, epic tracking, task
+breakdown, wiki, and comments. All tools accept human-readable names
+(project slug, sprint name, status name, username) and resolve them to
+API IDs internally.
 
 Start with:
     TAIGA_SERVER_MODE=workflow  (default)
@@ -865,6 +866,229 @@ def update_story(
     return _execute_taiga_operation("update_story", do_update, f"#{ref} in {project}")
 
 
+# ---------------------------------------------------------------------------
+# Task tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    "create_task",
+    description=(
+        "Add a single task under an existing user story. story_ref is the parent US ref number. "
+        "All name fields are resolved (assignee username, status name). "
+        "project accepts slug or ID."
+    ),
+)
+def create_task(
+    project: Any,
+    story_ref: int,
+    subject: str,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    assignee: Optional[str] = None,
+    due_date: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    blocked: Optional[bool] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_create():
+        proj = _resolve_project(client, project)
+        project_id = proj["id"]
+
+        story = client.api.user_stories.get_by_ref(ref=story_ref, project=project_id)
+        if not story:
+            raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
+
+        data: Dict[str, Any] = {"user_story": story["id"]}
+        # Tasks inherit their parent story's milestone by default; let Taiga handle it.
+        if description:
+            data["description"] = description
+        if tags:
+            data["tags"] = tags
+        if due_date:
+            data["due_date"] = due_date
+        if blocked is not None:
+            data["is_blocked"] = blocked
+        if status:
+            data["status"] = _resolve_status(client, project_id, "task", status, actual_session_id)
+        if assignee:
+            data["assigned_to"] = _resolve_user(client, project_id, assignee, actual_session_id)
+
+        result = client.api.tasks.create(project=project_id, subject=subject, data=data)
+        return {
+            "status": "created",
+            "ref": result.get("ref"),
+            "id": result.get("id"),
+            "subject": result.get("subject"),
+            "parent_story_ref": story_ref,
+        }
+
+    return _execute_taiga_operation("create_task", do_create, f"under US #{story_ref} in {project}")
+
+
+@mcp.tool(
+    "update_task",
+    description=(
+        "Update a task by its ref number. All fields are optional — only provided fields change. "
+        "status, assignee, and sprint are resolved by name. story_ref reparents the task to a "
+        "different user story. sprint accepts a name or ID; tasks can have a milestone "
+        "independent of their parent story. project accepts slug or ID."
+    ),
+)
+def update_task(
+    project: Any,
+    ref: int,
+    subject: Optional[str] = None,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    assignee: Optional[str] = None,
+    sprint: Optional[Any] = None,
+    story_ref: Optional[int] = None,
+    blocked: Optional[bool] = None,
+    tags: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_update():
+        proj = _resolve_project(client, project)
+        project_id = proj["id"]
+
+        current = client.api.tasks.get_by_ref(ref=ref, project=project_id)
+        if not current:
+            raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
+
+        payload: Dict[str, Any] = {"version": current["version"]}
+        if subject is not None:
+            payload["subject"] = subject
+        if description is not None:
+            payload["description"] = description
+        if status is not None:
+            payload["status"] = _resolve_status(
+                client, project_id, "task", status, actual_session_id
+            )
+        if assignee is not None:
+            payload["assigned_to"] = _resolve_user(client, project_id, assignee, actual_session_id)
+        if sprint is not None:
+            milestone = _resolve_sprint(client, project_id, sprint)
+            payload["milestone"] = milestone["id"]
+        if story_ref is not None:
+            new_story = client.api.user_stories.get_by_ref(ref=story_ref, project=project_id)
+            if not new_story:
+                raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
+            payload["user_story"] = new_story["id"]
+        if blocked is not None:
+            payload["is_blocked"] = blocked
+        if tags is not None:
+            payload["tags"] = tags
+
+        if len(payload) == 1:  # only version key
+            raise ValueError("No fields to update were provided.")
+
+        result = client.api.tasks.edit(current["id"], **payload)
+        return _task_summary(result)
+
+    return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
+
+
+@mcp.tool(
+    "break_down_story",
+    description=(
+        "Decompose a user story into multiple tasks in one call. tasks accepts a list of "
+        "subject strings (e.g. ['design', 'API', 'tests']) or a list of dicts "
+        "({'subject': str, 'assignee': str?, 'status': str?, 'description': str?}) "
+        "for per-task field overrides. If the parent story is assigned to a sprint, "
+        "tasks are created in that sprint via Taiga's bulk endpoint; otherwise tasks "
+        "are created individually under the story. project accepts slug or ID."
+    ),
+)
+def break_down_story(
+    project: Any,
+    story_ref: int,
+    tasks: List[Any],
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not tasks:
+        raise ValueError("tasks list cannot be empty.")
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_break_down():
+        proj = _resolve_project(client, project)
+        project_id = proj["id"]
+
+        story = client.api.user_stories.get_by_ref(ref=story_ref, project=project_id)
+        if not story:
+            raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
+
+        # Normalize: every entry becomes a dict with at least "subject".
+        normalized: List[Dict[str, Any]] = []
+        for entry in tasks:
+            if isinstance(entry, str):
+                normalized.append({"subject": entry})
+            elif isinstance(entry, dict) and entry.get("subject"):
+                normalized.append(entry)
+            else:
+                raise ValueError(
+                    "Each entry in tasks must be a non-empty string or a dict with a 'subject' key."
+                )
+
+        # Need per-task field overrides? Then we must create tasks individually
+        # because Taiga's /tasks/bulk_create only accepts a flat list of subjects.
+        # Otherwise, prefer the bulk endpoint when the parent is in a sprint.
+        has_overrides = any(set(e.keys()) - {"subject"} for e in normalized)
+        milestone_id = story.get("milestone")
+
+        if not has_overrides and milestone_id is not None:
+            # Sprint-scoped bulk path — single API call.
+            bulk_tasks = "\n".join(e["subject"] for e in normalized)
+            result = client.api.post(
+                "/tasks/bulk_create",
+                json={
+                    "project_id": project_id,
+                    "bulk_tasks": bulk_tasks,
+                    "milestone_id": milestone_id,
+                    "us_id": story["id"],
+                },
+            )
+            created = result if isinstance(result, list) else []
+        else:
+            # Loop path: story is in backlog (no milestone) OR caller passed
+            # per-task overrides. Per-call create handles both.
+            created = []
+            for entry in normalized:
+                data: Dict[str, Any] = {"user_story": story["id"]}
+                if "description" in entry:
+                    data["description"] = entry["description"]
+                if "status" in entry:
+                    data["status"] = _resolve_status(
+                        client, project_id, "task", entry["status"], actual_session_id
+                    )
+                if "assignee" in entry:
+                    data["assigned_to"] = _resolve_user(
+                        client, project_id, entry["assignee"], actual_session_id
+                    )
+                task = client.api.tasks.create(
+                    project=project_id, subject=entry["subject"], data=data
+                )
+                created.append(task)
+
+        return {
+            "status": "decomposed",
+            "story_ref": story_ref,
+            "tasks_created": len(created),
+            "tasks": [{"ref": t.get("ref"), "subject": t.get("subject")} for t in created],
+        }
+
+    return _execute_taiga_operation(
+        "break_down_story", do_break_down, f"US #{story_ref} in {project}"
+    )
+
+
 @mcp.tool(
     "create_issue",
     description=(
@@ -1237,6 +1461,41 @@ def set_story_status(
         }
 
     return _execute_taiga_operation("set_story_status", do_set, f"#{ref} in {project}")
+
+
+@mcp.tool(
+    "set_task_status",
+    description=(
+        "Change the status of a task by its ref number using the status name "
+        "(e.g. 'In Progress', 'Done'). project accepts slug or ID."
+    ),
+)
+def set_task_status(
+    project: Any,
+    ref: int,
+    status: str,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_set():
+        proj = _resolve_project(client, project)
+        project_id = proj["id"]
+        status_id = _resolve_status(client, project_id, "task", status, actual_session_id)
+
+        current = client.api.tasks.get_by_ref(ref=ref, project=project_id)
+        if not current:
+            raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
+
+        result = client.api.tasks.edit(current["id"], status=status_id, version=current["version"])
+        return {
+            "ref": ref,
+            "status": (result.get("status_extra_info") or {}).get("name") or status,
+            "is_closed": result.get("is_closed", False),
+        }
+
+    return _execute_taiga_operation("set_task_status", do_set, f"task #{ref} in {project}")
 
 
 @mcp.tool(
