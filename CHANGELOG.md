@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-05-28)
+
+### Bug Fixes
+
+- Address PR #73 review — task milestone inheritance, override hardening
+  ([`03c6cac`](https://github.com/TETRA-2023/pytaiga-mcp/commit/03c6cacd4580e6bd53cee9c95bce5899b4108036))
+
+- Round-2 polish — sprint='0' opt-out, constant relocation, warn-log test
+  ([`c21b742`](https://github.com/TETRA-2023/pytaiga-mcp/commit/c21b7427396cdee2f0bc731ffdc3e2ff25244245))
+
+### Documentation
+
+- Drop manual v2.0 pins; semantic-release owns versioning
+  ([`6ed5b3e`](https://github.com/TETRA-2023/pytaiga-mcp/commit/6ed5b3e4d52365ce071417b3d1ada9788d1240c7))
+
+### Features
+
+- Add task tools to workflow mode (create_task, update_task, set_task_status, break_down_story)
+  ([`61756e9`](https://github.com/TETRA-2023/pytaiga-mcp/commit/61756e9abc19e431acbddf6f2375afd18f555562))
+
+
 ## v1.16.0 (2026-05-28)
 
 ### Bug Fixes
