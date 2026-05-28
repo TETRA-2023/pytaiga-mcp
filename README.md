@@ -28,12 +28,12 @@ By using the MCP standard, this bridge allows AI systems to maintain contextual 
 
 ## Two server modes
 
-Starting with v2.0, this bridge ships two servers selectable via `TAIGA_SERVER_MODE`:
+Starting with v2.0, this bridge ships two servers in a single image. Select one at runtime via the `TAIGA_SERVER_MODE` environment variable:
 
-| Mode | Image tag | Tools | Best for |
-|---|---|---|---|
-| `workflow` | `:latest`, `:workflow` | ~23 intent tools | Product Owners and team members managing projects daily |
-| `full` | `:full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
+| Mode | Tools | Best for |
+|---|---|---|
+| `workflow` (default) | ~23 intent tools | Product Owners and team members managing projects daily |
+| `full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
 **Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
 
@@ -164,13 +164,7 @@ uv pip install -e ".[dev]"
 
 ### Docker
 
-Image tags:
-
-| Tag | Mode | Use |
-|---|---|---|
-| `:latest` | workflow | Recommended default |
-| `:workflow` | workflow | Explicit workflow pin |
-| `:full` | full | Full CRUD surface |
+The image ships both servers. Mode is selected by the `TAIGA_SERVER_MODE` env var; default is `workflow`.
 
 Pull and run (workflow mode, stdio):
 
@@ -182,14 +176,15 @@ docker run -i --rm \
   ghcr.io/tetra-2023/pytaiga-mcp:latest
 ```
 
-Full mode:
+Full mode (set `TAIGA_SERVER_MODE=full`):
 
 ```bash
 docker run -i --rm \
   -e TAIGA_API_URL=https://your-taiga-instance.com \
   -e TAIGA_USERNAME=your_username \
   -e TAIGA_PASSWORD=your_password \
-  ghcr.io/tetra-2023/pytaiga-mcp:full
+  -e TAIGA_SERVER_MODE=full \
+  ghcr.io/tetra-2023/pytaiga-mcp:latest
 ```
 
 SSE transport (append `--sse`, expose a port):
@@ -210,6 +205,8 @@ docker build -t pytaiga-mcp .
 # Run full mode from local build:
 docker run -i --rm -e TAIGA_SERVER_MODE=full -e TAIGA_API_URL=... pytaiga-mcp
 ```
+
+> **Note**: `TAIGA_SERVER_MODE` is read at container startup. To switch modes, restart the container with a different value — there is no need to pull a different image.
 
 Example MCP client configuration (`.mcp.json`) for stdio transport:
 

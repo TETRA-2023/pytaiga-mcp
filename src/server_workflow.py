@@ -138,6 +138,19 @@ def _execute_taiga_operation(operation_name: str, operation_callable, error_cont
 # ---------------------------------------------------------------------------
 
 
+def _cached(session_id: str, key: str, factory):
+    """Get or lazily compute a session-scoped cache entry.
+
+    Used by the resolvers below to avoid re-fetching project lookup tables
+    (statuses, members, priorities, …) on every tool call within a session.
+    The cache is cleared when the session is logged out.
+    """
+    cache = _session_cache_for(session_id)
+    if key not in cache:
+        cache[key] = factory()
+    return cache[key]
+
+
 def _resolve_project(client: TaigaClientWrapper, project: Any) -> Dict[str, Any]:
     """Resolve a project slug (str) or ID (int) to the full project dict."""
     if isinstance(project, int) or (isinstance(project, str) and project.isdigit()):
@@ -186,6 +199,20 @@ def _resolve_sprint(client: TaigaClientWrapper, project_id: int, sprint: Any) ->
     return matches[0]
 
 
+_STATUS_RESOURCE_MAP = {
+    "story": "userstory_statuses",
+    "user_story": "userstory_statuses",
+    "task": "task_statuses",
+    "issue": "issue_statuses",
+}
+
+_ISSUE_ATTR_RESOURCE_MAP = {
+    "priority": "priorities",
+    "severity": "severities",
+    "type": "issue_types",
+}
+
+
 def _resolve_status(
     client: TaigaClientWrapper,
     project_id: int,
@@ -194,20 +221,14 @@ def _resolve_status(
     session_id: str,
 ) -> int:
     """Resolve a status name (case-insensitive) to its ID, cached per session."""
-    cache = _session_cache_for(session_id)
-    cache_key = f"statuses_{entity_type}_{project_id}"
-    if cache_key not in cache:
-        resource_map = {
-            "story": "userstory_statuses",
-            "user_story": "userstory_statuses",
-            "task": "task_statuses",
-            "issue": "issue_statuses",
-        }
-        resource = resource_map.get(entity_type)
-        if not resource:
-            raise ValueError(f"Cannot resolve statuses for entity type '{entity_type}'.")
-        cache[cache_key] = client.list_resources(resource, project_id=project_id)
-    statuses = cache[cache_key]
+    resource = _STATUS_RESOURCE_MAP.get(entity_type)
+    if not resource:
+        raise ValueError(f"Cannot resolve statuses for entity type '{entity_type}'.")
+    statuses = _cached(
+        session_id,
+        f"statuses_{entity_type}_{project_id}",
+        lambda: client.list_resources(resource, project_id=project_id),
+    )
     matches = [s for s in statuses if s["name"].lower() == status_name.lower()]
     if not matches:
         available = [s["name"] for s in statuses]
@@ -222,11 +243,11 @@ def _resolve_user(
     session_id: str,
 ) -> int:
     """Resolve a username, email, or full name to a user ID within project members."""
-    cache = _session_cache_for(session_id)
-    cache_key = f"members_{project_id}"
-    if cache_key not in cache:
-        cache[cache_key] = client.list_resources("memberships", project_id=project_id)
-    members = cache[cache_key]
+    members = _cached(
+        session_id,
+        f"members_{project_id}",
+        lambda: client.list_resources("memberships", project_id=project_id),
+    )
     needle = username.lower()
     for m in members:
         info = m.get("user_extra_info") or {}
@@ -244,19 +265,23 @@ def _resolve_user(
 def _resolve_issue_defaults(
     client: TaigaClientWrapper, project_id: int, session_id: str
 ) -> Dict[str, Optional[int]]:
-    """Return default priority, severity and type IDs for a project (cached)."""
-    cache = _session_cache_for(session_id)
-    cache_key = f"issue_defaults_{project_id}"
-    if cache_key not in cache:
+    """Return default priority, severity and type IDs for a project (cached).
+
+    Each field is None when the project has no configured values for it; callers
+    must guard against None before sending to the API.
+    """
+
+    def _fetch():
         priorities = client.list_resources("priorities", project_id=project_id)
         severities = client.list_resources("severities", project_id=project_id)
         types = client.list_resources("issue_types", project_id=project_id)
-        cache[cache_key] = {
+        return {
             "priority": priorities[0]["id"] if priorities else None,
             "severity": severities[0]["id"] if severities else None,
             "type": types[0]["id"] if types else None,
         }
-    return cache[cache_key]
+
+    return _cached(session_id, f"issue_defaults_{project_id}", _fetch)
 
 
 def _resolve_issue_attribute(
@@ -267,24 +292,37 @@ def _resolve_issue_attribute(
     session_id: str,
 ) -> int:
     """Resolve an issue priority, severity, or type name to its ID."""
-    cache = _session_cache_for(session_id)
-    resource_map = {
-        "priority": "priorities",
-        "severity": "severities",
-        "type": "issue_types",
-    }
-    resource = resource_map.get(attr_type)
+    resource = _ISSUE_ATTR_RESOURCE_MAP.get(attr_type)
     if not resource:
         raise ValueError(f"Unknown attribute type '{attr_type}'.")
-    cache_key = f"{resource}_{project_id}"
-    if cache_key not in cache:
-        cache[cache_key] = client.list_resources(resource, project_id=project_id)
-    items = cache[cache_key]
+    items = _cached(
+        session_id,
+        f"{resource}_{project_id}",
+        lambda: client.list_resources(resource, project_id=project_id),
+    )
     matches = [i for i in items if i["name"].lower() == name.lower()]
     if not matches:
         available = [i["name"] for i in items]
         raise ValueError(f"{attr_type.capitalize()} '{name}' not found. Available: {available}")
     return matches[0]["id"]
+
+
+def _resolve_story_refs(client: TaigaClientWrapper, project_id: int, refs: List[int]) -> List[int]:
+    """Resolve a list of user story ref numbers to IDs with a single API call.
+
+    Returns IDs in the same order as the input refs. Raises ValueError listing
+    every missing ref so callers see the full diagnostic at once. Not cached:
+    refs in batch-mutation tools often point at freshly-created stories that
+    aren't in any prior cache snapshot.
+    """
+    if not refs:
+        return []
+    stories = client.list_resources("user_stories", project_id=project_id)
+    by_ref = {s["ref"]: s["id"] for s in stories}
+    missing = [r for r in refs if r not in by_ref]
+    if missing:
+        raise ValueError(f"User stories not found: {missing}")
+    return [by_ref[r] for r in refs]
 
 
 def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
@@ -437,10 +475,12 @@ def login(
                 active_sessions[DEFAULT_SESSION_ID] = wrapper
             return {"session_id": session_id}
         raise RuntimeError("Login failed.")
-    except (ValueError, TaigaException):
+    except (ValueError, TaigaException) as e:
+        logger.error(f"Login failed: {e}", exc_info=False)
         raise
     except Exception as e:
-        raise RuntimeError(f"Unexpected error during login: {e}")
+        logger.error(f"Unexpected error during login: {e}", exc_info=True)
+        raise RuntimeError("An unexpected server error occurred during login.")
 
 
 @mcp.tool(
@@ -471,7 +511,18 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
             }
         except TaigaException:
             active_sessions.pop(actual_session_id, None)
-            return {"status": "inactive", "reason": "token_invalid"}
+            return {
+                "status": "inactive",
+                "reason": "token_invalid",
+                "session_id": actual_session_id,
+            }
+    if client:
+        # Session entry exists but lost authentication.
+        return {
+            "status": "inactive",
+            "reason": "not_authenticated",
+            "session_id": actual_session_id,
+        }
     return {"status": "inactive", "reason": "not_found", "session_id": actual_session_id}
 
 
@@ -725,6 +776,7 @@ def create_story(
     description=(
         "Update a user story by its ref number. All fields are optional — only provided fields are changed. "
         "status, assignee, and sprint are resolved by name. "
+        "epic accepts an epic ref number to link the story to that epic, or 0 to unlink from all epics. "
         "project accepts slug or ID."
     ),
 )
@@ -736,6 +788,7 @@ def update_story(
     status: Optional[str] = None,
     assignee: Optional[str] = None,
     sprint: Optional[Any] = None,
+    epic: Optional[int] = None,
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
     session_id: Optional[str] = None,
@@ -770,11 +823,37 @@ def update_story(
         if blocked is not None:
             payload["is_blocked"] = blocked
 
-        if len(payload) == 1:  # only version key
+        epic_changed = False
+        # Only the body fields gate the "no-op" check; epic relinking is a
+        # separate API call so a pure relink (epic=N, no other fields) is valid.
+        if len(payload) == 1 and epic is None:
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.user_stories.edit(current["id"], **payload)
-        return _story_summary(result)
+        result = current
+        if len(payload) > 1:
+            result = client.api.user_stories.edit(current["id"], **payload)
+
+        if epic is not None:
+            # Unlink from any currently-linked epics, then link to the new one
+            # (unless epic == 0, which means "unlink only").
+            for old_epic_id in current.get("epics") or []:
+                client.api.delete(f"/epics/{old_epic_id}/related_userstories/{current['id']}")
+            if epic != 0:
+                new_epic = client.api.get(
+                    "/epics/by_ref", params={"ref": epic, "project": project_id}
+                )
+                if not new_epic:
+                    raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
+                client.api.post(
+                    f"/epics/{new_epic['id']}/related_userstories",
+                    json={"epic": new_epic["id"], "user_story": current["id"]},
+                )
+            epic_changed = True
+
+        summary = _story_summary(result)
+        if epic_changed:
+            summary["epic"] = epic if epic and epic != 0 else None
+        return summary
 
     return _execute_taiga_operation("update_story", do_update, f"#{ref} in {project}")
 
@@ -806,13 +885,13 @@ def create_issue(
         project_id = proj["id"]
         defaults = _resolve_issue_defaults(client, project_id, actual_session_id)
 
-        payload: Dict[str, Any] = {
-            "project": project_id,
-            "subject": subject,
-            "priority": defaults["priority"],
-            "severity": defaults["severity"],
-            "type": defaults["type"],
-        }
+        payload: Dict[str, Any] = {"project": project_id, "subject": subject}
+        # Apply project defaults only when the project actually has them configured.
+        # Sending None would produce a 400 from Taiga.
+        for field in ("priority", "severity", "type"):
+            if defaults.get(field) is not None:
+                payload[field] = defaults[field]
+
         if description:
             payload["description"] = description
         if tags:
@@ -832,12 +911,12 @@ def create_issue(
         if assignee:
             payload["assigned_to"] = _resolve_user(client, project_id, assignee, actual_session_id)
 
-        # Resolve default status (first issue status)
-        cache = _session_cache_for(actual_session_id)
-        cache_key = f"statuses_issue_{project_id}"
-        if cache_key not in cache:
-            cache[cache_key] = client.list_resources("issue_statuses", project_id=project_id)
-        statuses = cache[cache_key]
+        # Default status = first configured issue status, when available.
+        statuses = _cached(
+            actual_session_id,
+            f"statuses_issue_{project_id}",
+            lambda: client.list_resources("issue_statuses", project_id=project_id),
+        )
         if statuses:
             payload["status"] = statuses[0]["id"]
 
@@ -1047,14 +1126,8 @@ def plan_sprint(
 
         stories_moved = 0
         if story_refs:
-            # Resolve refs to IDs
-            bulk_stories = []
-            for i, ref in enumerate(story_refs):
-                us = client.api.user_stories.get_by_ref(ref=ref, project=project_id)
-                if not us:
-                    raise ValueError(f"User story #{ref} not found.")
-                bulk_stories.append({"us_id": us["id"], "order": i})
-
+            us_ids = _resolve_story_refs(client, project_id, story_refs)
+            bulk_stories = [{"us_id": uid, "order": i} for i, uid in enumerate(us_ids)]
             client.api.post(
                 "/userstories/bulk_update_milestone",
                 json={
@@ -1101,12 +1174,8 @@ def move_to_sprint(
         project_id = proj["id"]
         milestone = _resolve_sprint(client, project_id, sprint)
 
-        bulk_stories = []
-        for i, ref in enumerate(story_refs):
-            us = client.api.user_stories.get_by_ref(ref=ref, project=project_id)
-            if not us:
-                raise ValueError(f"User story #{ref} not found.")
-            bulk_stories.append({"us_id": us["id"], "order": i})
+        us_ids = _resolve_story_refs(client, project_id, story_refs)
+        bulk_stories = [{"us_id": uid, "order": i} for i, uid in enumerate(us_ids)]
 
         client.api.post(
             "/userstories/bulk_update_milestone",
@@ -1224,18 +1293,16 @@ def get_epic_overview(
         if not epic:
             raise ValueError(f"Epic #{ref} not found in project '{proj['slug']}'.")
 
-        related = client.api.get(f"/epics/{epic['id']}/related_userstories")
-        us_ids = [r["user_story"] for r in (related or [])]
+        # Single batched call instead of one /user_stories/<id> per linked story.
+        linked_stories = client.list_resources(
+            "user_stories", project_id=project_id, epic=epic["id"]
+        )
 
-        stories = []
+        stories = [_story_summary(s) for s in linked_stories]
         by_status: Dict[str, int] = {}
-        for us_id in us_ids:
-            us = client.api.user_stories.get(us_id)
-            if us:
-                summary = _story_summary(us)
-                stories.append(summary)
-                sname = summary.get("status") or "Unknown"
-                by_status[sname] = by_status.get(sname, 0) + 1
+        for s in stories:
+            sname = s.get("status") or "Unknown"
+            by_status[sname] = by_status.get(sname, 0) + 1
 
         return {
             "epic": {
@@ -1292,12 +1359,7 @@ def create_epic(
 
         linked = 0
         if story_refs:
-            us_ids = []
-            for ref in story_refs:
-                us = client.api.user_stories.get_by_ref(ref=ref, project=project_id)
-                if not us:
-                    raise ValueError(f"User story #{ref} not found.")
-                us_ids.append(us["id"])
+            us_ids = _resolve_story_refs(client, project_id, story_refs)
             client.api.post(
                 f"/epics/{epic_id}/related_userstories/bulk_create",
                 json={"project_id": project_id, "bulk_userstories": us_ids},

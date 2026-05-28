@@ -42,7 +42,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run unit tests
-        run: uv run pytest tests/test_server.py -v --tb=short
+        run: uv run pytest tests/test_server.py tests/test_server_workflow.py tests/test_transport.py -v --tb=short
 
   lint:
     runs-on: ubuntu-latest

@@ -400,3 +400,118 @@ class TestUpsertWiki:
         mock_client.api.wiki.edit.return_value = {"id": 9, "slug": "my-page"}
         result = wf.upsert_wiki("p", "my-page", "Updated content", session_id=session)
         assert result["status"] == "updated"
+
+
+# ---------------------------------------------------------------------------
+# Bug fixes from PR #72 review
+# ---------------------------------------------------------------------------
+
+
+class TestSessionStatusParity:
+    def test_returns_session_id_when_token_invalid(self, session, mock_client):
+        from pytaigaclient.exceptions import TaigaException
+
+        mock_client.api.users.get_me.side_effect = TaigaException("token expired")
+        result = wf.session_status(session_id=session)
+        assert result["status"] == "inactive"
+        assert result["reason"] == "token_invalid"
+        assert result["session_id"] == session
+
+    def test_returns_not_authenticated_when_client_unauthed(self):
+        client = MagicMock()
+        client.is_authenticated = False
+        sid = str(uuid.uuid4())
+        wf.active_sessions[sid] = client
+        result = wf.session_status(session_id=sid)
+        assert result["status"] == "inactive"
+        assert result["reason"] == "not_authenticated"
+        assert result["session_id"] == sid
+
+
+class TestResolveStoryRefs:
+    def test_batches_to_single_list_call(self, mock_client):
+        mock_client.list_resources.return_value = [
+            {"id": 100, "ref": 1},
+            {"id": 200, "ref": 2},
+            {"id": 300, "ref": 3},
+        ]
+        ids = wf._resolve_story_refs(mock_client, 99, [3, 1, 2])
+        assert ids == [300, 100, 200]
+        mock_client.list_resources.assert_called_once_with("user_stories", project_id=99)
+
+    def test_empty_input_no_api_call(self, mock_client):
+        assert wf._resolve_story_refs(mock_client, 99, []) == []
+        mock_client.list_resources.assert_not_called()
+
+    def test_missing_refs_listed_in_error(self, mock_client):
+        mock_client.list_resources.return_value = [{"id": 100, "ref": 1}]
+        with pytest.raises(ValueError, match=r"\[2, 5\]"):
+            wf._resolve_story_refs(mock_client, 99, [1, 2, 5])
+
+
+class TestCreateIssueNoneDefaultsGuard:
+    def test_omits_priority_severity_type_when_project_has_none(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        # Project with no priorities/severities/types configured.
+        def list_resources_stub(resource, project_id=None, **_kwargs):
+            return {
+                "priorities": [],
+                "severities": [],
+                "issue_types": [],
+                "issue_statuses": [{"id": 7, "name": "New"}],
+            }[resource]
+
+        mock_client.list_resources.side_effect = list_resources_stub
+        mock_client.api.issues.create.return_value = {
+            "id": 1,
+            "ref": 9,
+            "subject": "Bug",
+        }
+
+        wf.create_issue("p", "Bug", session_id=session)
+        kwargs = mock_client.api.issues.create.call_args.kwargs
+        # No None values should be sent to the API.
+        assert "priority" not in kwargs
+        assert "severity" not in kwargs
+        assert "type" not in kwargs
+        # Default status is still wired up.
+        assert kwargs["status"] == 7
+
+
+class TestGetEpicOverviewBatched:
+    def test_single_list_call_no_per_story_fetch(self, session, mock_client):
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "p", "name": "P"},  # _resolve_project
+            {"id": 50, "ref": 4, "subject": "E"},  # /epics/by_ref
+        ]
+        mock_client.list_resources.return_value = [
+            {
+                "id": 100,
+                "ref": 1,
+                "subject": "Story A",
+                "status_extra_info": {"name": "Done"},
+                "assigned_to_extra_info": None,
+                "milestone_extra_info": None,
+                "is_blocked": False,
+                "is_closed": True,
+                "tags": [],
+            },
+            {
+                "id": 101,
+                "ref": 2,
+                "subject": "Story B",
+                "status_extra_info": {"name": "Done"},
+                "assigned_to_extra_info": None,
+                "milestone_extra_info": None,
+                "is_blocked": False,
+                "is_closed": True,
+                "tags": [],
+            },
+        ]
+        result = wf.get_epic_overview("p", 4, session_id=session)
+        assert result["summary"]["total_stories"] == 2
+        assert result["summary"]["stories_by_status"] == {"Done": 2}
+        # One list call, zero per-story user_stories.get() calls.
+        mock_client.list_resources.assert_called_once_with("user_stories", project_id=1, epic=50)
+        mock_client.api.user_stories.get.assert_not_called()
