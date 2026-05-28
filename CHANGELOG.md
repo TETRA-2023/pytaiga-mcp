@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v1.16.0 (2026-05-28)
+
+### Bug Fixes
+
+- Address PR #72 review — Docker args, CI coverage, N+1, edge cases
+  ([`61171da`](https://github.com/TETRA-2023/pytaiga-mcp/commit/61171da01d26f28f37512897260cbe9d9e6000a3))
+
+- Update_story epic relink — fix dict iteration + lookup-before-mutate
+  ([`7be879f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7be879f7b0cfcacd056f75ffe559a2e7968ea00a))
+
+### Documentation
+
+- Update README for v2.0 two-mode architecture (workflow/full)
+  ([`cabe072`](https://github.com/TETRA-2023/pytaiga-mcp/commit/cabe072e78c64d3922e5beb27cfe4072a6f9d4a8))
+
+### Features
+
+- Add workflow mode — intent-based server with 23 high-level tools (v2.0.0)
+  ([`8ccba51`](https://github.com/TETRA-2023/pytaiga-mcp/commit/8ccba5150c59d3ee21286e0319bf7928cc884ec6))
+
+### Refactoring
+
+- Rename server.py → server_full.py, update all imports
+  ([`cd9ffac`](https://github.com/TETRA-2023/pytaiga-mcp/commit/cd9fface03ef34077517792ede33f57128b7586f))
+
+
 ## v1.15.3 (2026-05-09)
 
 ### Bug Fixes
