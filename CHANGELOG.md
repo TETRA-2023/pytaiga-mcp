@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.17.1 (2026-06-02)
+
+### Bug Fixes
+
+- Bypass tasks.get_by_ref in workflow mode (query_params kwarg bug)
+  ([#77](https://github.com/TETRA-2023/pytaiga-mcp/pull/77),
+  [`74c6811`](https://github.com/TETRA-2023/pytaiga-mcp/commit/74c6811d3b766c6de013e9abbd26b9711282a2a6))
+
+### Chores
+
+- **deps**: Bump idna from 3.11 to 3.15 ([#74](https://github.com/TETRA-2023/pytaiga-mcp/pull/74),
+  [`2253513`](https://github.com/TETRA-2023/pytaiga-mcp/commit/2253513a9465a296b0543ff485c764d70e71edbb))
+
+- **deps**: Bump urllib3 from 2.6.3 to 2.7.0
+  ([#75](https://github.com/TETRA-2023/pytaiga-mcp/pull/75),
+  [`9296d81`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9296d81d322c88a81c5aaf7855807df0f0fa72d3))
+
+
 ## v1.17.0 (2026-05-28)
 
 ### Bug Fixes
