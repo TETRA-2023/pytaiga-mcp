@@ -990,7 +990,9 @@ def update_task(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.tasks.get_by_ref(ref=ref, project=project_id)
+        # Workaround: pytaigaclient tasks.get_by_ref passes query_params= but
+        # TaigaClient.get() expects params=. Bypass via direct API call.
+        current = client.api.get("/tasks/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
@@ -1538,7 +1540,9 @@ def set_task_status(
         project_id = proj["id"]
         status_id = _resolve_status(client, project_id, "task", status, actual_session_id)
 
-        current = client.api.tasks.get_by_ref(ref=ref, project=project_id)
+        # Workaround: pytaigaclient tasks.get_by_ref passes query_params= but
+        # TaigaClient.get() expects params=. Bypass via direct API call.
+        current = client.api.get("/tasks/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 

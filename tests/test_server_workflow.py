@@ -669,9 +669,14 @@ class TestUpdateTask:
     def _task(self):
         return {"id": 200, "ref": 7, "subject": "T", "version": 3, "user_story": 50}
 
+    def _api_get(self, path, params=None):
+        """Side-effect for api.get: route /tasks/by_ref to task fixture, everything else to project."""
+        if "/tasks/by_ref" in str(path):
+            return self._task()
+        return self._project()
+
     def test_resolves_status_by_name(self, session, mock_client):
-        mock_client.api.get.return_value = self._project()
-        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        mock_client.api.get.side_effect = self._api_get
         mock_client.list_resources.return_value = [{"id": 12, "name": "Done"}]
         mock_client.api.tasks.edit.return_value = {
             "ref": 7,
@@ -686,9 +691,8 @@ class TestUpdateTask:
         assert kwargs["version"] == 3
 
     def test_reparent_resolves_story_ref(self, session, mock_client):
-        mock_client.api.get.return_value = self._project()
-        mock_client.api.tasks.get_by_ref.return_value = self._task()
-        # Subsequent get_by_ref call resolves the NEW parent story.
+        mock_client.api.get.side_effect = self._api_get
+        # user_stories.get_by_ref is unaffected by the bug — mock it directly.
         mock_client.api.user_stories.get_by_ref.return_value = {"id": 99, "ref": 44}
         mock_client.api.tasks.edit.return_value = {
             "ref": 7,
@@ -702,8 +706,7 @@ class TestUpdateTask:
         assert kwargs["user_story"] == 99
 
     def test_sprint_move_supported(self, session, mock_client):
-        mock_client.api.get.return_value = self._project()
-        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        mock_client.api.get.side_effect = self._api_get
         mock_client.list_resources.return_value = [{"id": 33, "name": "Sprint 2", "closed": False}]
         mock_client.api.tasks.edit.return_value = {
             "ref": 7,
@@ -717,17 +720,23 @@ class TestUpdateTask:
         assert kwargs["milestone"] == 33
 
     def test_no_op_raises(self, session, mock_client):
-        mock_client.api.get.return_value = self._project()
-        mock_client.api.tasks.get_by_ref.return_value = self._task()
+        mock_client.api.get.side_effect = self._api_get
         with pytest.raises(ValueError, match="No fields to update"):
             wf.update_task("p", 7, session_id=session)
 
 
 class TestSetTaskStatus:
     def test_resolves_and_updates(self, session, mock_client):
-        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        project = {"id": 1, "slug": "p", "name": "P"}
+        task = {"id": 200, "ref": 7, "version": 2}
+
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return task
+            return project
+
+        mock_client.api.get.side_effect = api_get
         mock_client.list_resources.return_value = [{"id": 99, "name": "Done"}]
-        mock_client.api.tasks.get_by_ref.return_value = {"id": 200, "ref": 7, "version": 2}
         mock_client.api.tasks.edit.return_value = {
             "ref": 7,
             "status_extra_info": {"name": "Done"},
