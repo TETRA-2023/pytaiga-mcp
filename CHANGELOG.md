@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-06-05)
+
+### Bug Fixes
+
+- Correct empty event_type entity guard; expand activity tests
+  ([#82](https://github.com/TETRA-2023/pytaiga-mcp/pull/82),
+  [`b7ef2ad`](https://github.com/TETRA-2023/pytaiga-mcp/commit/b7ef2adc0b31db19ee0806d414021b72a9a6dbdc))
+
+### Features
+
+- Add get_project_activity workflow tool ([#82](https://github.com/TETRA-2023/pytaiga-mcp/pull/82),
+  [`b7ef2ad`](https://github.com/TETRA-2023/pytaiga-mcp/commit/b7ef2adc0b31db19ee0806d414021b72a9a6dbdc))
+
+
 ## v1.18.0 (2026-06-05)
 
 ### Features
