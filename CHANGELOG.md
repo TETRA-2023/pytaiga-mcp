@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.20.0 (2026-06-05)
+
+### Features
+
+- Add get_current_user workflow tool (#21)
+  ([#83](https://github.com/TETRA-2023/pytaiga-mcp/pull/83),
+  [`1c319b8`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1c319b85aa2919b776737459faa467c10b4ae0ae))
+
+
 ## v1.19.0 (2026-06-05)
 
 ### Bug Fixes
