@@ -32,7 +32,7 @@ The bridge ships two servers in a single image. Select one at runtime via the `T
 
 | Mode | Tools | Best for |
 |---|---|---|
-| `workflow` (default) | ~28 intent tools | Product Owners and team members managing projects daily |
+| `workflow` (default) | ~31 intent tools | Product Owners and team members managing projects daily |
 | `full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
 **Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
@@ -51,13 +51,15 @@ TAIGA_SERVER_MODE=full ./run.sh
 
 ## Features
 
-### Workflow mode tools (~28)
+### Workflow mode tools (~31)
 
 Intent-based tools that resolve names and composite API calls:
 
 | Tool | What it does |
 |---|---|
 | `get_project_overview` | Project snapshot: team, active sprint, story counts by status |
+| `get_project_health` | Sprint velocity, burndown progress, and stale-item flags in one call |
+| `get_project_activity` | Recent activity feed — who did what to which entity and when |
 | `browse_backlog` | Filtered backlog view with name-based filters (status, assignee, epic) |
 | `create_story` | Create US with optional epic link, sprint, assignee — one call |
 | `update_story` | Update any US field by name (status, assignee, sprint, epic) |
@@ -79,6 +81,8 @@ Intent-based tools that resolve names and composite API calls:
 | `get_wiki` / `upsert_wiki` | Get or create/update wiki pages |
 | `add_comment` | Comment on any entity by ref |
 | `search` | Full-text search across all entity types |
+| `get_current_user` | Return authenticated user identity — resolves "me" for assign/filter calls |
+| `session_status` | Check whether the current session is authenticated and active |
 
 ### Full mode tools (107+)
 
@@ -271,21 +275,21 @@ Paste the following json in your Claude App's or Cursor's mcp settings section.
 ```json
 {
     "mcpServers": {
-        "taigaApi": {
+        "taiga": {
             "command": "uv",
             "args": [
                 "--directory",
-                "<path to local pyTaigaMCP folder>",
+                "<path to local pytaiga-mcp folder>",
                 "run",
-                "src/server.py"
+                "src/server_workflow.py"
             ],
             "env": {
-                "TAIGA_TRANSPORT": "<stdio|sse>",                
-                "TAIGA_API_URL": "<Taiga API Url (ex: http://localhost:9000)",
+                "TAIGA_API_URL": "<Taiga API URL, e.g. https://taiga.example.com>",
                 "TAIGA_USERNAME": "<taiga username>",
                 "TAIGA_PASSWORD": "<taiga password>"
             }
         }
+    }
 }
 ```
 
@@ -304,11 +308,14 @@ Start the MCP server with:
 Or manually:
 
 ```bash
-# For stdio transport (default)
-uv run python src/server.py
+# Workflow mode, stdio (default)
+uv run python src/server_workflow.py
 
-# For SSE transport
-uv run python src/server.py --sse
+# Full mode, stdio
+uv run python src/server_full.py
+
+# SSE transport (either server)
+uv run python src/server_workflow.py --sse
 ```
 
 ### Transport Modes
@@ -320,7 +327,7 @@ The server supports three transport modes:
 3. **Streamable HTTP** - HTTP-based transport for stateless deployments
 
 You can set the transport mode in several ways:
-- Using `--sse` or `--streamable-http` flags with run.sh or server.py (default is stdio)
+- Using `--sse` or `--streamable-http` flags with `run.sh` or the server scripts directly (default is stdio)
 - Setting the `TAIGA_TRANSPORT` environment variable
 - Adding `TAIGA_TRANSPORT=sse` or `TAIGA_TRANSPORT=streamable-http` to your `.env` file
 
@@ -437,12 +444,14 @@ client.call_tool("logout", {"session_id": session_id})
 ```
 pytaiga-mcp/
 ├── src/
-│   ├── server.py          # MCP server implementation with tools
-│   ├── taiga_client.py    # Taiga API client wrapper
-│   └── config.py          # Configuration settings with Pydantic
+│   ├── server_workflow.py  # Workflow/intent tools (~31) — default mode
+│   ├── server_full.py      # Full CRUD tools (107) — full mode
+│   ├── taiga_client.py     # Taiga API client wrapper
+│   └── config.py           # Configuration settings with Pydantic
 ├── tests/
-│   ├── test_server.py     # Unit tests
-│   └── test_integration.py # Integration tests
+│   ├── test_server.py           # Full server unit tests
+│   ├── test_server_workflow.py  # Workflow server unit tests
+│   └── test_integration.py      # Integration tests (needs running Taiga)
 ├── .github/workflows/
 │   └── ci.yml             # CI pipeline (test, lint, Docker, release)
 ├── .pre-commit-config.yaml # Pre-commit hooks (ruff, pytest)
@@ -461,11 +470,15 @@ Pre-commit hooks run automatically on each commit (ruff lint, ruff format, unit 
 # Run pre-commit hooks on all files
 uv run pre-commit run --all-files
 
-# Run tests directly
-uv run pytest tests/test_server.py -v --tb=short
+# Run unit tests (full + workflow servers)
+./run_unit_tests.sh
 
-# Run with coverage reporting
-uv run pytest --cov=src
+# Run a specific suite
+uv run pytest tests/test_server_workflow.py -v
+uv run pytest tests/test_server.py -v
+
+# Integration tests (requires a running Taiga instance)
+uv run pytest tests/test_integration.py -v -m integration
 ```
 
 ### Debugging and Inspection
