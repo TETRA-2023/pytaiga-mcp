@@ -1977,7 +1977,7 @@ def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """Distil a raw Taiga timeline event into a readable summary dict."""
     event_type = event.get("event_type", "")
     parts = event_type.split(".")
-    entity = _TIMELINE_ENTITY_MAP.get(parts[0], parts[0]) if parts else "unknown"
+    entity = _TIMELINE_ENTITY_MAP.get(parts[0], parts[0]) if parts[0] else "unknown"
     action = parts[-1] if len(parts) >= 2 else "unknown"
 
     data = event.get("data") or {}

@@ -1221,3 +1221,31 @@ class TestGetProjectActivity:
         result = wf.get_project_activity("p", session_id=session)
         assert result["events"] == []
         assert result["count"] == 0
+
+    def test_actor_falls_back_to_username(self, session, mock_client):
+        event = self._event()
+        event["data"]["user"] = {"username": "bob"}
+        self._setup(mock_client, [event])
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["actor"] == "bob"
+
+    def test_actor_unknown_when_no_user_info(self, session, mock_client):
+        event = self._event()
+        event["data"]["user"] = {}
+        self._setup(mock_client, [event])
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["actor"] == "unknown"
+
+    def test_when_and_object_id_propagated(self, session, mock_client):
+        events = [self._event()]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["when"] == "2026-06-05T10:00:00Z"
+        assert result["events"][0]["object_id"] == 42
+
+    def test_empty_event_type_yields_unknown_entity(self, session, mock_client):
+        event = self._event(event_type="")
+        self._setup(mock_client, [event])
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["entity"] == "unknown"
+        assert result["events"][0]["action"] == "unknown"
