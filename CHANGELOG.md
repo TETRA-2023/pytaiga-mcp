@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.17.2 (2026-06-05)
+
+### Bug Fixes
+
+- Bypass Tasks/Issues fixed-signature edit() and tasks.get_by_ref query_params bug
+  ([#80](https://github.com/TETRA-2023/pytaiga-mcp/pull/80),
+  [`4bffe37`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4bffe37f4b208f786946748dd7092325fc924a6e))
+
+### Testing
+
+- Add coverage for task/issue direct-PATCH paths and get_by_ref bypass
+  ([#80](https://github.com/TETRA-2023/pytaiga-mcp/pull/80),
+  [`4bffe37`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4bffe37f4b208f786946748dd7092325fc924a6e))
+
+- Remove dead _api_get from TestUpdateIssue
+  ([#80](https://github.com/TETRA-2023/pytaiga-mcp/pull/80),
+  [`4bffe37`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4bffe37f4b208f786946748dd7092325fc924a6e))
+
+
 ## v1.17.1 (2026-06-02)
 
 ### Bug Fixes
