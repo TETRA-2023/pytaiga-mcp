@@ -1249,3 +1249,58 @@ class TestGetProjectActivity:
         result = wf.get_project_activity("p", session_id=session)
         assert result["events"][0]["entity"] == "unknown"
         assert result["events"][0]["action"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# get_current_user
+# ---------------------------------------------------------------------------
+
+
+class TestGetCurrentUser:
+    def _me(self):
+        return {
+            "id": 42,
+            "username": "rva",
+            "full_name_display": "Romain V",
+            "full_name": "Romain Valtier",
+            "email": "rva@tetra-ai.com",
+            "bio": "Platform lead",
+            "photo": "https://cdn.example.com/rva.jpg",
+        }
+
+    def test_returns_identity_fields(self, session, mock_client):
+        mock_client.api.users.get_me.return_value = self._me()
+        result = wf.get_current_user(session_id=session)
+        assert result["id"] == 42
+        assert result["username"] == "rva"
+        assert result["full_name"] == "Romain V"
+        assert result["email"] == "rva@tetra-ai.com"
+
+    def test_prefers_full_name_display(self, session, mock_client):
+        me = self._me()
+        me["full_name_display"] = "Display Name"
+        me["full_name"] = "Other Name"
+        mock_client.api.users.get_me.return_value = me
+        result = wf.get_current_user(session_id=session)
+        assert result["full_name"] == "Display Name"
+
+    def test_falls_back_to_full_name(self, session, mock_client):
+        me = self._me()
+        me["full_name_display"] = None
+        mock_client.api.users.get_me.return_value = me
+        result = wf.get_current_user(session_id=session)
+        assert result["full_name"] == "Romain Valtier"
+
+    def test_optional_fields_none_when_missing(self, session, mock_client):
+        mock_client.api.users.get_me.return_value = {
+            "id": 1,
+            "username": "x",
+            "email": "x@example.com",
+        }
+        result = wf.get_current_user(session_id=session)
+        assert result["bio"] is None
+        assert result["photo"] is None
+
+    def test_unauthenticated_raises(self):
+        with pytest.raises((ValueError, PermissionError)):
+            wf.get_current_user(session_id="nonexistent")

@@ -540,6 +540,32 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
     return {"status": "inactive", "reason": "not_found", "session_id": actual_session_id}
 
 
+@mcp.tool(
+    "get_current_user",
+    description=(
+        "Return the identity of the authenticated user for this session. "
+        "Useful when the agent needs to resolve 'me' — e.g. 'assign this to me' or 'show my tasks'. "
+        "Returns username, display name, email, and user ID."
+    ),
+)
+def get_current_user(session_id: Optional[str] = None) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_get_me():
+        me = client.api.users.get_me()
+        return {
+            "id": me.get("id"),
+            "username": me.get("username"),
+            "full_name": me.get("full_name_display") or me.get("full_name"),
+            "email": me.get("email"),
+            "bio": me.get("bio") or None,
+            "photo": me.get("photo") or None,
+        }
+
+    return _execute_taiga_operation("get_current_user", do_get_me)
+
+
 # ---------------------------------------------------------------------------
 # Discovery tools
 # ---------------------------------------------------------------------------
