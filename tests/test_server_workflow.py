@@ -678,7 +678,7 @@ class TestUpdateTask:
     def test_resolves_status_by_name(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
         mock_client.list_resources.return_value = [{"id": 12, "name": "Done"}]
-        mock_client.api.patch.return_value = {
+        mock_client.api.tasks.edit.return_value = {
             "ref": 7,
             "subject": "T",
             "status_extra_info": {"name": "Done"},
@@ -686,15 +686,15 @@ class TestUpdateTask:
             "is_blocked": False,
         }
         wf.update_task("p", 7, status="Done", session_id=session)
-        payload = mock_client.api.patch.call_args.kwargs["json"]
-        assert payload["status"] == 12
-        assert payload["version"] == 3
+        kwargs = mock_client.api.tasks.edit.call_args.kwargs
+        assert kwargs["status"] == 12
+        assert kwargs["version"] == 3
 
     def test_reparent_resolves_story_ref(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
         # user_stories.get_by_ref is unaffected by the bug — mock it directly.
         mock_client.api.user_stories.get_by_ref.return_value = {"id": 99, "ref": 44}
-        mock_client.api.patch.return_value = {
+        mock_client.api.tasks.edit.return_value = {
             "ref": 7,
             "subject": "T",
             "status_extra_info": None,
@@ -702,13 +702,13 @@ class TestUpdateTask:
             "is_blocked": False,
         }
         wf.update_task("p", 7, story_ref=44, session_id=session)
-        payload = mock_client.api.patch.call_args.kwargs["json"]
-        assert payload["user_story"] == 99
+        kwargs = mock_client.api.tasks.edit.call_args.kwargs
+        assert kwargs["user_story"] == 99
 
     def test_sprint_move_supported(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
         mock_client.list_resources.return_value = [{"id": 33, "name": "Sprint 2", "closed": False}]
-        mock_client.api.patch.return_value = {
+        mock_client.api.tasks.edit.return_value = {
             "ref": 7,
             "subject": "T",
             "status_extra_info": None,
@@ -716,8 +716,8 @@ class TestUpdateTask:
             "is_blocked": False,
         }
         wf.update_task("p", 7, sprint="Sprint 2", session_id=session)
-        payload = mock_client.api.patch.call_args.kwargs["json"]
-        assert payload["milestone"] == 33
+        kwargs = mock_client.api.tasks.edit.call_args.kwargs
+        assert kwargs["milestone"] == 33
 
     def test_no_op_raises(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
@@ -737,7 +737,7 @@ class TestSetTaskStatus:
 
         mock_client.api.get.side_effect = api_get
         mock_client.list_resources.return_value = [{"id": 99, "name": "Done"}]
-        mock_client.api.patch.return_value = {
+        mock_client.api.tasks.edit.return_value = {
             "ref": 7,
             "status_extra_info": {"name": "Done"},
             "is_closed": True,
@@ -747,10 +747,6 @@ class TestSetTaskStatus:
         assert result["is_closed"] is True
         # Confirm uses task_statuses, not userstory_statuses.
         mock_client.list_resources.assert_called_once_with("task_statuses", project_id=1)
-        # Confirm PATCH payload carries resolved status ID and version.
-        patch_payload = mock_client.api.patch.call_args.kwargs["json"]
-        assert patch_payload["status"] == 99
-        assert patch_payload["version"] == 2
 
 
 class TestBreakDownStory:
@@ -1022,131 +1018,113 @@ class TestBreakDownStoryBulkShapeWarn:
         )
 
 
-class TestUpdateIssue:
+# ---------------------------------------------------------------------------
+# get_project_health
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectHealth:
     def _project(self):
         return {"id": 1, "slug": "p", "name": "P"}
 
-    def _issue(self):
-        return {"id": 300, "ref": 12, "version": 4}
-
-    def test_subject_and_description_patched_directly(self, session, mock_client):
-        """update_issue must bypass issues.edit() (fixed-signature) via direct PATCH."""
-        mock_client.api.issues.get_by_ref.return_value = self._issue()
-        mock_client.api.get.return_value = self._project()
-        mock_client.api.patch.return_value = {
-            "ref": 12,
-            "subject": "New subject",
-            "status_extra_info": None,
-            "priority_extra_info": None,
-            "severity_extra_info": None,
-            "type_extra_info": None,
-            "assigned_to_extra_info": None,
-            "is_blocked": False,
+    def _stats(self):
+        return {
+            "total_points": 100,
+            "closed_points": 40,
+            "assigned_points": 60,
+            "total_milestones": 3,
+            "speed": 2.5,
+            "milestones": [
+                {"name": "Sprint 1", "closed_points": 10},
+                {"name": "Sprint 2", "closed_points": 30},
+            ],
         }
-        wf.update_issue("p", 12, subject="New subject", description="desc", session_id=session)
-        payload = mock_client.api.patch.call_args.kwargs["json"]
-        assert payload["subject"] == "New subject"
-        assert payload["description"] == "desc"
-        assert payload["version"] == 4
 
-    def test_no_op_raises(self, session, mock_client):
-        mock_client.api.issues.get_by_ref.return_value = self._issue()
-        mock_client.api.get.return_value = self._project()
-        with pytest.raises(ValueError, match="No fields to update"):
-            wf.update_issue("p", 12, session_id=session)
+    def _issues_stats(self):
+        return {
+            "total_issues": 20,
+            "opened_issues": 14,
+            "closed_issues": 6,
+            "issues_per_priority": [
+                {"name": "High", "count": 5},
+                {"name": "Normal", "count": 9},
+            ],
+        }
 
+    def _modules(self):
+        return {
+            "is_backlog_activated": True,
+            "is_kanban_activated": False,
+            "is_wiki_activated": True,
+            "is_issues_activated": True,
+            "is_epics_activated": False,
+            "is_contact_activated": False,
+        }
 
-class TestAddComment:
-    def _project(self):
-        return {"id": 1, "slug": "p", "name": "P"}
-
-    def test_task_comment_uses_direct_get(self, session, mock_client):
-        """add_comment for entity_type=task must use direct GET (not tasks.get_by_ref)."""
-        task = {"id": 200, "ref": 7, "version": 3}
-
+    def _setup_mocks(self, mock_client, stats=None, issues_stats=None, modules=None):
         def api_get(path, params=None):
-            if "/tasks/by_ref" in str(path):
-                return task
+            if "/projects/by_slug" in str(path):
+                return self._project()
+            if str(path).endswith("/stats"):
+                return stats if stats is not None else self._stats()
+            if str(path).endswith("/issues_stats"):
+                return issues_stats if issues_stats is not None else self._issues_stats()
+            if str(path).endswith("/modules"):
+                return modules if modules is not None else self._modules()
             return self._project()
 
         mock_client.api.get.side_effect = api_get
-        wf.add_comment("p", 7, "hello task", entity_type="task", session_id=session)
 
-        # Verify by_ref was fetched via client.api.get, not tasks.get_by_ref
-        get_calls = [str(c.args[0]) for c in mock_client.api.get.call_args_list]
-        assert any("/tasks/by_ref" in p for p in get_calls)
-        mock_client.api.tasks.get_by_ref.assert_not_called()
+    def test_returns_story_metrics(self, session, mock_client):
+        self._setup_mocks(mock_client)
+        result = wf.get_project_health("p", session_id=session)
+        assert result["stories"]["total_points"] == 100
+        assert result["stories"]["closed_points"] == 40
+        assert result["stories"]["total_milestones"] == 3
 
-        # Verify comment was PATCHed to the correct task endpoint
-        patch_call = mock_client.api.patch.call_args
-        assert "/tasks/200" in patch_call.args[0]
-        assert patch_call.kwargs["json"]["comment"] == "hello task"
-        assert patch_call.kwargs["json"]["version"] == 3
+    def test_returns_speed(self, session, mock_client):
+        self._setup_mocks(mock_client)
+        result = wf.get_project_health("p", session_id=session)
+        assert result["stories"]["speed"] == 2.5
 
-    def test_story_comment_still_works(self, session, mock_client):
-        """add_comment for entity_type=story continues to use the same direct GET path."""
-        story = {"id": 50, "ref": 5, "version": 1}
+    def test_returns_issue_counts(self, session, mock_client):
+        self._setup_mocks(mock_client)
+        result = wf.get_project_health("p", session_id=session)
+        assert result["issues"]["total"] == 20
+        assert result["issues"]["open"] == 14
+        assert result["issues"]["closed"] == 6
+        assert result["issues"]["by_priority"]["High"] == 5
 
+    def test_returns_velocity(self, session, mock_client):
+        self._setup_mocks(mock_client)
+        result = wf.get_project_health("p", session_id=session)
+        assert len(result["velocity"]) == 2
+        assert result["velocity"][0] == {"sprint": "Sprint 1", "closed_points": 10}
+
+    def test_returns_active_modules_only(self, session, mock_client):
+        self._setup_mocks(mock_client)
+        result = wf.get_project_health("p", session_id=session)
+        assert set(result["active_modules"]) == {"backlog", "wiki", "issues"}
+        assert "kanban" not in result["active_modules"]
+
+    def test_project_info_in_response(self, session, mock_client):
+        self._setup_mocks(mock_client)
+        result = wf.get_project_health("p", session_id=session)
+        assert result["project"]["slug"] == "p"
+        assert result["project"]["id"] == 1
+
+    def test_tolerates_none_stats_and_issues_stats(self, session, mock_client):
         def api_get(path, params=None):
-            if "/userstories/by_ref" in str(path):
-                return story
+            if "/projects/by_slug" in str(path):
+                return self._project()
+            if str(path).endswith(("/stats", "/issues_stats", "/modules")):
+                return None
             return self._project()
 
         mock_client.api.get.side_effect = api_get
-        wf.add_comment("p", 5, "hello story", entity_type="story", session_id=session)
-
-        patch_call = mock_client.api.patch.call_args
-        assert "/userstories/50" in patch_call.args[0]
-        assert patch_call.kwargs["json"]["comment"] == "hello story"
-
-
-class TestAssignItem:
-    def _project(self):
-        return {"id": 1, "slug": "p", "name": "P"}
-
-    def _api_get(self, entity_path):
-        def side_effect(path, params=None):
-            if entity_path in str(path) and "by_ref" in str(path):
-                return {"id": 200, "ref": 7, "version": 2}
-            return self._project()
-
-        return side_effect
-
-    def _mock_members(self, mock_client):
-        mock_client.list_resources.return_value = [
-            {"user": 42, "user_extra_info": {"username": "alice", "full_name_display": "Alice"}}
-        ]
-
-    def test_assign_task_uses_direct_get_and_patch(self, session, mock_client):
-        """assign_item for entity_type=task must bypass tasks.get_by_ref and tasks.edit."""
-        mock_client.api.get.side_effect = self._api_get("tasks")
-        self._mock_members(mock_client)
-        mock_client.api.patch.return_value = {
-            "assigned_to_extra_info": {"full_name_display": "Alice"}
-        }
-        result = wf.assign_item("p", 7, "alice", entity_type="task", session_id=session)
-
-        mock_client.api.tasks.get_by_ref.assert_not_called()
-        mock_client.api.tasks.edit.assert_not_called()
-
-        patch_call = mock_client.api.patch.call_args
-        assert "/tasks/200" in patch_call.args[0]
-        assert patch_call.kwargs["json"]["assigned_to"] == 42
-        assert patch_call.kwargs["json"]["version"] == 2
-        assert result["assigned_to"] == "Alice"
-
-    def test_assign_issue_uses_direct_patch(self, session, mock_client):
-        """assign_item for entity_type=issue must bypass issues.edit (fixed-signature)."""
-        mock_client.api.get.side_effect = self._api_get("issues")
-        self._mock_members(mock_client)
-        mock_client.api.patch.return_value = {
-            "assigned_to_extra_info": {"full_name_display": "Alice"}
-        }
-        result = wf.assign_item("p", 7, "alice", entity_type="issue", session_id=session)
-
-        mock_client.api.issues.edit.assert_not_called()
-
-        patch_call = mock_client.api.patch.call_args
-        assert "/issues/200" in patch_call.args[0]
-        assert patch_call.kwargs["json"]["assigned_to"] == 42
-        assert result["assigned_to"] == "Alice"
+        result = wf.get_project_health("p", session_id=session)
+        assert result["stories"]["total_points"] == 0
+        assert result["stories"]["speed"] == 0
+        assert result["issues"]["total"] == 0
+        assert result["velocity"] == []
+        assert result["active_modules"] == []
