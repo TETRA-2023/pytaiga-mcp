@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.18.0 (2026-06-05)
+
+### Features
+
+- Add get_project_health workflow tool (#19)
+  ([#81](https://github.com/TETRA-2023/pytaiga-mcp/pull/81),
+  [`f3c835e`](https://github.com/TETRA-2023/pytaiga-mcp/commit/f3c835ef23640cb280c44a99e7ece8864f2c62c9))
+
+
 ## v1.17.1 (2026-06-02)
 
 ### Bug Fixes
