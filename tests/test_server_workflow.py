@@ -678,7 +678,7 @@ class TestUpdateTask:
     def test_resolves_status_by_name(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
         mock_client.list_resources.return_value = [{"id": 12, "name": "Done"}]
-        mock_client.api.tasks.edit.return_value = {
+        mock_client.api.patch.return_value = {
             "ref": 7,
             "subject": "T",
             "status_extra_info": {"name": "Done"},
@@ -686,15 +686,15 @@ class TestUpdateTask:
             "is_blocked": False,
         }
         wf.update_task("p", 7, status="Done", session_id=session)
-        kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["status"] == 12
-        assert kwargs["version"] == 3
+        payload = mock_client.api.patch.call_args.kwargs["json"]
+        assert payload["status"] == 12
+        assert payload["version"] == 3
 
     def test_reparent_resolves_story_ref(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
         # user_stories.get_by_ref is unaffected by the bug — mock it directly.
         mock_client.api.user_stories.get_by_ref.return_value = {"id": 99, "ref": 44}
-        mock_client.api.tasks.edit.return_value = {
+        mock_client.api.patch.return_value = {
             "ref": 7,
             "subject": "T",
             "status_extra_info": None,
@@ -702,13 +702,13 @@ class TestUpdateTask:
             "is_blocked": False,
         }
         wf.update_task("p", 7, story_ref=44, session_id=session)
-        kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["user_story"] == 99
+        payload = mock_client.api.patch.call_args.kwargs["json"]
+        assert payload["user_story"] == 99
 
     def test_sprint_move_supported(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
         mock_client.list_resources.return_value = [{"id": 33, "name": "Sprint 2", "closed": False}]
-        mock_client.api.tasks.edit.return_value = {
+        mock_client.api.patch.return_value = {
             "ref": 7,
             "subject": "T",
             "status_extra_info": None,
@@ -716,8 +716,8 @@ class TestUpdateTask:
             "is_blocked": False,
         }
         wf.update_task("p", 7, sprint="Sprint 2", session_id=session)
-        kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["milestone"] == 33
+        payload = mock_client.api.patch.call_args.kwargs["json"]
+        assert payload["milestone"] == 33
 
     def test_no_op_raises(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
@@ -737,7 +737,7 @@ class TestSetTaskStatus:
 
         mock_client.api.get.side_effect = api_get
         mock_client.list_resources.return_value = [{"id": 99, "name": "Done"}]
-        mock_client.api.tasks.edit.return_value = {
+        mock_client.api.patch.return_value = {
             "ref": 7,
             "status_extra_info": {"name": "Done"},
             "is_closed": True,

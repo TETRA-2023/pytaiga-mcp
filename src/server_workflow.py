@@ -1023,7 +1023,7 @@ def update_task(
         if len(payload) == 1:  # only version key
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.tasks.edit(current["id"], **payload)
+        result = client.api.patch(f"/tasks/{current['id']}", json=payload)
         return _task_summary(result)
 
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
@@ -1285,7 +1285,7 @@ def update_issue(
         if len(payload) == 1:
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.issues.edit(current["id"], **payload)
+        result = client.api.patch(f"/issues/{current['id']}", json=payload)
         return {
             "ref": result.get("ref"),
             "subject": result.get("subject"),
@@ -1546,7 +1546,9 @@ def set_task_status(
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.tasks.edit(current["id"], status=status_id, version=current["version"])
+        result = client.api.patch(
+            f"/tasks/{current['id']}", json={"status": status_id, "version": current["version"]}
+        )
         return {
             "ref": ref,
             "status": (result.get("status_extra_info") or {}).get("name") or status,
@@ -1799,13 +1801,17 @@ def assign_item(
         project_id = proj["id"]
         user_id = _resolve_user(client, project_id, username, actual_session_id)
 
-        collection_name, _ = type_map[entity_type]
-        collection = getattr(client.api, collection_name)
-        current = collection.get_by_ref(ref=ref, project=project_id)
+        # Direct GET/PATCH avoids pytaigaclient query_params= bug (tasks) and
+        # fixed-signature edit() that rejects **kwargs (tasks, issues).
+        api_path = _COMMENT_PATH_MAP[entity_type]
+        current = client.api.get(f"/{api_path}/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
-        result = collection.edit(current["id"], assigned_to=user_id, version=current["version"])
+        result = client.api.patch(
+            f"/{api_path}/{current['id']}",
+            json={"assigned_to": user_id, "version": current["version"]},
+        )
         return {
             "ref": ref,
             "entity_type": entity_type,
@@ -1921,16 +1927,10 @@ def add_comment(
         project_id = proj["id"]
         path_segment = _COMMENT_PATH_MAP[entity_type]
 
-        # Resolve ref → ID
-        collection_name = {
-            "story": "user_stories",
-            "user_story": "user_stories",
-            "task": "tasks",
-            "issue": "issues",
-            "epic": "epics",
-        }[entity_type]
-        collection = getattr(client.api, collection_name)
-        current = collection.get_by_ref(ref=ref, project=project_id)
+        # Resolve ref → ID via direct GET (avoids pytaigaclient query_params= bug on tasks)
+        current = client.api.get(
+            f"/{path_segment}/by_ref", params={"ref": ref, "project": project_id}
+        )
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
