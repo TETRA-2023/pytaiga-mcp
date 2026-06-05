@@ -1029,11 +1029,6 @@ class TestUpdateIssue:
     def _issue(self):
         return {"id": 300, "ref": 12, "version": 4}
 
-    def _api_get(self, path, params=None):
-        if "/issues/by_ref" in str(path):
-            return self._issue()
-        return self._project()
-
     def test_subject_and_description_patched_directly(self, session, mock_client):
         """update_issue must bypass issues.edit() (fixed-signature) via direct PATCH."""
         mock_client.api.issues.get_by_ref.return_value = self._issue()
