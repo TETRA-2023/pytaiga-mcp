@@ -1128,3 +1128,124 @@ class TestGetProjectHealth:
         assert result["issues"]["total"] == 0
         assert result["velocity"] == []
         assert result["active_modules"] == []
+
+
+# ---------------------------------------------------------------------------
+# get_project_activity
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectActivity:
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def _event(
+        self, event_type="userstories.userstory.change", actor="Alice", fields=None, comment=""
+    ):
+        return {
+            "event_type": event_type,
+            "created": "2026-06-05T10:00:00Z",
+            "object_id": 42,
+            "data": {
+                "user": {"name": actor},
+                "values_diff": {f: ["old", "new"] for f in (fields or [])},
+                "comment": comment,
+            },
+        }
+
+    def _setup(self, mock_client, events):
+        def api_get(path, params=None):
+            if "/projects/by_slug" in str(path):
+                return self._project()
+            return events
+
+        mock_client.api.get.side_effect = api_get
+
+    def test_returns_events_list(self, session, mock_client):
+        events = [self._event(fields=["status"])]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["count"] == 1
+        assert result["events"][0]["entity"] == "user_story"
+        assert result["events"][0]["action"] == "change"
+        assert result["events"][0]["actor"] == "Alice"
+
+    def test_changed_fields_extracted(self, session, mock_client):
+        events = [self._event(fields=["status", "assigned_to"])]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert "status" in result["events"][0]["changed_fields"]
+        assert "assigned_to" in result["events"][0]["changed_fields"]
+
+    def test_comment_included(self, session, mock_client):
+        events = [self._event(comment="Great progress!")]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["comment"] == "Great progress!"
+
+    def test_comment_truncated_at_200(self, session, mock_client):
+        long_comment = "x" * 300
+        events = [self._event(comment=long_comment)]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert len(result["events"][0]["comment"]) == 200
+
+    def test_no_changed_fields_key_when_empty(self, session, mock_client):
+        events = [self._event()]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert "changed_fields" not in result["events"][0]
+
+    def test_entity_map_task(self, session, mock_client):
+        events = [self._event(event_type="tasks.task.create")]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["entity"] == "task"
+        assert result["events"][0]["action"] == "create"
+
+    def test_invalid_limit_raises(self, session, mock_client):
+        with pytest.raises(ValueError, match="limit must be between"):
+            wf.get_project_activity("p", limit=0, session_id=session)
+
+    def test_limit_too_large_raises(self, session, mock_client):
+        with pytest.raises(ValueError, match="limit must be between"):
+            wf.get_project_activity("p", limit=101, session_id=session)
+
+    def test_non_list_response_coerced_to_empty(self, session, mock_client):
+        def api_get(path, params=None):
+            if "/projects/by_slug" in str(path):
+                return self._project()
+            return {"unexpected": "dict"}
+
+        mock_client.api.get.side_effect = api_get
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"] == []
+        assert result["count"] == 0
+
+    def test_actor_falls_back_to_username(self, session, mock_client):
+        event = self._event()
+        event["data"]["user"] = {"username": "bob"}
+        self._setup(mock_client, [event])
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["actor"] == "bob"
+
+    def test_actor_unknown_when_no_user_info(self, session, mock_client):
+        event = self._event()
+        event["data"]["user"] = {}
+        self._setup(mock_client, [event])
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["actor"] == "unknown"
+
+    def test_when_and_object_id_propagated(self, session, mock_client):
+        events = [self._event()]
+        self._setup(mock_client, events)
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["when"] == "2026-06-05T10:00:00Z"
+        assert result["events"][0]["object_id"] == 42
+
+    def test_empty_event_type_yields_unknown_entity(self, session, mock_client):
+        event = self._event(event_type="")
+        self._setup(mock_client, [event])
+        result = wf.get_project_activity("p", session_id=session)
+        assert result["events"][0]["entity"] == "unknown"
+        assert result["events"][0]["action"] == "unknown"

@@ -1958,6 +1958,90 @@ def get_project_health(
 
 
 # ---------------------------------------------------------------------------
+# Project activity tool
+# ---------------------------------------------------------------------------
+
+# Map Taiga timeline event_type prefixes to readable entity labels.
+_TIMELINE_ENTITY_MAP = {
+    "userstories": "user_story",
+    "tasks": "task",
+    "issues": "issue",
+    "epics": "epic",
+    "milestones": "sprint",
+    "wiki": "wiki_page",
+    "projects": "project",
+}
+
+
+def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Distil a raw Taiga timeline event into a readable summary dict."""
+    event_type = event.get("event_type", "")
+    parts = event_type.split(".")
+    entity = _TIMELINE_ENTITY_MAP.get(parts[0], parts[0]) if parts[0] else "unknown"
+    action = parts[-1] if len(parts) >= 2 else "unknown"
+
+    data = event.get("data") or {}
+    user_info = data.get("user") or {}
+    actor = user_info.get("name") or user_info.get("username") or "unknown"
+
+    values_diff = data.get("values_diff") or {}
+    changed_fields = list(values_diff.keys()) if values_diff else []
+
+    comment = data.get("comment") or ""
+
+    summary: Dict[str, Any] = {
+        "when": event.get("created"),
+        "actor": actor,
+        "entity": entity,
+        "action": action,
+        "object_id": event.get("object_id"),
+    }
+    if changed_fields:
+        summary["changed_fields"] = changed_fields
+    if comment:
+        summary["comment"] = comment[:200]  # truncate long comments
+    return summary
+
+
+@mcp.tool(
+    "get_project_activity",
+    description=(
+        "Return recent activity on a project — who did what to which entity and when. "
+        "Answers 'what changed today/this week?' for a PO-level audit. "
+        "limit controls how many events to return (default 20, max 100). "
+        "project accepts a slug (e.g. 'my-project') or numeric ID."
+    ),
+)
+def get_project_activity(
+    project: Any,
+    limit: int = 20,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be between 1 and 100.")
+
+    def do_activity():
+        proj = _resolve_project(client, project)
+        project_id = proj["id"]
+
+        raw = client.api.get(
+            f"/timeline/project/{project_id}",
+            params={"page_size": limit},
+        )
+        events = raw if isinstance(raw, list) else []
+        return {
+            "project": {"id": proj["id"], "name": proj["name"], "slug": proj["slug"]},
+            "count": len(events),
+            "events": [_summarize_timeline_event(e) for e in events],
+        }
+
+    return _execute_taiga_operation("get_project_activity", do_activity, str(project))
+
+
+# ---------------------------------------------------------------------------
 # Comment tool
 # ---------------------------------------------------------------------------
 
