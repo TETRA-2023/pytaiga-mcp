@@ -1023,7 +1023,7 @@ def update_task(
         if len(payload) == 1:  # only version key
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.patch(f"/tasks/{current['id']}", json=payload)
+        result = client.api.tasks.edit(current["id"], **payload)
         return _task_summary(result)
 
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
@@ -1285,7 +1285,7 @@ def update_issue(
         if len(payload) == 1:
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.patch(f"/issues/{current['id']}", json=payload)
+        result = client.api.issues.edit(current["id"], **payload)
         return {
             "ref": result.get("ref"),
             "subject": result.get("subject"),
@@ -1546,9 +1546,7 @@ def set_task_status(
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.patch(
-            f"/tasks/{current['id']}", json={"status": status_id, "version": current["version"]}
-        )
+        result = client.api.tasks.edit(current["id"], status=status_id, version=current["version"])
         return {
             "ref": ref,
             "status": (result.get("status_extra_info") or {}).get("name") or status,
@@ -1801,17 +1799,13 @@ def assign_item(
         project_id = proj["id"]
         user_id = _resolve_user(client, project_id, username, actual_session_id)
 
-        # Direct GET/PATCH avoids pytaigaclient query_params= bug (tasks) and
-        # fixed-signature edit() that rejects **kwargs (tasks, issues).
-        api_path = _COMMENT_PATH_MAP[entity_type]
-        current = client.api.get(f"/{api_path}/by_ref", params={"ref": ref, "project": project_id})
+        collection_name, _ = type_map[entity_type]
+        collection = getattr(client.api, collection_name)
+        current = collection.get_by_ref(ref=ref, project=project_id)
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
-        result = client.api.patch(
-            f"/{api_path}/{current['id']}",
-            json={"assigned_to": user_id, "version": current["version"]},
-        )
+        result = collection.edit(current["id"], assigned_to=user_id, version=current["version"])
         return {
             "ref": ref,
             "entity_type": entity_type,
@@ -1892,6 +1886,78 @@ def upsert_wiki(
 
 
 # ---------------------------------------------------------------------------
+# Project health tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    "get_project_health",
+    description=(
+        "Return a metrics snapshot for a project: story point completion, computed velocity speed "
+        "(points/day), sprint-by-sprint velocity history, open issue counts by priority, and which "
+        "modules are active. "
+        "Complements get_project_overview (structure) with quantitative health signals. "
+        "project accepts a slug (e.g. 'my-project') or numeric ID."
+    ),
+)
+def get_project_health(
+    project: Any,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_health():
+        proj = _resolve_project(client, project)
+        project_id = proj["id"]
+
+        stats = client.api.get(f"/projects/{project_id}/stats") or {}
+        issues_stats = client.api.get(f"/projects/{project_id}/issues_stats") or {}
+        modules = client.api.get(f"/projects/{project_id}/modules") or {}
+
+        # Sprint velocity: list of closed_points per milestone (oldest → newest)
+        milestones = stats.get("milestones") or []
+        velocity = [
+            {"sprint": m.get("name"), "closed_points": m.get("closed_points", 0)}
+            for m in milestones
+        ]
+
+        # Issues breakdown by priority
+        issues_by_priority = {
+            entry.get("name", "unknown"): entry.get("count", 0)
+            for entry in (issues_stats.get("issues_per_priority") or [])
+        }
+
+        # Active modules: slice off "is_" prefix (3 chars) and "_activated" suffix (10 chars)
+        active_modules = [
+            name[3:-10]
+            for name, enabled in modules.items()
+            if name.startswith("is_") and name.endswith("_activated") and enabled
+        ]
+
+        return {
+            "project": {"id": proj["id"], "name": proj["name"], "slug": proj["slug"]},
+            "stories": {
+                "total_points": stats.get("total_points", 0),
+                "closed_points": stats.get("closed_points", 0),
+                "assigned_points": stats.get("assigned_points", 0),
+                "total_milestones": stats.get("total_milestones", 0),
+                "speed": stats.get("speed", 0),
+            },
+            "issues": {
+                "total": issues_stats.get("total_issues", 0),
+                "open": issues_stats.get("opened_issues", 0),
+                "closed": issues_stats.get("closed_issues", 0),
+                "by_priority": issues_by_priority,
+            },
+            "velocity": velocity,
+            "active_modules": active_modules,
+        }
+
+    return _execute_taiga_operation("get_project_health", do_health, str(project))
+
+
+# ---------------------------------------------------------------------------
 # Comment tool
 # ---------------------------------------------------------------------------
 
@@ -1927,10 +1993,16 @@ def add_comment(
         project_id = proj["id"]
         path_segment = _COMMENT_PATH_MAP[entity_type]
 
-        # Resolve ref → ID via direct GET (avoids pytaigaclient query_params= bug on tasks)
-        current = client.api.get(
-            f"/{path_segment}/by_ref", params={"ref": ref, "project": project_id}
-        )
+        # Resolve ref → ID
+        collection_name = {
+            "story": "user_stories",
+            "user_story": "user_stories",
+            "task": "tasks",
+            "issue": "issues",
+            "epic": "epics",
+        }[entity_type]
+        collection = getattr(client.api, collection_name)
+        current = collection.get_by_ref(ref=ref, project=project_id)
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
