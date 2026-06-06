@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.20.1 (2026-06-06)
+
+### Bug Fixes
+
+- Pass extra issue fields via data dict in create_issue
+  ([#84](https://github.com/TETRA-2023/pytaiga-mcp/pull/84),
+  [`4444f41`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4444f41dd878d27ab7588407ba97131c52d99fb8))
+
+### Documentation
+
+- Update README for v1.18.0 — add new workflow tools, fix stale references
+  ([`6cde8d5`](https://github.com/TETRA-2023/pytaiga-mcp/commit/6cde8d5d28d0c98091c1bd410aaddaa62dd845a3))
+
+
 ## v1.20.0 (2026-06-05)
 
 ### Features
