@@ -470,13 +470,17 @@ class TestCreateIssueNoneDefaultsGuard:
         }
 
         wf.create_issue("p", "Bug", session_id=session)
-        kwargs = mock_client.api.issues.create.call_args.kwargs
+        call_kwargs = mock_client.api.issues.create.call_args.kwargs
+        # Extra fields are passed via the data dict, not as direct kwargs.
+        assert call_kwargs["project"] == 1
+        assert call_kwargs["subject"] == "Bug"
+        data = call_kwargs["data"]
         # No None values should be sent to the API.
-        assert "priority" not in kwargs
-        assert "severity" not in kwargs
-        assert "type" not in kwargs
+        assert "priority" not in data
+        assert "severity" not in data
+        assert "type" not in data
         # Default status is still wired up.
-        assert kwargs["status"] == 7
+        assert data["status"] == 7
 
 
 class TestGetEpicOverviewBatched:
