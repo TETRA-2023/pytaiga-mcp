@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.20.2 (2026-06-06)
+
+### Bug Fixes
+
+- Non-mutating version extraction and add update_issue/wiki tests
+  ([#85](https://github.com/TETRA-2023/pytaiga-mcp/pull/85),
+  [`371e03b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/371e03ba54f7ec111d386ae77e91ee1173018b80))
+
+- Use data dict for tasks/issues/wiki edit calls in workflow server
+  ([#85](https://github.com/TETRA-2023/pytaiga-mcp/pull/85),
+  [`371e03b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/371e03ba54f7ec111d386ae77e91ee1173018b80))
+
+
 ## v1.20.1 (2026-06-06)
 
 ### Bug Fixes
