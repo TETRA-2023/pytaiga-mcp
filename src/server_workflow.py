@@ -1049,7 +1049,9 @@ def update_task(
         if len(payload) == 1:  # only version key
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.tasks.edit(current["id"], **payload)
+        version = payload["version"]
+        data = {k: v for k, v in payload.items() if k != "version"}
+        result = client.api.tasks.edit(current["id"], version=version, data=data)
         return _task_summary(result)
 
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
@@ -1316,7 +1318,9 @@ def update_issue(
         if len(payload) == 1:
             raise ValueError("No fields to update were provided.")
 
-        result = client.api.issues.edit(current["id"], **payload)
+        version = payload["version"]
+        data = {k: v for k, v in payload.items() if k != "version"}
+        result = client.api.issues.edit(current["id"], version=version, data=data)
         return {
             "ref": result.get("ref"),
             "subject": result.get("subject"),
@@ -1577,7 +1581,9 @@ def set_task_status(
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.tasks.edit(current["id"], status=status_id, version=current["version"])
+        result = client.api.tasks.edit(
+            current["id"], version=current["version"], data={"status": status_id}
+        )
         return {
             "ref": ref,
             "status": (result.get("status_extra_info") or {}).get("name") or status,
@@ -1906,7 +1912,7 @@ def upsert_wiki(
         existing = client.api.get("/wiki/by_slug", params={"slug": slug, "project": project_id})
         if existing:
             result = client.api.wiki.edit(
-                existing["id"], slug=slug, content=content, version=existing["version"]
+                existing["id"], version=existing["version"], data={"slug": slug, "content": content}
             )
             return {"status": "updated", "slug": result.get("slug"), "id": result.get("id")}
         else:

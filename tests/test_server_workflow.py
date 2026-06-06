@@ -400,6 +400,79 @@ class TestUpsertWiki:
         mock_client.api.wiki.edit.return_value = {"id": 9, "slug": "my-page"}
         result = wf.upsert_wiki("p", "my-page", "Updated content", session_id=session)
         assert result["status"] == "updated"
+        kwargs = mock_client.api.wiki.edit.call_args.kwargs
+        assert kwargs["version"] == 3
+        assert kwargs["data"] == {"slug": "my-page", "content": "Updated content"}
+
+
+class TestUpdateIssue:
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def _issue(self):
+        return {"id": 300, "ref": 5, "subject": "Bug", "version": 2}
+
+    def test_resolves_status_by_name(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.issues.get_by_ref.return_value = self._issue()
+        mock_client.list_resources.return_value = [{"id": 20, "name": "In Progress"}]
+        mock_client.api.issues.edit.return_value = {
+            "ref": 5,
+            "subject": "Bug",
+            "status_extra_info": {"name": "In Progress"},
+            "priority_extra_info": None,
+            "severity_extra_info": None,
+            "type_extra_info": None,
+            "assigned_to_extra_info": None,
+            "is_blocked": False,
+        }
+        wf.update_issue("p", 5, status="In Progress", session_id=session)
+        kwargs = mock_client.api.issues.edit.call_args.kwargs
+        assert kwargs["version"] == 2
+        assert kwargs["data"]["status"] == 20
+
+    def test_resolves_priority_by_name(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.issues.get_by_ref.return_value = self._issue()
+        mock_client.list_resources.return_value = [{"id": 3, "name": "High"}]
+        mock_client.api.issues.edit.return_value = {
+            "ref": 5,
+            "subject": "Bug",
+            "status_extra_info": None,
+            "priority_extra_info": {"name": "High"},
+            "severity_extra_info": None,
+            "type_extra_info": None,
+            "assigned_to_extra_info": None,
+            "is_blocked": False,
+        }
+        wf.update_issue("p", 5, priority="High", session_id=session)
+        kwargs = mock_client.api.issues.edit.call_args.kwargs
+        assert kwargs["version"] == 2
+        assert kwargs["data"]["priority"] == 3
+
+    def test_no_op_raises(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.issues.get_by_ref.return_value = self._issue()
+        with pytest.raises(ValueError, match="No fields to update"):
+            wf.update_issue("p", 5, session_id=session)
+
+    def test_data_does_not_contain_version(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.issues.get_by_ref.return_value = self._issue()
+        mock_client.list_resources.return_value = [{"id": 20, "name": "Done"}]
+        mock_client.api.issues.edit.return_value = {
+            "ref": 5,
+            "subject": "Bug",
+            "status_extra_info": {"name": "Done"},
+            "priority_extra_info": None,
+            "severity_extra_info": None,
+            "type_extra_info": None,
+            "assigned_to_extra_info": None,
+            "is_blocked": False,
+        }
+        wf.update_issue("p", 5, status="Done", session_id=session)
+        kwargs = mock_client.api.issues.edit.call_args.kwargs
+        assert "version" not in kwargs["data"]
 
 
 # ---------------------------------------------------------------------------
@@ -691,8 +764,8 @@ class TestUpdateTask:
         }
         wf.update_task("p", 7, status="Done", session_id=session)
         kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["status"] == 12
         assert kwargs["version"] == 3
+        assert kwargs["data"]["status"] == 12
 
     def test_reparent_resolves_story_ref(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
@@ -707,7 +780,7 @@ class TestUpdateTask:
         }
         wf.update_task("p", 7, story_ref=44, session_id=session)
         kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["user_story"] == 99
+        assert kwargs["data"]["user_story"] == 99
 
     def test_sprint_move_supported(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
@@ -721,7 +794,7 @@ class TestUpdateTask:
         }
         wf.update_task("p", 7, sprint="Sprint 2", session_id=session)
         kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["milestone"] == 33
+        assert kwargs["data"]["milestone"] == 33
 
     def test_no_op_raises(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
