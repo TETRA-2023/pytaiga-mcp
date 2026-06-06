@@ -691,8 +691,8 @@ class TestUpdateTask:
         }
         wf.update_task("p", 7, status="Done", session_id=session)
         kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["status"] == 12
         assert kwargs["version"] == 3
+        assert kwargs["data"]["status"] == 12
 
     def test_reparent_resolves_story_ref(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
@@ -707,7 +707,7 @@ class TestUpdateTask:
         }
         wf.update_task("p", 7, story_ref=44, session_id=session)
         kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["user_story"] == 99
+        assert kwargs["data"]["user_story"] == 99
 
     def test_sprint_move_supported(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
@@ -721,7 +721,7 @@ class TestUpdateTask:
         }
         wf.update_task("p", 7, sprint="Sprint 2", session_id=session)
         kwargs = mock_client.api.tasks.edit.call_args.kwargs
-        assert kwargs["milestone"] == 33
+        assert kwargs["data"]["milestone"] == 33
 
     def test_no_op_raises(self, session, mock_client):
         mock_client.api.get.side_effect = self._api_get
