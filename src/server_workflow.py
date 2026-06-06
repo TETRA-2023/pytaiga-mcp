@@ -1049,8 +1049,9 @@ def update_task(
         if len(payload) == 1:  # only version key
             raise ValueError("No fields to update were provided.")
 
-        version = payload.pop("version")
-        result = client.api.tasks.edit(current["id"], version=version, data=payload)
+        version = payload["version"]
+        data = {k: v for k, v in payload.items() if k != "version"}
+        result = client.api.tasks.edit(current["id"], version=version, data=data)
         return _task_summary(result)
 
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
@@ -1317,8 +1318,9 @@ def update_issue(
         if len(payload) == 1:
             raise ValueError("No fields to update were provided.")
 
-        version = payload.pop("version")
-        result = client.api.issues.edit(current["id"], version=version, data=payload)
+        version = payload["version"]
+        data = {k: v for k, v in payload.items() if k != "version"}
+        result = client.api.issues.edit(current["id"], version=version, data=data)
         return {
             "ref": result.get("ref"),
             "subject": result.get("subject"),
