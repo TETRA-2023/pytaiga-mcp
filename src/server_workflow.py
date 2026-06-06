@@ -1233,7 +1233,12 @@ def create_issue(
         if statuses:
             payload["status"] = statuses[0]["id"]
 
-        result = client.api.issues.create(**payload)
+        data = {k: v for k, v in payload.items() if k not in ("project", "subject")}
+        result = client.api.issues.create(
+            project=project_id,
+            subject=subject,
+            data=data if data else None,
+        )
         return {
             "status": "created",
             "ref": result.get("ref"),
