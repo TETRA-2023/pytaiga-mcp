@@ -30,6 +30,32 @@ _RESOURCE_ENDPOINTS = {
 _NO_PAGINATION_HEADERS = {"x-disable-pagination": "True"}
 
 
+class _CompatTaigaClient(TaigaClient):
+    """TaigaClient with a compatibility shim for pytaigaclient's `query_params` bug.
+
+    Four Tasks methods — `list`, `get_by_ref`, `filters_data`, `list_attachments` —
+    call ``self.client.get(endpoint, query_params=...)``, but ``TaigaClient.get``
+    only accepts ``params=`` and forwards unknown kwargs into ``_request()``, which
+    raises ``unexpected keyword argument 'query_params'``. Every other resource
+    correctly uses ``params=``, so the defect is isolated to the Tasks resource
+    (see issue #87, regression of #79). We can't patch the dependency — it's pinned
+    to an upstream commit of talhaorak/pyTaigaClient — so we remap the stray kwarg
+    here, at the one chokepoint every resource routes through. This is a no-op for
+    correctly-written callers (no ``query_params`` kwarg → nothing to remap).
+    """
+
+    def get(self, path: str, params: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
+        if "query_params" in kwargs:
+            query_params = kwargs.pop("query_params")
+            if params is None:
+                params = query_params
+            elif query_params:
+                # Explicit params win on key conflict; never reached from the
+                # library (its buggy calls only pass query_params), but defensive.
+                params = {**query_params, **params}
+        return super().get(path, params=params, **kwargs)
+
+
 class TaigaClientWrapper:
     """
     A wrapper around the pytaiga-client library to manage API instance
@@ -53,8 +79,8 @@ class TaigaClientWrapper:
         try:
             # SECURITY: Don't log username to avoid credential exposure
             logger.info(f"Attempting login on {self.host}")
-            # Initialize the client here
-            api_instance = TaigaClient(host=self.host)
+            # Initialize the client here (compat subclass; see _CompatTaigaClient).
+            api_instance = _CompatTaigaClient(host=self.host)
             # Use the auth resource's login method
             api_instance.auth.login(username=username, password=password)
             self.api = api_instance
@@ -75,7 +101,7 @@ class TaigaClientWrapper:
     # Add method for token authentication if needed by pytaigaclient
     # def set_token(self, token: str, token_type: str = "Bearer"):
     #     logger.info(f"Initializing TaigaClient with token on {self.host}")
-    #     self.api = TaigaClient(host=self.host, auth_token=token, token_type=token_type)
+    #     self.api = _CompatTaigaClient(host=self.host, auth_token=token, token_type=token_type)
     #     logger.info("TaigaClient initialized with token.")
 
     @property

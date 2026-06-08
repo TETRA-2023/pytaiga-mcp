@@ -2114,16 +2114,17 @@ def add_comment(
         project_id = proj["id"]
         path_segment = _COMMENT_PATH_MAP[entity_type]
 
-        # Resolve ref → ID
-        collection_name = {
-            "story": "user_stories",
-            "user_story": "user_stories",
-            "task": "tasks",
-            "issue": "issues",
-            "epic": "epics",
-        }[entity_type]
-        collection = getattr(client.api, collection_name)
-        current = collection.get_by_ref(ref=ref, project=project_id)
+        # Resolve ref → ID via the by_ref endpoint directly. We bypass the
+        # pytaigaclient <resource>.get_by_ref() helpers because tasks.get_by_ref
+        # forwards a `query_params=` kwarg that TaigaClient._request() rejects
+        # ("unexpected keyword argument 'query_params'"), killing the task
+        # comment path — see issue #87 (regression of #79). Hitting the endpoint
+        # directly is version-independent and matches the update_task workaround.
+        # path_segment ("userstories"/"tasks"/"issues"/"epics") doubles as the
+        # by_ref route prefix; project_id is always an int so no slug-param quirks.
+        current = client.api.get(
+            f"/{path_segment}/by_ref", params={"ref": ref, "project": project_id}
+        )
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
