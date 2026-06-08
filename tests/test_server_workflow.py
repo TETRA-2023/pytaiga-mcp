@@ -896,6 +896,72 @@ class TestSetTaskStatus:
         mock_client.list_resources.assert_called_once_with("task_statuses", project_id=1)
 
 
+class TestAddComment:
+    """Regression guard for #87 — the task comment path must resolve ref→ID via
+    the /tasks/by_ref endpoint with `params=`, NOT via tasks.get_by_ref() (which
+    forwards a `query_params=` kwarg TaigaClient._request() rejects)."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_task_comment_uses_by_ref_endpoint_not_helper(self, session, mock_client):
+        task = {"id": 200, "ref": 7, "version": 3}
+
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return task
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+
+        result = wf.add_comment("p", 7, "looks good", entity_type="task", session_id=session)
+
+        assert result == {"status": "comment_added", "entity_type": "task", "ref": 7}
+        # ref→ID resolution went through the raw endpoint with params=, not the helper.
+        mock_client.api.get.assert_any_call("/tasks/by_ref", params={"ref": 7, "project": 1})
+        mock_client.api.tasks.get_by_ref.assert_not_called()
+        # Comment posted to the task PATCH route with version for optimistic concurrency.
+        mock_client.api.patch.assert_called_once_with(
+            "/tasks/200", json={"comment": "looks good", "version": 3}
+        )
+
+    def test_story_comment_uses_userstories_by_ref(self, session, mock_client):
+        story = {"id": 50, "ref": 12, "version": 1}
+
+        def api_get(path, params=None):
+            if "/userstories/by_ref" in str(path):
+                return story
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+
+        wf.add_comment("p", 12, "ship it", entity_type="story", session_id=session)
+
+        mock_client.api.get.assert_any_call("/userstories/by_ref", params={"ref": 12, "project": 1})
+        mock_client.api.user_stories.get_by_ref.assert_not_called()
+        mock_client.api.patch.assert_called_once_with(
+            "/userstories/50", json={"comment": "ship it", "version": 1}
+        )
+
+    def test_raises_when_entity_not_found(self, session, mock_client):
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return None
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        with pytest.raises(ValueError, match="Task #7 not found"):
+            wf.add_comment("p", 7, "x", entity_type="task", session_id=session)
+
+    def test_rejects_invalid_entity_type(self, session, mock_client):
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            wf.add_comment("p", 7, "x", entity_type="bogus", session_id=session)
+
+    def test_rejects_empty_text(self, session, mock_client):
+        with pytest.raises(ValueError, match="must not be empty"):
+            wf.add_comment("p", 7, "   ", entity_type="task", session_id=session)
+
+
 class TestBreakDownStory:
     def _project(self):
         return {"id": 1, "slug": "p", "name": "P"}
