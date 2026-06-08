@@ -110,6 +110,7 @@ The bridge provides comprehensive CRUD operations and advanced features across a
 - **Secure Credentials**: Environment variable authentication with credential protection - passwords never appear in logs or error messages
 - **Auto-Authentication**: Configure `TAIGA_USERNAME` and `TAIGA_PASSWORD` environment variables for seamless startup without manual login
 - **Input Validation**: Allowlist-based parameter validation prevents unexpected data from reaching the Taiga API
+- **Typed Tool Schemas**: Every tool parameter exposes a typed JSON schema — e.g. `project` accepts a slug or ID (`string | integer`), `kwargs`/`filters` accept a JSON object or string — so MCP clients get accurate type hints instead of an untyped parameter they might omit
 
 ### Response Filtering
 
