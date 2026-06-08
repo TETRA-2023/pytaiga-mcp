@@ -1,5 +1,6 @@
 """Unit tests for server_workflow.py — name resolution helpers and tool smoke tests."""
 
+import asyncio
 import uuid
 from unittest.mock import MagicMock
 
@@ -42,36 +43,54 @@ def mock_client():
 # ---------------------------------------------------------------------------
 
 
-def _schema_has_type(prop: dict) -> bool:
-    """A property schema carries usable type info if it has `type` or a typed `anyOf`."""
-    if "type" in prop:
-        return True
+def _schema_is_typed(prop: dict) -> bool:
+    """Whether a JSON-schema fragment carries usable type info.
+
+    A bare `Any` annotation generates an empty `{}` schema (no `type`), and
+    `List[Any]` generates a typed array whose `items` are an empty `{}` — both give
+    MCP clients no information. A fragment is considered typed when it has a `type`
+    (with array `items` recursively typed) or a fully-typed `anyOf`. Object schemas
+    are accepted as-is: `Dict[str, Any]` legitimately allows arbitrary values.
+    """
     any_of = prop.get("anyOf")
     if any_of:
-        return all("type" in sub for sub in any_of)
-    return False
+        return all(_schema_is_typed(sub) for sub in any_of)
+    schema_type = prop.get("type")
+    if schema_type is None:
+        return False
+    if schema_type == "array":
+        return _schema_is_typed(prop.get("items", {}))
+    return True
+
+
+def test_schema_is_typed_detects_gaps():
+    """The guard must reject empty and `List[Any]`-style item gaps, accept real types."""
+    # Untyped — must be rejected.
+    assert not _schema_is_typed({})  # Any
+    assert not _schema_is_typed({"type": "array", "items": {}})  # List[Any]
+    assert not _schema_is_typed({"anyOf": [{"type": "string"}, {}]})  # Union[str, Any]
+    # Typed — must be accepted.
+    assert _schema_is_typed({"type": "string"})
+    assert _schema_is_typed({"anyOf": [{"type": "string"}, {"type": "integer"}]})
+    assert _schema_is_typed({"type": "array", "items": {"type": "string"}})
+    assert _schema_is_typed({"type": "object", "additionalProperties": True})  # Dict[str, Any]
 
 
 def test_tool_params_have_typed_schemas():
     """Every tool parameter must expose a typed JSON schema.
 
-    A bare `Any` annotation generates an empty `{}` schema (no `type`), which gives
-    MCP clients no information about the parameter and makes argument omission far
-    more likely — especially for required params like `project`. This guards against
-    reintroducing `Any` on a tool signature.
+    Guards against reintroducing `Any` (or `List[Any]`) on a tool signature, which
+    would strip type information clients rely on to populate args — especially for
+    required params like `project`.
     """
-    import asyncio
-
     tools = asyncio.run(wf.mcp.list_tools())
     assert tools, "expected the workflow server to expose tools"
-    offenders = []
-    for tool in tools:
-        props = (tool.inputSchema or {}).get("properties", {})
-        for name, prop in props.items():
-            if name == "session_id":
-                continue
-            if not _schema_has_type(prop):
-                offenders.append(f"{tool.name}.{name}: {prop}")
+    offenders = [
+        f"{tool.name}.{name}: {prop}"
+        for tool in tools
+        for name, prop in (tool.inputSchema or {}).get("properties", {}).items()
+        if name != "session_id" and not _schema_is_typed(prop)
+    ]
     assert not offenders, "untyped (Any) tool params found:\n" + "\n".join(offenders)
 
 

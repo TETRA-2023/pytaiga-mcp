@@ -1074,7 +1074,7 @@ def update_task(
 def break_down_story(
     project: Union[str, int],
     story_ref: int,
-    tasks: List[Any],
+    tasks: List[Union[str, Dict[str, Any]]],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not tasks:
