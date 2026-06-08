@@ -17,7 +17,7 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 from pytaigaclient.exceptions import TaigaAPIError, TaigaException
@@ -603,7 +603,7 @@ def list_projects(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     ),
 )
 def get_project_overview(
-    project: Any,
+    project: Union[str, int],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
@@ -678,7 +678,7 @@ def get_project_overview(
     ),
 )
 def search(
-    project: Any,
+    project: Union[str, int],
     query: str,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -716,7 +716,7 @@ def search(
     ),
 )
 def browse_backlog(
-    project: Any,
+    project: Union[str, int],
     status: Optional[str] = None,
     assignee: Optional[str] = None,
     epic: Optional[int] = None,
@@ -760,11 +760,11 @@ def browse_backlog(
     ),
 )
 def create_story(
-    project: Any,
+    project: Union[str, int],
     subject: str,
     description: Optional[str] = None,
     assignee: Optional[str] = None,
-    sprint: Optional[Any] = None,
+    sprint: Optional[Union[str, int]] = None,
     epic: Optional[int] = None,
     tags: Optional[List[str]] = None,
     session_id: Optional[str] = None,
@@ -821,13 +821,13 @@ def create_story(
     ),
 )
 def update_story(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     subject: Optional[str] = None,
     description: Optional[str] = None,
     status: Optional[str] = None,
     assignee: Optional[str] = None,
-    sprint: Optional[Any] = None,
+    sprint: Optional[Union[str, int]] = None,
     epic: Optional[int] = None,
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
@@ -921,13 +921,13 @@ def update_story(
     ),
 )
 def create_task(
-    project: Any,
+    project: Union[str, int],
     story_ref: int,
     subject: str,
     description: Optional[str] = None,
     status: Optional[str] = None,
     assignee: Optional[str] = None,
-    sprint: Optional[Any] = None,
+    sprint: Optional[Union[str, int]] = None,
     due_date: Optional[str] = None,
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
@@ -997,13 +997,13 @@ def create_task(
     ),
 )
 def update_task(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     subject: Optional[str] = None,
     description: Optional[str] = None,
     status: Optional[str] = None,
     assignee: Optional[str] = None,
-    sprint: Optional[Any] = None,
+    sprint: Optional[Union[str, int]] = None,
     story_ref: Optional[int] = None,
     blocked: Optional[bool] = None,
     tags: Optional[List[str]] = None,
@@ -1072,9 +1072,9 @@ def update_task(
     ),
 )
 def break_down_story(
-    project: Any,
+    project: Union[str, int],
     story_ref: int,
-    tasks: List[Any],
+    tasks: List[Union[str, Dict[str, Any]]],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not tasks:
@@ -1182,7 +1182,7 @@ def break_down_story(
     ),
 )
 def create_issue(
-    project: Any,
+    project: Union[str, int],
     subject: str,
     description: Optional[str] = None,
     issue_type: Optional[str] = None,
@@ -1263,7 +1263,7 @@ def create_issue(
     ),
 )
 def update_issue(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     subject: Optional[str] = None,
     description: Optional[str] = None,
@@ -1350,8 +1350,8 @@ def update_issue(
     ),
 )
 def get_sprint_board(
-    project: Any,
-    sprint: Optional[Any] = None,
+    project: Union[str, int],
+    sprint: Optional[Union[str, int]] = None,
     with_tasks: bool = True,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1424,7 +1424,7 @@ def get_sprint_board(
     ),
 )
 def plan_sprint(
-    project: Any,
+    project: Union[str, int],
     name: str,
     start_date: str,
     end_date: str,
@@ -1483,9 +1483,9 @@ def plan_sprint(
     ),
 )
 def move_to_sprint(
-    project: Any,
+    project: Union[str, int],
     story_refs: List[int],
-    sprint: Any,
+    sprint: Union[str, int],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
@@ -1525,7 +1525,7 @@ def move_to_sprint(
     ),
 )
 def set_story_status(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     status: str,
     session_id: Optional[str] = None,
@@ -1562,7 +1562,7 @@ def set_story_status(
     ),
 )
 def set_task_status(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     status: str,
     session_id: Optional[str] = None,
@@ -1602,8 +1602,8 @@ def set_task_status(
     ),
 )
 def close_sprint(
-    project: Any,
-    sprint: Optional[Any] = None,
+    project: Union[str, int],
+    sprint: Optional[Union[str, int]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
@@ -1639,7 +1639,7 @@ def close_sprint(
     ),
 )
 def get_epic_overview(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1692,7 +1692,7 @@ def get_epic_overview(
     ),
 )
 def create_epic(
-    project: Any,
+    project: Union[str, int],
     subject: str,
     description: Optional[str] = None,
     assignee: Optional[str] = None,
@@ -1751,8 +1751,8 @@ def create_epic(
     ),
 )
 def get_team_workload(
-    project: Any,
-    sprint: Optional[Any] = None,
+    project: Union[str, int],
+    sprint: Optional[Union[str, int]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
@@ -1810,7 +1810,7 @@ def get_team_workload(
     ),
 )
 def assign_item(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     username: str,
     entity_type: str = "story",
@@ -1866,7 +1866,7 @@ def assign_item(
     ),
 )
 def get_wiki(
-    project: Any,
+    project: Union[str, int],
     slug: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Any:
@@ -1897,7 +1897,7 @@ def get_wiki(
     ),
 )
 def upsert_wiki(
-    project: Any,
+    project: Union[str, int],
     slug: str,
     content: str,
     session_id: Optional[str] = None,
@@ -1938,7 +1938,7 @@ def upsert_wiki(
     ),
 )
 def get_project_health(
-    project: Any,
+    project: Union[str, int],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
@@ -2050,7 +2050,7 @@ def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
     ),
 )
 def get_project_activity(
-    project: Any,
+    project: Union[str, int],
     limit: int = 20,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -2092,7 +2092,7 @@ def get_project_activity(
     ),
 )
 def add_comment(
-    project: Any,
+    project: Union[str, int],
     ref: int,
     text: str,
     entity_type: str = "story",
