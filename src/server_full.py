@@ -6,7 +6,7 @@ import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 from pytaigaclient.exceptions import TaigaAPIError, TaigaException
@@ -873,7 +873,7 @@ def get_project_by_slug(
 def create_project(
     name: str,
     description: str,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -909,7 +909,7 @@ def create_project(
 )
 def update_project(
     project_id: int,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -1115,7 +1115,7 @@ def mix_project_tags(
 )
 def list_user_stories(
     project_id: int,
-    filters: Any = None,
+    filters: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
@@ -1151,7 +1151,7 @@ def list_user_stories(
 def create_user_story(
     project_id: int,
     subject: str,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -1240,7 +1240,7 @@ def get_user_story_by_ref(
 )
 def update_user_story(
     user_story_id: int,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -1365,7 +1365,7 @@ def get_user_story_statuses(
 )
 def list_tasks(
     project_id: int,
-    filters: Any = None,
+    filters: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
@@ -1401,7 +1401,7 @@ def list_tasks(
 def create_task(
     project_id: int,
     subject: str,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -1482,7 +1482,10 @@ def get_task_by_ref(
     ),
 )
 def update_task(
-    task_id: int, kwargs: Any = None, session_id: Optional[str] = None, verbosity: str = "standard"
+    task_id: int,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
+    session_id: Optional[str] = None,
+    verbosity: str = "standard",
 ) -> Dict[str, Any]:
     """Updates a task. Pass fields to update as kwargs JSON string (e.g., {"subject": "New", "status": 2})."""
     actual_session_id = _get_session_id(session_id)
@@ -1597,7 +1600,7 @@ def get_task_statuses(project_id: int, session_id: Optional[str] = None) -> List
 )
 def list_issues(
     project_id: int,
-    filters: Any = None,
+    filters: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
@@ -1637,7 +1640,7 @@ def create_issue(
     status_id: int,
     severity_id: int,
     type_id: int,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -1711,7 +1714,10 @@ def get_issue_by_ref(
     ),
 )
 def update_issue(
-    issue_id: int, kwargs: Any = None, session_id: Optional[str] = None, verbosity: str = "standard"
+    issue_id: int,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
+    session_id: Optional[str] = None,
+    verbosity: str = "standard",
 ) -> Dict[str, Any]:
     """Updates an issue. Pass fields to update as kwargs JSON string (e.g., {"subject": "New", "status": 2})."""
     actual_session_id = _get_session_id(session_id)
@@ -2667,7 +2673,7 @@ def delete_attachment(
 )
 def list_epics(
     project_id: int,
-    filters: Any = None,
+    filters: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> List[Dict[str, Any]]:
@@ -2702,7 +2708,7 @@ def list_epics(
 def create_epic(
     project_id: int,
     subject: str,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -2766,7 +2772,10 @@ def get_epic_by_ref(
     ),
 )
 def update_epic(
-    epic_id: int, kwargs: Any = None, session_id: Optional[str] = None, verbosity: str = "standard"
+    epic_id: int,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
+    session_id: Optional[str] = None,
+    verbosity: str = "standard",
 ) -> Dict[str, Any]:
     """Updates an epic. Pass fields to update as kwargs JSON string (e.g., {"subject": "New", "color": "#FF0000"})."""
     actual_session_id = _get_session_id(session_id)
@@ -2977,7 +2986,7 @@ def get_milestone(
 )
 def update_milestone(
     milestone_id: int,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -3151,7 +3160,7 @@ def get_swimlane(
 )
 def update_swimlane(
     swimlane_id: int,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -3333,7 +3342,7 @@ def create_wiki_page(
     project_id: int,
     slug: str,
     content: str,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:
@@ -3394,7 +3403,7 @@ def get_wiki_page_by_slug(
 )
 def update_wiki_page(
     wiki_page_id: int,
-    kwargs: Any = None,
+    kwargs: Optional[Union[Dict[str, Any], str]] = None,
     session_id: Optional[str] = None,
     verbosity: str = "standard",
 ) -> Dict[str, Any]:

@@ -38,6 +38,44 @@ def mock_client():
 
 
 # ---------------------------------------------------------------------------
+# Tool input-schema typing (regression for empty `Any` schemas)
+# ---------------------------------------------------------------------------
+
+
+def _schema_has_type(prop: dict) -> bool:
+    """A property schema carries usable type info if it has `type` or a typed `anyOf`."""
+    if "type" in prop:
+        return True
+    any_of = prop.get("anyOf")
+    if any_of:
+        return all("type" in sub for sub in any_of)
+    return False
+
+
+def test_tool_params_have_typed_schemas():
+    """Every tool parameter must expose a typed JSON schema.
+
+    A bare `Any` annotation generates an empty `{}` schema (no `type`), which gives
+    MCP clients no information about the parameter and makes argument omission far
+    more likely — especially for required params like `project`. This guards against
+    reintroducing `Any` on a tool signature.
+    """
+    import asyncio
+
+    tools = asyncio.run(wf.mcp.list_tools())
+    assert tools, "expected the workflow server to expose tools"
+    offenders = []
+    for tool in tools:
+        props = (tool.inputSchema or {}).get("properties", {})
+        for name, prop in props.items():
+            if name == "session_id":
+                continue
+            if not _schema_has_type(prop):
+                offenders.append(f"{tool.name}.{name}: {prop}")
+    assert not offenders, "untyped (Any) tool params found:\n" + "\n".join(offenders)
+
+
+# ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 

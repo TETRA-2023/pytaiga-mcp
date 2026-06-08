@@ -14,6 +14,33 @@ TEST_USERNAME = "test_user"
 TEST_PASSWORD = "test_password"
 
 
+def test_tool_params_have_typed_schemas():
+    """Every full-server tool parameter must expose a typed JSON schema.
+
+    A bare `Any` annotation generates an empty `{}` schema (no `type`), giving MCP
+    clients no type information. The `kwargs`/`filters` params accept either a JSON
+    object or a JSON string, so they should resolve to a typed `anyOf`, never `{}`.
+    Guards against reintroducing `Any` on a tool signature.
+    """
+    import asyncio
+
+    def has_type(prop: dict) -> bool:
+        if "type" in prop:
+            return True
+        any_of = prop.get("anyOf")
+        return bool(any_of) and all("type" in sub for sub in any_of)
+
+    tools = asyncio.run(src_server.mcp.list_tools())
+    assert tools, "expected the full server to expose tools"
+    offenders = [
+        f"{tool.name}.{name}: {prop}"
+        for tool in tools
+        for name, prop in (tool.inputSchema or {}).get("properties", {}).items()
+        if name != "session_id" and not has_type(prop)
+    ]
+    assert not offenders, "untyped (Any) tool params found:\n" + "\n".join(offenders)
+
+
 # ─── Helper fixtures ──────────────────────────────────────────────────
 
 
