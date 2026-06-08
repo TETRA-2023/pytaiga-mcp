@@ -943,6 +943,33 @@ class TestAddComment:
             "/userstories/50", json={"comment": "ship it", "version": 1}
         )
 
+    @pytest.mark.parametrize(
+        "entity_type,segment",
+        [
+            ("user_story", "userstories"),  # alias of "story"
+            ("issue", "issues"),
+            ("epic", "epics"),
+        ],
+    )
+    def test_remaining_entity_types_route_uniformly(
+        self, session, mock_client, entity_type, segment
+    ):
+        item = {"id": 99, "ref": 5, "version": 2}
+
+        def api_get(path, params=None):
+            if f"/{segment}/by_ref" in str(path):
+                return item
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+
+        wf.add_comment("p", 5, "note", entity_type=entity_type, session_id=session)
+
+        mock_client.api.get.assert_any_call(f"/{segment}/by_ref", params={"ref": 5, "project": 1})
+        mock_client.api.patch.assert_called_once_with(
+            f"/{segment}/99", json={"comment": "note", "version": 2}
+        )
+
     def test_raises_when_entity_not_found(self, session, mock_client):
         def api_get(path, params=None):
             if "/tasks/by_ref" in str(path):

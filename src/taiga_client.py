@@ -44,7 +44,7 @@ class _CompatTaigaClient(TaigaClient):
     correctly-written callers (no ``query_params`` kwarg → nothing to remap).
     """
 
-    def get(self, path, params=None, **kwargs):
+    def get(self, path: str, params: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
         if "query_params" in kwargs:
             query_params = kwargs.pop("query_params")
             if params is None:
