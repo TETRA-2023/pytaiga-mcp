@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.20.3 (2026-06-08)
+
+### Bug Fixes
+
+- Give tool params typed JSON schemas instead of bare Any
+  ([`7439cf8`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7439cf833cf79fa1550240fa05041e03c158c8d4))
+
+- Type break_down_story tasks list and tighten schema guard
+  ([`49f734d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/49f734d55e56da7f20908b40a9704683e1389153))
+
+### Documentation
+
+- Note typed tool schemas; align run_unit_tests.sh with CI
+  ([`2902ecb`](https://github.com/TETRA-2023/pytaiga-mcp/commit/2902ecbdcc18abd2654065635df9eddfe8bc9225))
+
+### Testing
+
+- Harden schema guard against $ref/enum/tuple shapes
+  ([`2b499da`](https://github.com/TETRA-2023/pytaiga-mcp/commit/2b499dac00244e90c2fbc7fde84700240ebf48de))
+
+
 ## v1.20.2 (2026-06-06)
 
 ### Bug Fixes
