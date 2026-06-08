@@ -15,7 +15,7 @@ TEST_USERNAME = "test_user"
 TEST_PASSWORD = "test_password"
 
 
-def _schema_is_typed(prop: dict) -> bool:
+def _schema_is_typed(prop) -> bool:
     """Whether a JSON-schema fragment carries usable type info.
 
     A bare `Any` annotation generates an empty `{}` schema (no `type`), and
@@ -24,9 +24,16 @@ def _schema_is_typed(prop: dict) -> bool:
     (with array `items` recursively typed) or a fully-typed `anyOf`. Object schemas
     are accepted as-is: `Dict[str, Any]` legitimately allows arbitrary values.
     """
+    # Non-dict fragments are constraints, not gaps — e.g. a tuple's closed
+    # `items: false`. Treat as typed so the recursion can't crash on them.
+    if not isinstance(prop, dict):
+        return True
     any_of = prop.get("anyOf")
     if any_of:
         return all(_schema_is_typed(sub) for sub in any_of)
+    # $ref (nested model), enum/const (Literal) all carry type info without a `type`.
+    if any(key in prop for key in ("$ref", "enum", "const")):
+        return True
     schema_type = prop.get("type")
     if schema_type is None:
         return False
