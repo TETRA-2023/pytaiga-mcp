@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.20.4 (2026-06-08)
+
+### Bug Fixes
+
+- Eliminate pytaigaclient query_params bug class — add_comment tasks + 3 latent Tasks methods (#87)
+  ([#88](https://github.com/TETRA-2023/pytaiga-mcp/pull/88),
+  [`5624029`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5624029d1b39fa2b0d5f75d4f8278e93e8a2964a))
+
+
 ## v1.20.3 (2026-06-08)
 
 ### Bug Fixes
