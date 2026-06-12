@@ -760,7 +760,9 @@ def search(
                 info = status_by_id.get(item.get("status"))
                 if info is not None:
                     item["status"] = info["name"]
-                    item["is_closed"] = info["is_closed"]
+                # Always surface is_closed so the output shape is uniform; None
+                # only for an unknown id (status left as the raw value, not faked).
+                item["is_closed"] = info["is_closed"] if info is not None else None
             return items
 
         return {

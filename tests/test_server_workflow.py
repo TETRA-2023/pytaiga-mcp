@@ -1630,9 +1630,36 @@ class TestSearch:
         mock_client.list_resources.return_value = [{"id": 57, "name": "New", "is_closed": False}]
 
         result = wf.search("p", "x", session_id=session)
-        # Unknown id is left as-is rather than mislabelled.
+        # Unknown id is left as-is rather than mislabelled, but is_closed is still
+        # present (None) so the output shape stays uniform across items.
         assert result["issues"][0]["status"] == 999
-        assert "is_closed" not in result["issues"][0]
+        assert result["issues"][0]["is_closed"] is None
+
+    def test_resolves_epic_status(self, session, mock_client):
+        search_result = {
+            "count": 1,
+            "issues": [],
+            "userstories": [],
+            "tasks": [],
+            "epics": [{"ref": 42, "subject": "Epic", "status": 30}],
+            "wikipages": [],
+        }
+
+        def api_get(path, params=None):
+            if "/search" in str(path):
+                return search_result
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = [
+            {"id": 30, "name": "In progress", "is_closed": False}
+        ]
+
+        result = wf.search("p", "x", session_id=session)
+        assert result["epics"][0]["status"] == "In progress"
+        assert result["epics"][0]["is_closed"] is False
+        # Resolved against the epic_statuses table specifically.
+        mock_client.list_resources.assert_called_once_with("epic_statuses", project_id=1)
 
 
 class TestGetStory:
