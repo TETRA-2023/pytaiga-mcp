@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v1.21.0 (2026-06-12)
+
+### Bug Fixes
+
+- Don't clobber a payload-provided is_closed on unknown search status id
+  ([`17de41d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/17de41d5f8f7d652a79ebd816eeba5b2af63d487))
+
+- Uniform is_closed in search output + cover epic status resolution
+  ([`85ed8c5`](https://github.com/TETRA-2023/pytaiga-mcp/commit/85ed8c5d82d9d798567ca626e1c66517b4579a7a))
+
+### Chores
+
+- Add Dependabot config (uv/npm + github-actions, weekly)
+  ([#89](https://github.com/TETRA-2023/pytaiga-mcp/pull/89),
+  [`9df579d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9df579d3318d98830ea6538b1f054501195a4541))
+
+- **deps**: Bump starlette from 1.0.0 to 1.0.1
+  ([#78](https://github.com/TETRA-2023/pytaiga-mcp/pull/78),
+  [`770169f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/770169f947903cb6f5f942bb57411da65727e131))
+
+### Features
+
+- Resolve status ids to names on read paths + add get_story/get_task/get_issue
+  ([#95](https://github.com/TETRA-2023/pytaiga-mcp/pull/95),
+  [`ef94c9a`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ef94c9a832cad69e6864ba8b2acd4df0f83b81fc))
+
+
 ## v1.20.4 (2026-06-08)
 
 ### Bug Fixes
