@@ -32,7 +32,7 @@ The bridge ships two servers in a single image. Select one at runtime via the `T
 
 | Mode | Tools | Best for |
 |---|---|---|
-| `workflow` (default) | ~31 intent tools | Product Owners and team members managing projects daily |
+| `workflow` (default) | ~34 intent tools | Product Owners and team members managing projects daily |
 | `full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
 **Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
@@ -51,7 +51,7 @@ TAIGA_SERVER_MODE=full ./run.sh
 
 ## Features
 
-### Workflow mode tools (~31)
+### Workflow mode tools (~34)
 
 Intent-based tools that resolve names and composite API calls:
 
@@ -80,7 +80,8 @@ Intent-based tools that resolve names and composite API calls:
 | `assign_item` | Assign any entity by username |
 | `get_wiki` / `upsert_wiki` | Get or create/update wiki pages |
 | `add_comment` | Comment on any entity by ref |
-| `search` | Full-text search across all entity types |
+| `search` | Full-text search across all entity types (status resolved to name + `is_closed`) |
+| `get_story` / `get_task` / `get_issue` | Read one item by ref — resolved status name, `is_closed`, assignee, etc. (no mutation) |
 | `get_current_user` | Return authenticated user identity — resolves "me" for assign/filter calls |
 | `session_status` | Check whether the current session is authenticated and active |
 
@@ -445,7 +446,7 @@ client.call_tool("logout", {"session_id": session_id})
 ```
 pytaiga-mcp/
 ├── src/
-│   ├── server_workflow.py  # Workflow/intent tools (~31) — default mode
+│   ├── server_workflow.py  # Workflow/intent tools (~34) — default mode
 │   ├── server_full.py      # Full CRUD tools (107) — full mode
 │   ├── taiga_client.py     # Taiga API client wrapper
 │   └── config.py           # Configuration settings with Pydantic

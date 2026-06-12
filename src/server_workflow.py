@@ -205,6 +205,7 @@ _STATUS_RESOURCE_MAP = {
     "user_story": "userstory_statuses",
     "task": "task_statuses",
     "issue": "issue_statuses",
+    "epic": "epic_statuses",
 }
 
 _ISSUE_ATTR_RESOURCE_MAP = {
@@ -248,6 +249,31 @@ def _resolve_status(
         available = [s["name"] for s in statuses]
         raise ValueError(f"Status '{status_name}' not found. Available: {available}")
     return matches[0]["id"]
+
+
+def _status_map(
+    client: TaigaClientWrapper,
+    project_id: int,
+    entity_type: str,
+    session_id: str,
+) -> Dict[int, Dict[str, Any]]:
+    """Return a {status_id: {"name", "is_closed"}} map for an entity type, cached per session.
+
+    Shares the per-session status cache with `_resolve_status` (same cache key), so a
+    search that resolves statuses and a later name→id resolution reuse one API call.
+    Returns an empty map for entity types that have no status resource.
+    """
+    resource = _STATUS_RESOURCE_MAP.get(entity_type)
+    if not resource:
+        return {}
+    statuses = _cached(
+        session_id,
+        f"statuses_{entity_type}_{project_id}",
+        lambda: client.list_resources(resource, project_id=project_id),
+    )
+    return {
+        s["id"]: {"name": s.get("name"), "is_closed": s.get("is_closed", False)} for s in statuses
+    }
 
 
 def _resolve_user(
@@ -339,6 +365,20 @@ def _resolve_story_refs(client: TaigaClientWrapper, project_id: int, refs: List[
     return [by_ref[r] for r in refs]
 
 
+def _is_closed(item: Dict[str, Any]) -> bool:
+    """Closed-ness of a work item, from the top-level field or its status row.
+
+    Taiga's user-story serializer carries a top-level `is_closed`, but task and
+    issue payloads don't always. `status_extra_info.is_closed` is the same
+    property on the status row itself — the authoritative source `search` uses —
+    so fall back to it when the top-level field is absent.
+    """
+    val = item.get("is_closed")
+    if val is None:
+        val = (item.get("status_extra_info") or {}).get("is_closed", False)
+    return bool(val)
+
+
 def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
     """Extract readable fields from a raw user story dict."""
     return {
@@ -347,7 +387,7 @@ def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
         "status": (us.get("status_extra_info") or {}).get("name") or us.get("status"),
         "assignee": (us.get("assigned_to_extra_info") or {}).get("full_name_display"),
         "is_blocked": us.get("is_blocked", False),
-        "is_closed": us.get("is_closed", False),
+        "is_closed": _is_closed(us),
         "sprint": (us.get("milestone_extra_info") or {}).get("name"),
         "tags": us.get("tags", []),
     }
@@ -360,6 +400,23 @@ def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:
         "status": (task.get("status_extra_info") or {}).get("name") or task.get("status"),
         "assignee": (task.get("assigned_to_extra_info") or {}).get("full_name_display"),
         "is_blocked": task.get("is_blocked", False),
+        "is_closed": _is_closed(task),
+    }
+
+
+def _issue_summary(issue: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract readable fields from a raw issue dict (resolved names, not raw ids)."""
+    return {
+        "ref": issue.get("ref"),
+        "subject": issue.get("subject"),
+        "status": (issue.get("status_extra_info") or {}).get("name") or issue.get("status"),
+        "assignee": (issue.get("assigned_to_extra_info") or {}).get("full_name_display"),
+        "priority": (issue.get("priority_extra_info") or {}).get("name"),
+        "severity": (issue.get("severity_extra_info") or {}).get("name"),
+        "type": (issue.get("type_extra_info") or {}).get("name"),
+        "is_blocked": issue.get("is_blocked", False),
+        "is_closed": _is_closed(issue),
+        "tags": issue.get("tags", []),
     }
 
 
@@ -687,19 +744,121 @@ def search(
 
     def do_search():
         proj = _resolve_project(client, project)
-        result = client.api.get("/search", params={"project": proj["id"], "text": query})
+        project_id = proj["id"]
+        result = client.api.get("/search", params={"project": project_id, "text": query})
+
+        # Taiga's /search echoes status as a raw numeric id with no name or
+        # is_closed flag (issue #95). Resolve each entity group's status against
+        # the project's status table so reads are self-interpreting and match the
+        # write tools' flat {status: <name>, is_closed: <bool>} shape.
+        def _resolved(group_key: str, entity_type: str) -> List[Dict[str, Any]]:
+            items = result.get(group_key, []) or []
+            if not items:
+                return []
+            status_by_id = _status_map(client, project_id, entity_type, actual_session_id)
+            for item in items:
+                info = status_by_id.get(item.get("status"))
+                if info is not None:
+                    item["status"] = info["name"]
+                    item["is_closed"] = info["is_closed"]
+            return items
+
         return {
             "query": query,
             "project": proj["slug"],
             "count": result.get("count", 0),
-            "user_stories": result.get("userstories", []),
-            "tasks": result.get("tasks", []),
-            "issues": result.get("issues", []),
-            "epics": result.get("epics", []),
+            "user_stories": _resolved("userstories", "story"),
+            "tasks": _resolved("tasks", "task"),
+            "issues": _resolved("issues", "issue"),
+            "epics": _resolved("epics", "epic"),
             "wiki_pages": result.get("wikipages", []),
         }
 
     return _execute_taiga_operation("search", do_search, f"project={project} query={query!r}")
+
+
+# ---------------------------------------------------------------------------
+# Read-by-ref tools (pure inspection: status, assignee, … resolved to names)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    "get_story",
+    description=(
+        "Read a single user story by its ref number. Returns resolved human fields "
+        "(status name, is_closed, assignee, sprint, tags) — no mutation. "
+        "project accepts slug or ID."
+    ),
+)
+def get_story(
+    project: Union[str, int],
+    ref: int,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_get():
+        proj = _resolve_project(client, project)
+        story = client.api.user_stories.get_by_ref(ref=ref, project=proj["id"])
+        if not story:
+            raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
+        return _story_summary(story)
+
+    return _execute_taiga_operation("get_story", do_get, f"#{ref} in {project}")
+
+
+@mcp.tool(
+    "get_task",
+    description=(
+        "Read a single task by its ref number. Returns resolved human fields "
+        "(status name, is_closed, assignee) — no mutation. project accepts slug or ID."
+    ),
+)
+def get_task(
+    project: Union[str, int],
+    ref: int,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_get():
+        proj = _resolve_project(client, project)
+        # pytaigaclient tasks.get_by_ref passes query_params= but TaigaClient.get()
+        # expects params= (issue #87). Bypass via direct API call, as set_task_status does.
+        task = client.api.get("/tasks/by_ref", params={"ref": ref, "project": proj["id"]})
+        if not task:
+            raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
+        return _task_summary(task)
+
+    return _execute_taiga_operation("get_task", do_get, f"task #{ref} in {project}")
+
+
+@mcp.tool(
+    "get_issue",
+    description=(
+        "Read a single issue by its ref number. Returns resolved human fields "
+        "(status name, is_closed, assignee, priority, severity, type, tags) — no mutation. "
+        "project accepts slug or ID."
+    ),
+)
+def get_issue(
+    project: Union[str, int],
+    ref: int,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = _get_session_id(session_id)
+    client = _get_authenticated_client(actual_session_id)
+
+    def do_get():
+        proj = _resolve_project(client, project)
+        issue = client.api.issues.get_by_ref(ref=ref, project=proj["id"])
+        if not issue:
+            raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
+        return _issue_summary(issue)
+
+    return _execute_taiga_operation("get_issue", do_get, f"#{ref} in {project}")
 
 
 # ---------------------------------------------------------------------------
@@ -1330,6 +1489,7 @@ def update_issue(
             "type": (result.get("type_extra_info") or {}).get("name"),
             "assignee": (result.get("assigned_to_extra_info") or {}).get("full_name_display"),
             "is_blocked": result.get("is_blocked"),
+            "is_closed": result.get("is_closed", False),
         }
 
     return _execute_taiga_operation("update_issue", do_update, f"#{ref} in {project}")
