@@ -759,10 +759,14 @@ def search(
             for item in items:
                 info = status_by_id.get(item.get("status"))
                 if info is not None:
+                    # Known status: the status table is authoritative.
                     item["status"] = info["name"]
-                # Always surface is_closed so the output shape is uniform; None
-                # only for an unknown id (status left as the raw value, not faked).
-                item["is_closed"] = info["is_closed"] if info is not None else None
+                    item["is_closed"] = info["is_closed"]
+                else:
+                    # Unknown id: keep the raw status and don't clobber any
+                    # is_closed the payload already carries; default to None so
+                    # the key is still present and the output shape stays uniform.
+                    item.setdefault("is_closed", None)
             return items
 
         return {

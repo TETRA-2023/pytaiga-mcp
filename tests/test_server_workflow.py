@@ -1635,6 +1635,30 @@ class TestSearch:
         assert result["issues"][0]["status"] == 999
         assert result["issues"][0]["is_closed"] is None
 
+    def test_unknown_id_preserves_existing_is_closed(self, session, mock_client):
+        # If the payload already carries is_closed, an unknown status id must not
+        # clobber it — the status table is authoritative only when it has the id.
+        search_result = {
+            "count": 1,
+            "issues": [{"ref": 5, "subject": "Bug", "status": 999, "is_closed": True}],
+            "userstories": [],
+            "tasks": [],
+            "epics": [],
+            "wikipages": [],
+        }
+
+        def api_get(path, params=None):
+            if "/search" in str(path):
+                return search_result
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = [{"id": 57, "name": "New", "is_closed": False}]
+
+        result = wf.search("p", "x", session_id=session)
+        assert result["issues"][0]["status"] == 999
+        assert result["issues"][0]["is_closed"] is True
+
     def test_resolves_epic_status(self, session, mock_client):
         search_result = {
             "count": 1,
