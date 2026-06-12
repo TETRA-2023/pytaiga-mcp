@@ -1544,3 +1544,239 @@ class TestGetCurrentUser:
     def test_unauthenticated_raises(self):
         with pytest.raises((ValueError, PermissionError)):
             wf.get_current_user(session_id="nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Status-id resolution on reads (#95) — search + get_* by ref
+# ---------------------------------------------------------------------------
+
+
+class TestStatusMap:
+    def test_builds_id_to_name_isclosed_map(self, mock_client):
+        mock_client.list_resources.return_value = [
+            {"id": 57, "name": "New", "is_closed": False},
+            {"id": 60, "name": "Closed", "is_closed": True},
+        ]
+        result = wf._status_map(mock_client, 1, "issue", "sess")
+        assert result == {
+            57: {"name": "New", "is_closed": False},
+            60: {"name": "Closed", "is_closed": True},
+        }
+
+    def test_shares_cache_with_resolve_status(self, mock_client):
+        mock_client.list_resources.return_value = [{"id": 60, "name": "Closed", "is_closed": True}]
+        wf._resolve_status(mock_client, 1, "issue", "Closed", "sess")
+        wf._status_map(mock_client, 1, "issue", "sess")
+        # One fetch shared between resolver and map (same session cache key).
+        mock_client.list_resources.assert_called_once_with("issue_statuses", project_id=1)
+
+    def test_unknown_entity_type_returns_empty(self, mock_client):
+        assert wf._status_map(mock_client, 1, "wiki", "sess") == {}
+        mock_client.list_resources.assert_not_called()
+
+
+class TestSearch:
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_resolves_raw_status_ids_to_name_and_is_closed(self, session, mock_client):
+        search_result = {
+            "count": 2,
+            "issues": [{"ref": 1212, "subject": "Bug", "status": 57}],
+            "userstories": [{"ref": 1114, "subject": "Story", "status": 67}],
+            "tasks": [],
+            "epics": [],
+            "wikipages": [{"id": 9, "title": "Page"}],
+        }
+
+        def api_get(path, params=None):
+            if "/search" in str(path):
+                return search_result
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        # _resolved is called in order story, task, issue, epic; only non-empty
+        # groups fetch a status table → userstory_statuses then issue_statuses.
+        mock_client.list_resources.side_effect = [
+            [{"id": 67, "name": "In progress", "is_closed": False}],  # userstory_statuses
+            [{"id": 57, "name": "New", "is_closed": False}],  # issue_statuses
+        ]
+
+        result = wf.search("p", "anything", session_id=session)
+
+        assert result["issues"][0]["status"] == "New"
+        assert result["issues"][0]["is_closed"] is False
+        assert result["user_stories"][0]["status"] == "In progress"
+        assert result["user_stories"][0]["is_closed"] is False
+        # Empty groups don't trigger a status fetch.
+        assert mock_client.list_resources.call_count == 2
+
+    def test_leaves_status_untouched_when_id_unknown(self, session, mock_client):
+        search_result = {
+            "count": 1,
+            "issues": [{"ref": 5, "subject": "Bug", "status": 999}],
+            "userstories": [],
+            "tasks": [],
+            "epics": [],
+            "wikipages": [],
+        }
+
+        def api_get(path, params=None):
+            if "/search" in str(path):
+                return search_result
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = [{"id": 57, "name": "New", "is_closed": False}]
+
+        result = wf.search("p", "x", session_id=session)
+        # Unknown id is left as-is rather than mislabelled, but is_closed is still
+        # present (None) so the output shape stays uniform across items.
+        assert result["issues"][0]["status"] == 999
+        assert result["issues"][0]["is_closed"] is None
+
+    def test_unknown_id_preserves_existing_is_closed(self, session, mock_client):
+        # If the payload already carries is_closed, an unknown status id must not
+        # clobber it — the status table is authoritative only when it has the id.
+        search_result = {
+            "count": 1,
+            "issues": [{"ref": 5, "subject": "Bug", "status": 999, "is_closed": True}],
+            "userstories": [],
+            "tasks": [],
+            "epics": [],
+            "wikipages": [],
+        }
+
+        def api_get(path, params=None):
+            if "/search" in str(path):
+                return search_result
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = [{"id": 57, "name": "New", "is_closed": False}]
+
+        result = wf.search("p", "x", session_id=session)
+        assert result["issues"][0]["status"] == 999
+        assert result["issues"][0]["is_closed"] is True
+
+    def test_resolves_epic_status(self, session, mock_client):
+        search_result = {
+            "count": 1,
+            "issues": [],
+            "userstories": [],
+            "tasks": [],
+            "epics": [{"ref": 42, "subject": "Epic", "status": 30}],
+            "wikipages": [],
+        }
+
+        def api_get(path, params=None):
+            if "/search" in str(path):
+                return search_result
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = [
+            {"id": 30, "name": "In progress", "is_closed": False}
+        ]
+
+        result = wf.search("p", "x", session_id=session)
+        assert result["epics"][0]["status"] == "In progress"
+        assert result["epics"][0]["is_closed"] is False
+        # Resolved against the epic_statuses table specifically.
+        mock_client.list_resources.assert_called_once_with("epic_statuses", project_id=1)
+
+
+class TestGetStory:
+    def test_returns_resolved_summary(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "ref": 3,
+            "subject": "Story A",
+            "status_extra_info": {"name": "In Progress"},
+            "assigned_to_extra_info": {"full_name_display": "Alice"},
+            "is_closed": False,
+        }
+        result = wf.get_story("p", 3, session_id=session)
+        assert result["status"] == "In Progress"
+        assert result["is_closed"] is False
+        assert result["assignee"] == "Alice"
+        mock_client.api.user_stories.get_by_ref.assert_called_once_with(ref=3, project=1)
+
+    def test_raises_when_not_found(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.user_stories.get_by_ref.return_value = None
+        with pytest.raises(ValueError, match="not found"):
+            wf.get_story("p", 99, session_id=session)
+
+
+class TestGetTask:
+    def test_uses_by_ref_endpoint_not_helper(self, session, mock_client):
+        project = {"id": 1, "slug": "p", "name": "P"}
+        task = {
+            "ref": 7,
+            "subject": "Task 1",
+            "status_extra_info": {"name": "Done"},
+            "is_closed": True,
+        }
+
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return task
+            return project
+
+        mock_client.api.get.side_effect = api_get
+        result = wf.get_task("p", 7, session_id=session)
+        assert result["status"] == "Done"
+        assert result["is_closed"] is True
+        # Must NOT route through the buggy tasks.get_by_ref helper.
+        mock_client.api.tasks.get_by_ref.assert_not_called()
+
+    def test_raises_when_not_found(self, session, mock_client):
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return None
+            return {"id": 1, "slug": "p", "name": "P"}
+
+        mock_client.api.get.side_effect = api_get
+        with pytest.raises(ValueError, match="not found"):
+            wf.get_task("p", 99, session_id=session)
+
+
+class TestGetIssue:
+    def test_returns_resolved_summary(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.issues.get_by_ref.return_value = {
+            "ref": 1212,
+            "subject": "Bug",
+            "status_extra_info": {"name": "New"},
+            "priority_extra_info": {"name": "High"},
+            "severity_extra_info": {"name": "Normal"},
+            "type_extra_info": {"name": "Bug"},
+            "assigned_to_extra_info": None,
+            "is_closed": False,
+        }
+        result = wf.get_issue("p", 1212, session_id=session)
+        assert result["status"] == "New"
+        assert result["is_closed"] is False
+        assert result["priority"] == "High"
+        assert result["type"] == "Bug"
+        mock_client.api.issues.get_by_ref.assert_called_once_with(ref=1212, project=1)
+
+    def test_raises_when_not_found(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.issues.get_by_ref.return_value = None
+        with pytest.raises(ValueError, match="not found"):
+            wf.get_issue("p", 99, session_id=session)
+
+    def test_is_closed_falls_back_to_status_extra_info(self, session, mock_client):
+        # Payload with no top-level is_closed — closed-ness must be read off the
+        # status row so the triage signal ("is it closed?") isn't silently False.
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.issues.get_by_ref.return_value = {
+            "ref": 60,
+            "subject": "Done bug",
+            "status_extra_info": {"name": "Closed", "is_closed": True},
+        }
+        result = wf.get_issue("p", 60, session_id=session)
+        assert result["status"] == "Closed"
+        assert result["is_closed"] is True
