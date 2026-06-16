@@ -405,6 +405,18 @@ class TestCreateStory:
             json={"epic": 99, "user_story": 100},
         )
 
+    def test_epic_not_found_creates_no_story(self, session, mock_client):
+        # Epic is validated before creation, so a bad ref must NOT leave an
+        # orphaned (created-but-unlinked) story behind.
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "test", "name": "Test"},
+            None,  # /epics/by_ref → not found
+        ]
+        with pytest.raises(ValueError, match="Epic #7 not found"):
+            wf.create_story("test", "Story", epic=7, session_id=session)
+        mock_client.api.user_stories.create.assert_not_called()
+        mock_client.api.post.assert_not_called()
+
 
 class TestSetStoryStatus:
     def test_resolves_status_and_updates(self, session, mock_client):

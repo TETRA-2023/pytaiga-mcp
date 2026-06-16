@@ -941,6 +941,15 @@ def create_story(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
+        # Validate the epic BEFORE creating the story. Create and epic-link are two
+        # separate Taiga calls, so resolving the epic first means a bad ref fails
+        # cleanly instead of leaving an orphaned (created-but-unlinked) story behind.
+        epic_data = None
+        if epic is not None:
+            epic_data = client.api.get("/epics/by_ref", params={"ref": epic, "project": project_id})
+            if not epic_data:
+                raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
+
         payload: Dict[str, Any] = {"project": project_id, "subject": subject}
         if description:
             payload["description"] = description
@@ -954,11 +963,8 @@ def create_story(
 
         result = client.api.user_stories.create(**payload)
 
-        # Link to epic after creation
-        if epic is not None and result:
-            epic_data = client.api.get("/epics/by_ref", params={"ref": epic, "project": project_id})
-            if not epic_data:
-                raise ValueError(f"Epic #{epic} not found — story was created but not linked.")
+        # Link to the already-validated epic.
+        if epic_data is not None and result:
             client.api.post(
                 f"/epics/{epic_data['id']}/related_userstories",
                 json={"epic": epic_data["id"], "user_story": result["id"]},
