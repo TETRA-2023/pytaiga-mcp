@@ -383,6 +383,40 @@ class TestCreateStory:
         call_kwargs = mock_client.api.user_stories.create.call_args.kwargs
         assert call_kwargs["assigned_to"] == 7
 
+    def test_creates_story_with_epic_link(self, session, mock_client):
+        # api.get: 1st resolves the project (by_slug), 2nd resolves the epic (by_ref).
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "test", "name": "Test"},
+            {"id": 99, "ref": 7, "subject": "Epic"},
+        ]
+        mock_client.api.user_stories.create.return_value = {
+            "id": 100,
+            "ref": 5,
+            "subject": "Story",
+            "milestone_extra_info": None,
+        }
+        result = wf.create_story("test", "Story", epic=7, session_id=session)
+        assert result["status"] == "created"
+        assert result["epic_linked"] is True
+        # Taiga's related_userstories endpoint requires 'epic' + 'user_story'
+        # (not project_id/user_story_id) — same payload as update_story relink.
+        mock_client.api.post.assert_called_once_with(
+            "/epics/99/related_userstories",
+            json={"epic": 99, "user_story": 100},
+        )
+
+    def test_epic_not_found_creates_no_story(self, session, mock_client):
+        # Epic is validated before creation, so a bad ref must NOT leave an
+        # orphaned (created-but-unlinked) story behind.
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "test", "name": "Test"},
+            None,  # /epics/by_ref → not found
+        ]
+        with pytest.raises(ValueError, match="Epic #7 not found"):
+            wf.create_story("test", "Story", epic=7, session_id=session)
+        mock_client.api.user_stories.create.assert_not_called()
+        mock_client.api.post.assert_not_called()
+
 
 class TestSetStoryStatus:
     def test_resolves_status_and_updates(self, session, mock_client):
