@@ -5,6 +5,7 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
+from pytaigaclient.exceptions import TaigaAPIError, TaigaException
 
 import src.server_workflow as wf
 
@@ -1814,3 +1815,795 @@ class TestGetIssue:
         result = wf.get_issue("p", 60, session_id=session)
         assert result["status"] == "Closed"
         assert result["is_closed"] is True
+
+
+# ---------------------------------------------------------------------------
+# Sprint write tools — payload-shape regression cover (P0)
+# ---------------------------------------------------------------------------
+
+
+class TestPlanSprint:
+    def test_creates_sprint_and_moves_stories(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.milestones.create.return_value = {
+            "id": 9,
+            "name": "S1",
+            "estimated_start": "2026-01-01",
+            "estimated_finish": "2026-01-14",
+        }
+        # _resolve_story_refs → list_resources("user_stories")
+        mock_client.list_resources.return_value = [
+            {"ref": 12, "id": 120},
+            {"ref": 15, "id": 150},
+        ]
+        result = wf.plan_sprint(
+            "p", "S1", "2026-01-01", "2026-01-14", story_refs=[12, 15], session_id=session
+        )
+        assert result["status"] == "created"
+        assert result["sprint"]["id"] == 9
+        assert result["stories_assigned"] == 2
+        mock_client.api.milestones.create.assert_called_once_with(
+            project=1, name="S1", estimated_start="2026-01-01", estimated_finish="2026-01-14"
+        )
+        mock_client.api.post.assert_called_once_with(
+            "/userstories/bulk_update_milestone",
+            json={
+                "project_id": 1,
+                "milestone_id": 9,
+                "bulk_stories": [{"us_id": 120, "order": 0}, {"us_id": 150, "order": 1}],
+            },
+        )
+
+    def test_creates_sprint_without_stories(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.milestones.create.return_value = {
+            "id": 9,
+            "name": "S1",
+            "estimated_start": "2026-01-01",
+            "estimated_finish": "2026-01-14",
+        }
+        result = wf.plan_sprint("p", "S1", "2026-01-01", "2026-01-14", session_id=session)
+        assert result["stories_assigned"] == 0
+        mock_client.api.post.assert_not_called()
+
+
+class TestMoveToSprint:
+    def test_moves_stories_into_sprint(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        def lr(resource, **kw):
+            return {
+                "milestones": [{"id": 9, "name": "S1"}],
+                "user_stories": [{"ref": 12, "id": 120}, {"ref": 15, "id": 150}],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.move_to_sprint("p", [12, 15], "S1", session_id=session)
+        assert result == {"status": "moved", "sprint": "S1", "stories_moved": 2, "refs": [12, 15]}
+        mock_client.api.post.assert_called_once_with(
+            "/userstories/bulk_update_milestone",
+            json={
+                "project_id": 1,
+                "milestone_id": 9,
+                "bulk_stories": [{"us_id": 120, "order": 0}, {"us_id": 150, "order": 1}],
+            },
+        )
+
+    def test_unknown_sprint_raises(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [{"id": 9, "name": "S1"}]
+        with pytest.raises(ValueError, match="Sprint 'S9' not found"):
+            wf.move_to_sprint("p", [12], "S9", session_id=session)
+
+
+class TestCloseSprint:
+    def test_closes_named_sprint(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [{"id": 9, "name": "S1", "version": 3}]
+        mock_client.api.milestones.edit.return_value = {"id": 9, "name": "S1"}
+        result = wf.close_sprint("p", "S1", session_id=session)
+        assert result == {"status": "closed", "sprint": "S1", "id": 9}
+        mock_client.api.milestones.edit.assert_called_once_with(9, closed=True, version=3)
+
+
+class TestCreateEpic:
+    def test_creates_epic_and_links_stories(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.epics.create.return_value = {"id": 7, "ref": 70, "subject": "Big"}
+        mock_client.list_resources.return_value = [{"ref": 12, "id": 120}]  # user_stories
+        result = wf.create_epic("p", "Big", story_refs=[12], session_id=session)
+        assert result["status"] == "created"
+        assert result["id"] == 7
+        assert result["stories_linked"] == 1
+        mock_client.api.epics.create.assert_called_once_with(project=1, subject="Big")
+        mock_client.api.post.assert_called_once_with(
+            "/epics/7/related_userstories/bulk_create",
+            json={"project_id": 1, "bulk_userstories": [120]},
+        )
+
+    def test_creates_epic_minimal(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.epics.create.return_value = {"id": 7, "ref": 70, "subject": "Big"}
+        result = wf.create_epic("p", "Big", session_id=session)
+        assert result["stories_linked"] == 0
+        mock_client.api.post.assert_not_called()
+
+    def test_create_epic_with_color_and_assignee(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [  # memberships for _resolve_user
+            {
+                "user": 7,
+                "full_name": "Bob",
+                "email": "bob@x",
+                "user_extra_info": {"username": "bob"},
+            }
+        ]
+        mock_client.api.epics.create.return_value = {"id": 7, "ref": 70, "subject": "Big"}
+        wf.create_epic("p", "Big", color="#fff", assignee="bob", session_id=session)
+        call = mock_client.api.epics.create.call_args.kwargs
+        assert call["color"] == "#fff"
+        assert call["assigned_to"] == 7
+
+
+class TestAssignItem:
+    def test_assigns_story(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [  # memberships
+            {
+                "user": 7,
+                "full_name": "Bob",
+                "email": "bob@x",
+                "user_extra_info": {"username": "bob"},
+            }
+        ]
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 100, "version": 2}
+        mock_client.api.user_stories.edit.return_value = {
+            "assigned_to_extra_info": {"full_name_display": "Bob"}
+        }
+        result = wf.assign_item("p", 5, "bob", session_id=session)
+        assert result == {"ref": 5, "entity_type": "story", "assigned_to": "Bob"}
+        mock_client.api.user_stories.edit.assert_called_once_with(100, assigned_to=7, version=2)
+
+    def test_assigns_issue_via_entity_type(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [
+            {
+                "user": 7,
+                "full_name": "Bob",
+                "email": "bob@x",
+                "user_extra_info": {"username": "bob"},
+            }
+        ]
+        mock_client.api.issues.get_by_ref.return_value = {"id": 300, "version": 1}
+        mock_client.api.issues.edit.return_value = {
+            "assigned_to_extra_info": {"full_name_display": "Bob"}
+        }
+        result = wf.assign_item("p", 9, "bob", entity_type="issue", session_id=session)
+        assert result["entity_type"] == "issue"
+        mock_client.api.issues.edit.assert_called_once_with(300, assigned_to=7, version=1)
+
+    def test_invalid_entity_type_raises(self, session, mock_client):
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            wf.assign_item("p", 5, "bob", entity_type="bogus", session_id=session)
+
+
+# ---------------------------------------------------------------------------
+# Read / composite tools (P0)
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectOverview:
+    def test_assembles_overview(self, session, mock_client):
+        mock_client.api.get.return_value = {
+            "id": 1,
+            "slug": "p",
+            "name": "P",
+            "description": "d",
+            "is_private": False,
+        }
+
+        def lr(resource, **kw):
+            return {
+                "memberships": [
+                    {
+                        "user_extra_info": {"username": "bob"},
+                        "full_name": "Bob",
+                        "role_name": "Dev",
+                        "is_admin": False,
+                    }
+                ],
+                # Wide date range so the "covers today" test is deterministic.
+                "milestones": [
+                    {
+                        "id": 9,
+                        "name": "S1",
+                        "closed": False,
+                        "estimated_start": "2020-01-01",
+                        "estimated_finish": "2099-12-31",
+                    }
+                ],
+                "user_stories": [
+                    {"status_extra_info": {"name": "New"}},
+                    {"status_extra_info": {"name": "New"}},
+                    {"status_extra_info": {"name": "Done"}},
+                ],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.get_project_overview("p", session_id=session)
+        assert result["project"]["slug"] == "p"
+        assert result["total_stories"] == 3
+        assert result["stories_by_status"] == {"New": 2, "Done": 1}
+        assert result["active_sprint"]["name"] == "S1"
+        assert result["team"][0]["username"] == "bob"
+
+    def test_no_active_sprint_when_none_cover_today(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        def lr(resource, **kw):
+            return {
+                "memberships": [],
+                "milestones": [
+                    {
+                        "id": 9,
+                        "name": "Old",
+                        "closed": False,
+                        "estimated_start": "2000-01-01",
+                        "estimated_finish": "2000-12-31",
+                    }
+                ],
+                "user_stories": [],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.get_project_overview("p", session_id=session)
+        assert result["active_sprint"] is None
+        assert result["total_stories"] == 0
+
+
+class TestBrowseBacklog:
+    def test_minimal_backlog_filters_milestone_null(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [
+            {"ref": 12, "subject": "A", "status_extra_info": {"name": "New"}}
+        ]
+        result = wf.browse_backlog("p", session_id=session)
+        assert result[0]["ref"] == 12
+        _, kwargs = mock_client.list_resources.call_args
+        assert kwargs["milestone"] == "null"
+
+    def test_filter_by_epic_resolves_ref_to_id(self, session, mock_client):
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "p", "name": "P"},
+            {"id": 77},  # /epics/by_ref
+        ]
+        mock_client.list_resources.return_value = []
+        wf.browse_backlog("p", epic=7, session_id=session)
+        _, kwargs = mock_client.list_resources.call_args
+        assert kwargs["epic"] == 77
+        assert kwargs["milestone"] == "null"
+
+
+class TestGetTeamWorkload:
+    def test_aggregates_per_member_whole_project(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        def lr(resource, **kw):
+            return {
+                "user_stories": [
+                    {"assigned_to_extra_info": {"full_name_display": "Bob"}, "is_blocked": True},
+                    {"assigned_to_extra_info": {"full_name_display": "Bob"}},
+                    {"assigned_to_extra_info": None},  # unassigned
+                ],
+                "tasks": [
+                    {"assigned_to_extra_info": {"full_name_display": "Bob"}},
+                ],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.get_team_workload("p", session_id=session)
+        assert result["sprint"] is None
+        team = {row["member"]: row for row in result["team"]}
+        assert team["Bob"] == {
+            "member": "Bob",
+            "stories": 2,
+            "tasks": 1,
+            "blocked_stories": 1,
+        }
+        assert team["(unassigned)"]["stories"] == 1
+
+    def test_sprint_filter_applied(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        def lr(resource, **kw):
+            return {
+                "milestones": [{"id": 9, "name": "S1"}],
+                "user_stories": [],
+                "tasks": [],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.get_team_workload("p", sprint="S1", session_id=session)
+        assert result["sprint"] == "S1"
+        # stories + tasks both fetched with the milestone filter
+        story_call = [c for c in mock_client.list_resources.call_args_list if c.args[0] == "tasks"][
+            0
+        ]
+        assert story_call.kwargs["milestone"] == 9
+
+
+class TestGetWiki:
+    def test_get_page_by_slug(self, session, mock_client):
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "p", "name": "P"},
+            {"slug": "home", "content": "hi", "id": 9},
+        ]
+        result = wf.get_wiki("p", slug="home", session_id=session)
+        assert result == {"slug": "home", "content": "hi", "id": 9}
+
+    def test_list_pages_when_no_slug(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [
+            {"slug": "home", "id": 9},
+            {"slug": "spec", "id": 10},
+        ]
+        result = wf.get_wiki("p", session_id=session)
+        assert result == [{"slug": "home", "id": 9}, {"slug": "spec", "id": 10}]
+
+    def test_page_not_found_raises(self, session, mock_client):
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "p", "name": "P"},
+            None,
+        ]
+        with pytest.raises(ValueError, match="Wiki page 'home' not found"):
+            wf.get_wiki("p", slug="home", session_id=session)
+
+
+class TestLogin:
+    def test_login_success_creates_session(self, monkeypatch):
+        wrapper = MagicMock()
+        wrapper.login.return_value = True
+        monkeypatch.setattr(wf, "TaigaClientWrapper", lambda host: wrapper)
+        result = wf.login(host="https://taiga.example", username="u", password="p")
+        assert "session_id" in result
+        assert wf.active_sessions[result["session_id"]] is wrapper
+        wrapper.login.assert_called_once_with(username="u", password="p")
+
+    def test_login_failure_raises(self, monkeypatch):
+        wrapper = MagicMock()
+        wrapper.login.return_value = False
+        monkeypatch.setattr(wf, "TaigaClientWrapper", lambda host: wrapper)
+        # The bare RuntimeError("Login failed.") is re-wrapped by the generic
+        # handler into the "unexpected server error" message.
+        with pytest.raises(RuntimeError, match="unexpected server error"):
+            wf.login(host="https://taiga.example", username="u", password="p")
+
+    def test_login_missing_credentials_raises(self, monkeypatch):
+        # settings is a pydantic model — patch the methods on the class, not the instance.
+        monkeypatch.setattr(type(wf.settings), "get_username_value", lambda self: "")
+        monkeypatch.setattr(type(wf.settings), "get_password_value", lambda self: "")
+        with pytest.raises(ValueError, match="Credentials required"):
+            wf.login(host="https://taiga.example")
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure helpers (P1)
+# ---------------------------------------------------------------------------
+
+
+class _StubAPIError(TaigaAPIError):
+    """Stand-in for a TaigaAPIError. Subclasses the real type so the wrapper's
+    `except TaigaAPIError` catches it; bypasses the parent __init__ (unknown
+    signature) and sets only the attributes the repair logic reads."""
+
+    def __init__(self, status_code, error_detail, response):
+        Exception.__init__(self, f"API Error {status_code}: {error_detail}")
+        self.status_code = status_code
+        self.error_detail = error_detail
+        self.response = response
+
+
+def _resp(json_value=None, raises=None):
+    r = MagicMock()
+    if raises is not None:
+        r.json.side_effect = raises
+    else:
+        r.json.return_value = json_value
+    return r
+
+
+class TestRepairTaigaApiError:
+    def test_rewrites_drf_dict_body(self):
+        e = _StubAPIError(
+            400,
+            wf._TAIGA_API_ERROR_PLACEHOLDER,
+            _resp({"user_story": ["This field is required."], "epic": ["This field is required."]}),
+        )
+        wf._repair_taiga_api_error(e)
+        assert "user_story: This field is required." in e.error_detail
+        assert "epic: This field is required." in e.error_detail
+        assert e.args[0] == f"API Error 400: {e.error_detail}"
+
+    def test_formats_scalar_and_nested_values(self):
+        e = _StubAPIError(
+            422,
+            wf._TAIGA_API_ERROR_PLACEHOLDER,
+            _resp({"detail": "bad", "meta": {"k": "v"}}),
+        )
+        wf._repair_taiga_api_error(e)
+        assert "detail: bad" in e.error_detail
+        assert 'meta: {"k": "v"}' in e.error_detail
+
+    def test_noop_when_detail_not_placeholder(self):
+        e = _StubAPIError(400, "real message", _resp({"x": ["y"]}))
+        wf._repair_taiga_api_error(e)
+        assert e.error_detail == "real message"
+
+    def test_noop_when_no_response(self):
+        e = _StubAPIError(400, wf._TAIGA_API_ERROR_PLACEHOLDER, None)
+        wf._repair_taiga_api_error(e)
+        assert e.error_detail == wf._TAIGA_API_ERROR_PLACEHOLDER
+
+    def test_noop_when_body_not_parseable(self):
+        e = _StubAPIError(400, wf._TAIGA_API_ERROR_PLACEHOLDER, _resp(raises=ValueError("no json")))
+        wf._repair_taiga_api_error(e)
+        assert e.error_detail == wf._TAIGA_API_ERROR_PLACEHOLDER
+
+    def test_noop_when_body_empty_or_not_dict(self):
+        e = _StubAPIError(400, wf._TAIGA_API_ERROR_PLACEHOLDER, _resp({}))
+        wf._repair_taiga_api_error(e)
+        assert e.error_detail == wf._TAIGA_API_ERROR_PLACEHOLDER
+        e2 = _StubAPIError(400, wf._TAIGA_API_ERROR_PLACEHOLDER, _resp(["a", "b"]))
+        wf._repair_taiga_api_error(e2)
+        assert e2.error_detail == wf._TAIGA_API_ERROR_PLACEHOLDER
+
+
+class TestResolveTransportWorkflow:
+    def test_defaults_to_stdio(self):
+        assert wf._resolve_transport(argv=[], env={}) == "stdio"
+
+    def test_sse_flag(self):
+        assert wf._resolve_transport(argv=["s.py", "--sse"], env={}) == "sse"
+
+    def test_streamable_http_flag(self):
+        assert (
+            wf._resolve_transport(argv=["s.py", "--streamable-http"], env={}) == "streamable-http"
+        )
+
+    def test_env_transport(self):
+        assert wf._resolve_transport(argv=[], env={"TAIGA_TRANSPORT": "sse"}) == "sse"
+
+    def test_env_case_insensitive(self):
+        assert wf._resolve_transport(argv=[], env={"TAIGA_TRANSPORT": "SSE"}) == "sse"
+
+    def test_flag_overrides_env(self):
+        assert (
+            wf._resolve_transport(argv=["s.py", "--sse"], env={"TAIGA_TRANSPORT": "stdio"}) == "sse"
+        )
+
+    def test_unknown_env_falls_back_to_stdio(self):
+        assert wf._resolve_transport(argv=[], env={"TAIGA_TRANSPORT": "bogus"}) == "stdio"
+
+
+class TestExecuteTaigaOperation:
+    """The wrapper around every tool body — error classification + repair."""
+
+    def test_repairs_and_reraises_api_error(self):
+        err = _StubAPIError(400, wf._TAIGA_API_ERROR_PLACEHOLDER, _resp({"field": ["required"]}))
+
+        def op():
+            raise err
+
+        with pytest.raises(TaigaAPIError) as ei:
+            wf._execute_taiga_operation("op", op)
+        assert "field: required" in ei.value.error_detail
+
+    def test_value_error_passes_through(self):
+        def op():
+            raise ValueError("bad input")
+
+        with pytest.raises(ValueError, match="bad input"):
+            wf._execute_taiga_operation("op", op)
+
+    def test_taiga_exception_reraised(self):
+        def op():
+            raise TaigaException("taiga boom")
+
+        with pytest.raises(TaigaException, match="taiga boom"):
+            wf._execute_taiga_operation("op", op)
+
+    def test_generic_exception_wrapped_in_runtime_error(self):
+        def op():
+            raise KeyError("k")
+
+        with pytest.raises(RuntimeError, match="Server error in op"):
+            wf._execute_taiga_operation("op", op)
+
+
+# ---------------------------------------------------------------------------
+# Branch cover for already-smoke-tested tools (P2)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveIssueAttribute:
+    def test_unknown_attribute_type_raises(self, session, mock_client):
+        with pytest.raises(ValueError, match="Unknown attribute type"):
+            wf._resolve_issue_attribute(mock_client, 1, "bogus", "x", session)
+
+    def test_attribute_not_found_raises(self, session, mock_client):
+        mock_client.list_resources.return_value = [{"id": 1, "name": "High"}]
+        with pytest.raises(ValueError, match="Priority 'Low' not found"):
+            wf._resolve_issue_attribute(mock_client, 1, "priority", "Low", session)
+
+
+class TestBrowseBacklogFilters:
+    def test_status_assignee_tags_filters(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        def lr(resource, **kw):
+            return {
+                "userstory_statuses": [{"id": 2, "name": "New"}],
+                "memberships": [
+                    {
+                        "user": 7,
+                        "full_name": "Bob",
+                        "email": "b@x",
+                        "user_extra_info": {"username": "bob"},
+                    }
+                ],
+                "user_stories": [],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        wf.browse_backlog("p", status="New", assignee="bob", tags="urgent", session_id=session)
+        us_call = [
+            c for c in mock_client.list_resources.call_args_list if c.args[0] == "user_stories"
+        ][0]
+        assert us_call.kwargs["status"] == 2
+        assert us_call.kwargs["assigned_to"] == 7
+        assert us_call.kwargs["tags"] == "urgent"
+        assert us_call.kwargs["milestone"] == "null"
+
+    def test_epic_not_found_raises(self, session, mock_client):
+        mock_client.api.get.side_effect = [{"id": 1, "slug": "p", "name": "P"}, None]
+        with pytest.raises(ValueError, match="Epic #7 not found"):
+            wf.browse_backlog("p", epic=7, session_id=session)
+
+
+class TestCreateTaskOptionalFields:
+    def test_all_optional_fields_resolved(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 50, "milestone": None}
+
+        def lr(resource, **kw):
+            return {
+                "milestones": [{"id": 9, "name": "S1"}],
+                "task_statuses": [{"id": 3, "name": "In progress"}],
+                "memberships": [
+                    {
+                        "user": 7,
+                        "full_name": "Bob",
+                        "email": "b@x",
+                        "user_extra_info": {"username": "bob"},
+                    }
+                ],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        mock_client.api.tasks.create.return_value = {"id": 500, "ref": 80, "subject": "T"}
+        wf.create_task(
+            "p",
+            5,
+            "T",
+            description="d",
+            status="In progress",
+            assignee="bob",
+            sprint="S1",
+            due_date="2026-02-01",
+            tags=["x"],
+            blocked=True,
+            session_id=session,
+        )
+        data = mock_client.api.tasks.create.call_args.kwargs["data"]
+        assert data["description"] == "d"
+        assert data["tags"] == ["x"]
+        assert data["due_date"] == "2026-02-01"
+        assert data["is_blocked"] is True
+        assert data["status"] == 3
+        assert data["assigned_to"] == 7
+        assert data["milestone"] == 9
+
+
+class TestUpdateTaskBranches:
+    def _api_get(self):
+        def api_get(path, params=None):
+            if path == "/projects/by_slug":
+                return {"id": 1, "slug": "p", "name": "P"}
+            if path == "/tasks/by_ref":
+                return {"id": 500, "version": 4}
+            return None
+
+        return api_get
+
+    def test_resolves_all_fields(self, session, mock_client):
+        mock_client.api.get.side_effect = self._api_get()
+
+        def lr(resource, **kw):
+            return {
+                "task_statuses": [{"id": 3, "name": "Done"}],
+                "memberships": [
+                    {
+                        "user": 7,
+                        "full_name": "Bob",
+                        "email": "b@x",
+                        "user_extra_info": {"username": "bob"},
+                    }
+                ],
+                "milestones": [{"id": 9, "name": "S1"}],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 60}
+        mock_client.api.tasks.edit.return_value = {
+            "ref": 80,
+            "subject": "T2",
+            "status_extra_info": {"name": "Done"},
+        }
+        wf.update_task(
+            "p",
+            80,
+            subject="T2",
+            description="d",
+            status="Done",
+            assignee="bob",
+            sprint="S1",
+            story_ref=12,
+            blocked=True,
+            tags=["x"],
+            session_id=session,
+        )
+        call = mock_client.api.tasks.edit.call_args
+        assert call.kwargs["version"] == 4
+        data = call.kwargs["data"]
+        assert data["subject"] == "T2"
+        assert data["status"] == 3
+        assert data["assigned_to"] == 7
+        assert data["milestone"] == 9
+        assert data["user_story"] == 60
+        assert data["is_blocked"] is True
+        assert data["tags"] == ["x"]
+
+    def test_no_fields_raises(self, session, mock_client):
+        mock_client.api.get.side_effect = self._api_get()
+        with pytest.raises(ValueError, match="No fields to update"):
+            wf.update_task("p", 80, session_id=session)
+
+    def test_task_not_found_raises(self, session, mock_client):
+        def api_get(path, params=None):
+            if path == "/projects/by_slug":
+                return {"id": 1, "slug": "p", "name": "P"}
+            return None  # /tasks/by_ref → not found
+
+        mock_client.api.get.side_effect = api_get
+        with pytest.raises(ValueError, match="Task #80 not found"):
+            wf.update_task("p", 80, subject="x", session_id=session)
+
+
+class TestCreateIssueAttributeResolution:
+    def test_explicit_type_priority_severity_assignee(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+
+        def lr(resource, **kw):
+            return {
+                "priorities": [{"id": 10, "name": "Low"}, {"id": 11, "name": "High"}],
+                "severities": [{"id": 20, "name": "Minor"}, {"id": 21, "name": "Major"}],
+                "issue_types": [{"id": 30, "name": "Bug"}, {"id": 31, "name": "Question"}],
+                "memberships": [
+                    {
+                        "user": 7,
+                        "full_name": "Bob",
+                        "email": "b@x",
+                        "user_extra_info": {"username": "bob"},
+                    }
+                ],
+                "issue_statuses": [{"id": 40, "name": "New"}],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        mock_client.api.issues.create.return_value = {"id": 600, "ref": 90, "subject": "Bug"}
+        wf.create_issue(
+            "p",
+            "Bug",
+            description="d",
+            issue_type="Question",
+            priority="High",
+            severity="Major",
+            assignee="bob",
+            tags=["x"],
+            session_id=session,
+        )
+        data = mock_client.api.issues.create.call_args.kwargs["data"]
+        assert data["type"] == 31
+        assert data["priority"] == 11
+        assert data["severity"] == 21
+        assert data["assigned_to"] == 7
+        assert data["tags"] == ["x"]
+        assert data["description"] == "d"
+        assert data["status"] == 40
+
+
+class TestUpdateIssueBranches:
+    def test_resolves_all_fields(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.issues.get_by_ref.return_value = {"id": 600, "version": 2}
+
+        def lr(resource, **kw):
+            return {
+                "issue_statuses": [{"id": 40, "name": "In progress"}],
+                "priorities": [{"id": 11, "name": "High"}],
+                "severities": [{"id": 21, "name": "Major"}],
+                "issue_types": [{"id": 31, "name": "Question"}],
+                "memberships": [
+                    {
+                        "user": 7,
+                        "full_name": "Bob",
+                        "email": "b@x",
+                        "user_extra_info": {"username": "bob"},
+                    }
+                ],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        mock_client.api.issues.edit.return_value = {"ref": 90, "subject": "B2"}
+        wf.update_issue(
+            "p",
+            90,
+            subject="B2",
+            description="d",
+            status="In progress",
+            assignee="bob",
+            priority="High",
+            severity="Major",
+            issue_type="Question",
+            blocked=True,
+            tags=["x"],
+            session_id=session,
+        )
+        call = mock_client.api.issues.edit.call_args
+        assert call.kwargs["version"] == 2
+        data = call.kwargs["data"]
+        assert data["status"] == 40
+        assert data["assigned_to"] == 7
+        assert data["priority"] == 11
+        assert data["severity"] == 21
+        assert data["type"] == 31
+        assert data["is_blocked"] is True
+        assert data["tags"] == ["x"]
+
+    def test_issue_not_found_raises(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.issues.get_by_ref.return_value = None
+        with pytest.raises(ValueError, match="Issue #90 not found"):
+            wf.update_issue("p", 90, subject="x", session_id=session)
+
+
+class TestSessionTools:
+    def test_get_default_session_active(self, session, mock_client):
+        # `session` fixture registers mock_client under DEFAULT_SESSION_ID too.
+        result = wf.get_default_session()
+        assert result["status"] == "active"
+        assert result["auto_authenticated"] is True
+
+    def test_get_default_session_unavailable(self):
+        # No fixtures → active_sessions empty (cleared by autouse fixture).
+        result = wf.get_default_session()
+        assert result["status"] == "unavailable"
+
+    def test_session_status_active(self, session, mock_client):
+        mock_client.api.users.get_me.return_value = {"username": "bob"}
+        result = wf.session_status(session_id=session)
+        assert result == {"status": "active", "session_id": session, "username": "bob"}
+
+    def test_session_status_not_found(self):
+        result = wf.session_status(session_id="ghost")
+        assert result == {"status": "inactive", "reason": "not_found", "session_id": "ghost"}
