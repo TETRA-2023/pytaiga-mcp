@@ -961,7 +961,7 @@ def create_story(
                 raise ValueError(f"Epic #{epic} not found — story was created but not linked.")
             client.api.post(
                 f"/epics/{epic_data['id']}/related_userstories",
-                json={"project_id": project_id, "user_story_id": result["id"]},
+                json={"epic": epic_data["id"], "user_story": result["id"]},
             )
 
         return {
