@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.21.1 (2026-06-16)
+
+### Bug Fixes
+
+- Correct create_story epic-link payload field names
+  ([`c8facb8`](https://github.com/TETRA-2023/pytaiga-mcp/commit/c8facb8b47a1a8d216b52926291d7df1c74af87a))
+
+- Validate epic before creating story to avoid orphaned story
+  ([`929ebda`](https://github.com/TETRA-2023/pytaiga-mcp/commit/929ebda459f5a29ab6ecd4e8620018c8f46aca2e))
+
+
 ## v1.21.0 (2026-06-12)
 
 ### Bug Fixes
