@@ -20,6 +20,7 @@ _RESOURCE_ENDPOINTS = {
     "userstory_statuses": "/userstory-statuses",
     "task_statuses": "/task-statuses",
     "issue_statuses": "/issue-statuses",
+    "epic_statuses": "/epic-statuses",
     "issue_types": "/issue-types",
     "priorities": "/priorities",
     "severities": "/severities",

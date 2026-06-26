@@ -1,8 +1,11 @@
 """Unit tests for taiga_client.py — the _CompatTaigaClient query_params shim (#87)."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from src.taiga_client import _CompatTaigaClient
+import pytest
+from pytaigaclient.exceptions import TaigaException
+
+from src.taiga_client import TaigaClientWrapper, _CompatTaigaClient
 
 
 def _client():
@@ -79,3 +82,38 @@ class TestBuggyTasksMethodsNowWork:
             c.tasks.list_attachments(project=1, object_id=200)
         assert "query_params" not in req.call_args.kwargs
         assert req.call_args.kwargs["params"] == {"project": 1, "object_id": 200}
+
+
+class TestTaigaClientWrapperLogin:
+    """Cover the auth path: empty-host guard, success, and the two failure modes."""
+
+    def test_init_rejects_empty_host(self):
+        with pytest.raises(ValueError, match="host URL cannot be empty"):
+            TaigaClientWrapper(host="")
+
+    def test_login_success_sets_api(self):
+        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        fake_api = MagicMock()
+        with patch("src.taiga_client._CompatTaigaClient", return_value=fake_api):
+            ok = wrapper.login(username="u", password="p")
+        assert ok is True
+        assert wrapper.api is fake_api
+        fake_api.auth.login.assert_called_once_with(username="u", password="p")
+
+    def test_login_taiga_exception_propagates_and_clears_api(self):
+        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        fake_api = MagicMock()
+        fake_api.auth.login.side_effect = TaigaException("bad creds")
+        with patch("src.taiga_client._CompatTaigaClient", return_value=fake_api):
+            with pytest.raises(TaigaException, match="bad creds"):
+                wrapper.login(username="u", password="p")
+        assert wrapper.api is None
+
+    def test_login_unexpected_error_wrapped(self):
+        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        fake_api = MagicMock()
+        fake_api.auth.login.side_effect = RuntimeError("boom")
+        with patch("src.taiga_client._CompatTaigaClient", return_value=fake_api):
+            with pytest.raises(TaigaException, match="Unexpected login error"):
+                wrapper.login(username="u", password="p")
+        assert wrapper.api is None
