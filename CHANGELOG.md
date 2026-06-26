@@ -2,6 +2,68 @@
 
 <!-- version list -->
 
+## v1.21.2 (2026-06-26)
+
+### Bug Fixes
+
+- **ci**: Publish version + stable image tags on release
+  ([#106](https://github.com/TETRA-2023/pytaiga-mcp/pull/106),
+  [`8e46662`](https://github.com/TETRA-2023/pytaiga-mcp/commit/8e466628f3b79dc1a0c3c1fda0aebe43912bce9b))
+
+### Chores
+
+- **deps**: Bump actions/checkout from 6 to 7
+  ([#104](https://github.com/TETRA-2023/pytaiga-mcp/pull/104),
+  [`e6a9271`](https://github.com/TETRA-2023/pytaiga-mcp/commit/e6a927156820528e8aced1fa0e485cd77b20d9bc))
+
+- **deps**: Bump cryptography from 46.0.7 to 48.0.1
+  ([#100](https://github.com/TETRA-2023/pytaiga-mcp/pull/100),
+  [`b6e9fd7`](https://github.com/TETRA-2023/pytaiga-mcp/commit/b6e9fd78159eb4998ba61097b4ecd187387e9c71))
+
+- **deps**: Bump mypy from 1.20.1 to 2.1.0
+  ([#90](https://github.com/TETRA-2023/pytaiga-mcp/pull/90),
+  [`1d807ed`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1d807ed0daa0937d108b05b7b6ca76aef5943736))
+
+- **deps**: Bump pydantic from 2.13.0 to 2.13.4
+  ([#92](https://github.com/TETRA-2023/pytaiga-mcp/pull/92),
+  [`504ef82`](https://github.com/TETRA-2023/pytaiga-mcp/commit/504ef824b7fac504167dce5cb3b891aa142542f8))
+
+- **deps**: Bump pydantic-settings from 2.13.1 to 2.14.2
+  ([#103](https://github.com/TETRA-2023/pytaiga-mcp/pull/103),
+  [`35a2a11`](https://github.com/TETRA-2023/pytaiga-mcp/commit/35a2a11f2e64deee13cd1e9ac077e28a828197e5))
+
+- **deps**: Bump pyjwt from 2.12.1 to 2.13.0
+  ([#97](https://github.com/TETRA-2023/pytaiga-mcp/pull/97),
+  [`59a99ed`](https://github.com/TETRA-2023/pytaiga-mcp/commit/59a99ed0984278d7267a3be2b94a6e5b434e7cde))
+
+- **deps**: Bump pytest-asyncio from 1.3.0 to 1.4.0
+  ([#93](https://github.com/TETRA-2023/pytaiga-mcp/pull/93),
+  [`9b0f66a`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9b0f66ac93b8dbc5700194df9e3eed750694ba84))
+
+- **deps**: Bump python-multipart from 0.0.27 to 0.0.31
+  ([#99](https://github.com/TETRA-2023/pytaiga-mcp/pull/99),
+  [`99993da`](https://github.com/TETRA-2023/pytaiga-mcp/commit/99993da2420c62010e73aa2c0bc809d0c1b12bf3))
+
+- **deps**: Bump starlette from 1.0.1 to 1.3.1
+  ([#101](https://github.com/TETRA-2023/pytaiga-mcp/pull/101),
+  [`12312db`](https://github.com/TETRA-2023/pytaiga-mcp/commit/12312dbfd7909ca159970030ee499c7e85a2801c))
+
+- **deps-dev**: Update setuptools requirement from >=42.0 to >=82.0.1
+  ([#94](https://github.com/TETRA-2023/pytaiga-mcp/pull/94),
+  [`5386246`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5386246b4771811640d5e3634ebe4e822a107920))
+
+### Continuous Integration
+
+- Auto-merge Dependabot PRs (non-major, checks-gated)
+  ([#105](https://github.com/TETRA-2023/pytaiga-mcp/pull/105),
+  [`215486a`](https://github.com/TETRA-2023/pytaiga-mcp/commit/215486aff42610f78c7762dd74d10dbd621dbc46))
+
+### Testing
+
+- Cover untested workflow tools, auth, and branch gaps
+  ([`bf218a7`](https://github.com/TETRA-2023/pytaiga-mcp/commit/bf218a793c950974e65f5261320bf9972ca4dd36))
+
+
 ## v1.21.1 (2026-06-16)
 
 ### Bug Fixes
