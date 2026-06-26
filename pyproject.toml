@@ -13,7 +13,7 @@ dependencies = [
     "mcp[cli]>=0.1.0",
     "python-dotenv>=0.15.0",
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.0.0",
+    "pydantic-settings>=2.14.2",
     "pytaigaclient",
 ]
 
