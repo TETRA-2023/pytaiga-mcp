@@ -781,8 +781,8 @@ def search(
     "get_story",
     description=(
         "Read a single user story by its ref number. Returns resolved human fields "
-        "(status name, is_closed, assignee, sprint, tags) — no mutation. "
-        "project accepts slug or ID."
+        "(status name, is_closed, assignee, sprint, tags) plus the full description "
+        "— no mutation. project accepts slug or ID."
     ),
 )
 def get_story(
@@ -798,7 +798,12 @@ def get_story(
         story = client.api.user_stories.get_by_ref(ref=ref, project=proj["id"])
         if not story:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
-        return _story_summary(story)
+        # Single-item read: include the full description. The shared _story_summary
+        # helper stays lean (it is reused by list/board composites where the
+        # description would bloat every row).
+        result = _story_summary(story)
+        result["description"] = story.get("description")
+        return result
 
     return _execute_taiga_operation("get_story", do_get, f"#{ref} in {project}")
 
@@ -807,7 +812,8 @@ def get_story(
     "get_task",
     description=(
         "Read a single task by its ref number. Returns resolved human fields "
-        "(status name, is_closed, assignee) — no mutation. project accepts slug or ID."
+        "(status name, is_closed, assignee) plus the full description — no mutation. "
+        "project accepts slug or ID."
     ),
 )
 def get_task(
@@ -825,7 +831,10 @@ def get_task(
         task = client.api.get("/tasks/by_ref", params={"ref": ref, "project": proj["id"]})
         if not task:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
-        return _task_summary(task)
+        # Single-item read: include the full description (see get_story rationale).
+        result = _task_summary(task)
+        result["description"] = task.get("description")
+        return result
 
     return _execute_taiga_operation("get_task", do_get, f"task #{ref} in {project}")
 
@@ -834,8 +843,8 @@ def get_task(
     "get_issue",
     description=(
         "Read a single issue by its ref number. Returns resolved human fields "
-        "(status name, is_closed, assignee, priority, severity, type, tags) — no mutation. "
-        "project accepts slug or ID."
+        "(status name, is_closed, assignee, priority, severity, type, tags) plus the "
+        "full description — no mutation. project accepts slug or ID."
     ),
 )
 def get_issue(
@@ -851,7 +860,12 @@ def get_issue(
         issue = client.api.issues.get_by_ref(ref=ref, project=proj["id"])
         if not issue:
             raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
-        return _issue_summary(issue)
+        # Single-item read: include the full description. Kept off the shared
+        # _issue_summary shape for consistency with get_story/get_task, whose
+        # helpers are reused by lean board/list composites.
+        result = _issue_summary(issue)
+        result["description"] = issue.get("description")
+        return result
 
     return _execute_taiga_operation("get_issue", do_get, f"#{ref} in {project}")
 
@@ -1795,8 +1809,9 @@ def close_sprint(
 @mcp.tool(
     "get_epic_overview",
     description=(
-        "Return an epic and all user stories linked to it, with per-status counts. "
-        "ref is the epic ref number. project accepts slug or ID."
+        "Return an epic (including its full description) and all user stories linked "
+        "to it, with per-status counts. ref is the epic ref number. project accepts "
+        "slug or ID."
     ),
 )
 def get_epic_overview(
@@ -1833,6 +1848,7 @@ def get_epic_overview(
                 "status": (epic.get("status_extra_info") or {}).get("name"),
                 "assignee": (epic.get("assigned_to_extra_info") or {}).get("full_name_display"),
                 "color": epic.get("color"),
+                "description": epic.get("description"),
             },
             "summary": {
                 "total_stories": len(stories),
