@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v1.21.4 (2026-07-22)
+
+### Bug Fixes
+
+- Bump gitpython from 3.1.50 to 3.1.52 ([#122](https://github.com/TETRA-2023/pytaiga-mcp/pull/122),
+  [`13c2dc0`](https://github.com/TETRA-2023/pytaiga-mcp/commit/13c2dc0ff875852a469e0360490b41ab6bde73b4))
+
+- **assign_item**: Route edit per resource so issues & tasks assign (#123)
+  ([#124](https://github.com/TETRA-2023/pytaiga-mcp/pull/124),
+  [`133043d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/133043d0f0ff99d6a2e8065f0031127c550dcf8a))
+
+
 ## v1.21.3 (2026-07-22)
 
 ### Bug Fixes
