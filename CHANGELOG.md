@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v1.22.0 (2026-07-22)
+
+### Features
+
+- Include epic description in get_epic_overview; tighten review nits
+  ([#125](https://github.com/TETRA-2023/pytaiga-mcp/pull/125),
+  [`d123503`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d1235031967cfe0a8f21277021275be287f19ee1))
+
+- Return description on single-item get_story/get_task/get_issue
+  ([#125](https://github.com/TETRA-2023/pytaiga-mcp/pull/125),
+  [`d123503`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d1235031967cfe0a8f21277021275be287f19ee1))
+
+- Return description on single-item get_story/get_task/get_issue (workflow mode)
+  ([#125](https://github.com/TETRA-2023/pytaiga-mcp/pull/125),
+  [`d123503`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d1235031967cfe0a8f21277021275be287f19ee1))
+
+
 ## v1.21.4 (2026-07-22)
 
 ### Bug Fixes
