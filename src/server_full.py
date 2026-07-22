@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from pytaigaclient.exceptions import TaigaAPIError, TaigaException
 
 from src.config import settings
-from src.taiga_client import TaigaClientWrapper
+from src.taiga_client import TaigaClientWrapper, resolve_user_id
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -1303,15 +1303,36 @@ def delete_user_story(user_story_id: int, session_id: Optional[str] = None) -> D
     return _execute_taiga_operation("delete_user_story", do_delete, f"user story {user_story_id}")
 
 
+def _resolve_assignee_id(
+    user: Union[int, str], resource_type: str, entity_id: int, session_id: str
+) -> int:
+    """Resolve ``user`` to a Taiga user ID for the assign_* tools.
+
+    Ints pass through unchanged (backward-compatible with the historical
+    ``user_id: int`` API — no extra API calls). Strings are treated as a
+    username / email / full name and resolved against the members of the
+    entity's project (looked up from the entity), reusing the shared None-safe
+    ``resolve_user_id`` so full mode gets the same robust resolution as
+    workflow mode (pytaiga-mcp#120).
+    """
+    if isinstance(user, int) and not isinstance(user, bool):
+        return user
+    client = _get_authenticated_client(session_id)
+    entity = client.get_resource(resource_type, entity_id)
+    members = client.list_resources("memberships", project_id=entity.get("project"))
+    return resolve_user_id(members, user)
+
+
 @mcp.tool(
     "assign_user_story_to_user",
-    description="Assigns a specific user story to a specific user. Uses default session if session_id not provided.",
+    description="Assigns a specific user story to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
 )
 def assign_user_story_to_user(
-    user_story_id: int, user_id: int, session_id: Optional[str] = None
+    user_story_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns a user story to a user."""
+    """Assigns a user story to a user (by ID or username/email/full name)."""
     actual_session_id = _get_session_id(session_id)
+    user_id = _resolve_assignee_id(user, "user_stories", user_story_id, actual_session_id)
     logger.info(
         f"Executing assign_user_story_to_user: US {user_story_id} -> User {user_id}, session {actual_session_id[:8]}..."
     )
@@ -1544,13 +1565,14 @@ def delete_task(task_id: int, session_id: Optional[str] = None) -> Dict[str, Any
 
 @mcp.tool(
     "assign_task_to_user",
-    description="Assigns a specific task to a specific user. Uses default session if session_id not provided.",
+    description="Assigns a specific task to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
 )
 def assign_task_to_user(
-    task_id: int, user_id: int, session_id: Optional[str] = None
+    task_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns a task to a user."""
+    """Assigns a task to a user (by ID or username/email/full name)."""
     actual_session_id = _get_session_id(session_id)
+    user_id = _resolve_assignee_id(user, "tasks", task_id, actual_session_id)
     logger.info(
         f"Executing assign_task_to_user: Task {task_id} -> User {user_id}, session {actual_session_id[:8]}..."
     )
@@ -1776,13 +1798,14 @@ def delete_issue(issue_id: int, session_id: Optional[str] = None) -> Dict[str, A
 
 @mcp.tool(
     "assign_issue_to_user",
-    description="Assigns a specific issue to a specific user. Uses default session if session_id not provided.",
+    description="Assigns a specific issue to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
 )
 def assign_issue_to_user(
-    issue_id: int, user_id: int, session_id: Optional[str] = None
+    issue_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns an issue to a user."""
+    """Assigns an issue to a user (by ID or username/email/full name)."""
     actual_session_id = _get_session_id(session_id)
+    user_id = _resolve_assignee_id(user, "issues", issue_id, actual_session_id)
     logger.info(
         f"Executing assign_issue_to_user: Issue {issue_id} -> User {user_id}, session {actual_session_id[:8]}..."
     )
@@ -2833,13 +2856,14 @@ def delete_epic(epic_id: int, session_id: Optional[str] = None) -> Dict[str, Any
 
 @mcp.tool(
     "assign_epic_to_user",
-    description="Assigns a specific epic to a specific user. Uses default session if session_id not provided.",
+    description="Assigns a specific epic to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
 )
 def assign_epic_to_user(
-    epic_id: int, user_id: int, session_id: Optional[str] = None
+    epic_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns an epic to a user."""
+    """Assigns an epic to a user (by ID or username/email/full name)."""
     actual_session_id = _get_session_id(session_id)
+    user_id = _resolve_assignee_id(user, "epics", epic_id, actual_session_id)
     logger.info(
         f"Executing assign_epic_to_user: Epic {epic_id} -> User {user_id}, session {actual_session_id[:8]}..."
     )

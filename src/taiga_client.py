@@ -31,6 +31,51 @@ _RESOURCE_ENDPOINTS = {
 _NO_PAGINATION_HEADERS = {"x-disable-pagination": "True"}
 
 
+def safe_lower(value: Any) -> str:
+    """Lowercase a value, tolerating None.
+
+    Taiga returns JSON ``null`` for unset string fields (e.g. a membership's
+    ``email``/``full_name`` on a pending invitation, or a resource ``name``).
+    A bare ``value.lower()`` on those raised ``'NoneType' object has no
+    attribute 'lower'`` (pytaiga-mcp#120). Coercing ``None`` -> ``""`` first
+    keeps name/username matching robust across both server flavors.
+    """
+    return (value or "").lower()
+
+
+def resolve_user_id(members: List[Dict[str, Any]], identifier: "int | str") -> int:
+    """Resolve a user identifier to a Taiga user ID against a project's memberships.
+
+    ``identifier`` may be an ``int`` (returned unchanged — treated as a user ID)
+    or a string matched case-insensitively against each member's username, email,
+    full name, or display name. Matching is None-safe (see ``safe_lower``): a
+    single member with a null field no longer aborts resolution before the
+    intended user is reached.
+
+    Raises ``ValueError`` if the identifier is empty or not found.
+    """
+    if isinstance(identifier, bool):  # bool is an int subclass — reject to avoid surprises
+        raise ValueError("User identifier must be an int user ID or a name/email string.")
+    if isinstance(identifier, int):
+        return identifier
+    needle = safe_lower(identifier)
+    if not needle:
+        raise ValueError("Empty username/identifier for user resolution.")
+    for m in members:
+        info = m.get("user_extra_info") or {}
+        if needle in (
+            safe_lower(info.get("username")),
+            safe_lower(m.get("email")),
+            safe_lower(m.get("full_name")),
+            safe_lower(info.get("full_name_display")),
+        ):
+            uid = m.get("user")
+            if uid is not None:
+                return uid
+    available = [m.get("full_name") or m.get("email") or "?" for m in members]
+    raise ValueError(f"User '{identifier}' not found in project. Members: {available}")
+
+
 class _CompatTaigaClient(TaigaClient):
     """TaigaClient with a compatibility shim for pytaigaclient's `query_params` bug.
 
@@ -116,6 +161,20 @@ class TaigaClientWrapper:
         if not self.is_authenticated:
             logger.error("Action required authentication, but client is not logged in.")
             raise PermissionError("Client not authenticated. Please login first.")
+
+    def get_resource(self, resource_type: str, resource_id: int) -> Dict[str, Any]:
+        """Fetch a single resource by ID via the raw API.
+
+        Used by name-based assignee resolution to look up an entity's
+        ``project`` before matching a username against that project's members.
+        """
+        self._ensure_authenticated()
+        endpoint = _RESOURCE_ENDPOINTS.get(resource_type)
+        if endpoint is None:
+            raise ValueError(
+                f"Unknown resource type: {resource_type}. Valid: {sorted(_RESOURCE_ENDPOINTS)}"
+            )
+        return self.api.get(f"{endpoint}/{resource_id}")
 
     def list_resources(
         self, resource_type: str, project_id: Optional[int] = None, **filters
