@@ -2661,3 +2661,75 @@ class TestSessionTools:
     def test_session_status_not_found(self):
         result = wf.session_status(session_id="ghost")
         assert result == {"status": "inactive", "reason": "not_found", "session_id": "ghost"}
+
+
+class TestSingleItemGettersReturnDescription:
+    """get_story / get_task / get_issue must surface the full `description` on a
+    single-item read (the shared *_summary helpers omit it to keep board/list
+    rows lean). Regression guard: the summary discarded description, forcing a
+    REST-API detour to read it."""
+
+    def _project(self):
+        return {"id": 1, "slug": "p", "name": "P"}
+
+    def test_get_story_includes_description(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {
+            "id": 50,
+            "ref": 3,
+            "subject": "Story A",
+            "description": "The full story description.",
+            "status_extra_info": {"name": "New"},
+            "assigned_to_extra_info": {"full_name_display": "Alice"},
+            "tags": [],
+        }
+        result = wf.get_story("p", 3, session_id=session)
+        assert result["description"] == "The full story description."
+        # summary fields still present
+        assert result["ref"] == 3
+        assert result["subject"] == "Story A"
+
+    def test_get_story_null_description_surfaced_as_none(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.user_stories.get_by_ref.return_value = {"id": 50, "ref": 3}
+        result = wf.get_story("p", 3, session_id=session)
+        assert "description" in result
+        assert result["description"] is None
+
+    def test_get_task_includes_description(self, session, mock_client):
+        task = {
+            "id": 200,
+            "ref": 7,
+            "subject": "Task 1",
+            "description": "Task detail.",
+            "status_extra_info": {"name": "New"},
+        }
+
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return task
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        result = wf.get_task("p", 7, session_id=session)
+        assert result["description"] == "Task detail."
+        assert result["ref"] == 7
+
+    def test_get_issue_includes_description(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.issues.get_by_ref.return_value = {
+            "id": 300,
+            "ref": 5,
+            "subject": "Bug",
+            "description": "Issue detail.",
+            "status_extra_info": {"name": "New"},
+            "tags": [],
+        }
+        result = wf.get_issue("p", 5, session_id=session)
+        assert result["description"] == "Issue detail."
+        assert result["ref"] == 5
+
+    def test_story_summary_helper_stays_lean(self):
+        """The shared helper must NOT gain description (boards/lists reuse it)."""
+        summary = wf._story_summary({"ref": 1, "subject": "X", "description": "big blob"})
+        assert "description" not in summary
