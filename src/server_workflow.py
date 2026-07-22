@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP
 from pytaigaclient.exceptions import TaigaAPIError, TaigaException
 
 from src.config import settings
-from src.taiga_client import TaigaClientWrapper
+from src.taiga_client import TaigaClientWrapper, resolve_user_id, safe_lower
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -244,7 +244,7 @@ def _resolve_status(
         f"statuses_{entity_type}_{project_id}",
         lambda: client.list_resources(resource, project_id=project_id),
     )
-    matches = [s for s in statuses if s["name"].lower() == status_name.lower()]
+    matches = [s for s in statuses if safe_lower(s.get("name")) == safe_lower(status_name)]
     if not matches:
         available = [s["name"] for s in statuses]
         raise ValueError(f"Status '{status_name}' not found. Available: {available}")
@@ -288,18 +288,7 @@ def _resolve_user(
         f"members_{project_id}",
         lambda: client.list_resources("memberships", project_id=project_id),
     )
-    needle = username.lower()
-    for m in members:
-        info = m.get("user_extra_info") or {}
-        if (
-            info.get("username", "").lower() == needle
-            or m.get("email", "").lower() == needle
-            or m.get("full_name", "").lower() == needle
-            or info.get("full_name_display", "").lower() == needle
-        ):
-            return m["user"]
-    available = [m.get("full_name") or m.get("email", "?") for m in members]
-    raise ValueError(f"User '{username}' not found in project. Members: {available}")
+    return resolve_user_id(members, username)
 
 
 def _resolve_issue_defaults(
@@ -340,7 +329,7 @@ def _resolve_issue_attribute(
         f"{resource}_{project_id}",
         lambda: client.list_resources(resource, project_id=project_id),
     )
-    matches = [i for i in items if i["name"].lower() == name.lower()]
+    matches = [i for i in items if safe_lower(i.get("name")) == safe_lower(name)]
     if not matches:
         available = [i["name"] for i in items]
         raise ValueError(f"{attr_type.capitalize()} '{name}' not found. Available: {available}")

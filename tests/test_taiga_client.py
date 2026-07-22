@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytaigaclient.exceptions import TaigaException
 
-from src.taiga_client import TaigaClientWrapper, _CompatTaigaClient
+from src.taiga_client import (
+    TaigaClientWrapper,
+    _CompatTaigaClient,
+    resolve_user_id,
+    safe_lower,
+)
 
 
 def _client():
@@ -117,3 +122,92 @@ class TestTaigaClientWrapperLogin:
             with pytest.raises(TaigaException, match="Unexpected login error"):
                 wrapper.login(username="u", password="p")
         assert wrapper.api is None
+
+
+class TestSafeLower:
+    """None-safe lowercasing (pytaiga-mcp#120)."""
+
+    def test_none_becomes_empty_string(self):
+        assert safe_lower(None) == ""
+
+    def test_lowercases_string(self):
+        assert safe_lower("Alice@Example.COM") == "alice@example.com"
+
+    def test_empty_string_stays_empty(self):
+        assert safe_lower("") == ""
+
+
+class TestResolveUserId:
+    """Shared None-safe user resolver used by both server flavors (pytaiga-mcp#120)."""
+
+    def _members(self):
+        return [
+            # pending-invite membership with null fields — must not abort matching
+            {"user": None, "email": None, "full_name": None, "user_extra_info": None},
+            {
+                "user": 42,
+                "email": "alice@example.com",
+                "full_name": "Alice Martin",
+                "user_extra_info": {"username": "alice", "full_name_display": "Alice Martin"},
+            },
+        ]
+
+    def test_int_passes_through_without_lookup(self):
+        # No members needed — an int is a user ID and is returned unchanged.
+        assert resolve_user_id([], 42) == 42
+
+    def test_bool_is_rejected(self):
+        with pytest.raises(ValueError, match="int user ID or a name/email"):
+            resolve_user_id(self._members(), True)
+
+    def test_empty_identifier_rejected(self):
+        with pytest.raises(ValueError, match="Empty username"):
+            resolve_user_id(self._members(), "")
+
+    def test_resolves_by_username_case_insensitive(self):
+        assert resolve_user_id(self._members(), "ALICE") == 42
+
+    def test_resolves_by_email(self):
+        assert resolve_user_id(self._members(), "alice@example.com") == 42
+
+    def test_resolves_by_full_name(self):
+        assert resolve_user_id(self._members(), "Alice Martin") == 42
+
+    def test_resolves_by_display_name(self):
+        assert resolve_user_id(self._members(), "alice martin") == 42
+
+    def test_null_field_member_does_not_crash(self):
+        # The regression: the leading null-field member previously raised
+        # "'NoneType' object has no attribute 'lower'" before reaching Alice.
+        assert resolve_user_id(self._members(), "alice") == 42
+
+    def test_skips_match_when_member_user_is_none(self):
+        # A member matching by email but with user=None must not return None;
+        # resolution continues / raises not-found rather than yielding a null ID.
+        members = [{"user": None, "email": "ghost@example.com", "full_name": None}]
+        with pytest.raises(ValueError, match="not found"):
+            resolve_user_id(members, "ghost@example.com")
+
+    def test_raises_when_not_found(self):
+        with pytest.raises(ValueError, match="not found"):
+            resolve_user_id(self._members(), "bob")
+
+
+class TestGetResource:
+    """get_resource fetches a single entity by ID (used for name-based assignment)."""
+
+    def test_fetches_single_resource_by_id(self):
+        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "tok"
+        wrapper.api.get.return_value = {"id": 5, "project": 1}
+        result = wrapper.get_resource("user_stories", 5)
+        assert result == {"id": 5, "project": 1}
+        wrapper.api.get.assert_called_once_with("/userstories/5")
+
+    def test_rejects_unknown_resource_type(self):
+        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "tok"
+        with pytest.raises(ValueError, match="Unknown resource type"):
+            wrapper.get_resource("bogus", 5)

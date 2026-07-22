@@ -334,6 +334,21 @@ class TestResolveUser:
         with pytest.raises(ValueError, match="not found"):
             wf._resolve_user(mock_client, 1, "bob", "sess")
 
+    def test_resolves_past_member_with_null_fields(self, mock_client):
+        # Regression for pytaiga-mcp#120: a pending-invite membership with null
+        # email/full_name/user_extra_info must not abort resolution before the
+        # valid member is reached (previously raised 'NoneType' ... 'lower').
+        members = [
+            {"user": None, "email": None, "full_name": None, "user_extra_info": None},
+            *self._members(),
+        ]
+        mock_client.list_resources.return_value = members
+        assert wf._resolve_user(mock_client, 1, "alice", "sess") == 42
+
+    def test_int_identifier_passthrough(self, mock_client):
+        mock_client.list_resources.return_value = self._members()
+        assert wf._resolve_user(mock_client, 1, 99, "sess") == 99
+
 
 # ---------------------------------------------------------------------------
 # Tool smoke tests

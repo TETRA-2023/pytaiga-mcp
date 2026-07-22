@@ -722,6 +722,36 @@ class TestTaigaTools:
             user_story_id=456, version=1, assigned_to=10
         )
 
+    def test_assign_user_story_to_user_by_username(self, session_setup):
+        """assign_*_to_user resolves a username to an ID via the entity's project members."""
+        session_id, mock_client = session_setup
+        mock_client.get_resource.return_value = {"id": 456, "project": 1}
+        mock_client.list_resources.return_value = [
+            # pending-invite member with null fields first — must not crash (pytaiga-mcp#120)
+            {"user": None, "email": None, "full_name": None, "user_extra_info": None},
+            {
+                "user": 10,
+                "email": "bob@example.com",
+                "full_name": "Bob Stone",
+                "user_extra_info": {"username": "bob", "full_name_display": "Bob Stone"},
+            },
+        ]
+        mock_client.api.user_stories.get.return_value = {
+            "id": 456,
+            "assigned_to": None,
+            "version": 1,
+        }
+        mock_client.api.user_stories.edit.return_value = {
+            "id": 456,
+            "assigned_to": 10,
+            "version": 2,
+        }
+        src_server.assign_user_story_to_user(456, "bob", session_id)
+        mock_client.get_resource.assert_called_once_with("user_stories", 456)
+        mock_client.api.user_stories.edit.assert_called_once_with(
+            user_story_id=456, version=1, assigned_to=10
+        )
+
     def test_unassign_user_story_from_user(self, session_setup):
         """Test unassign_user_story_from_user sets assigned_to to None."""
         session_id, mock_client = session_setup
