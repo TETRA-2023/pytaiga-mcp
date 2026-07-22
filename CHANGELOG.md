@@ -2,6 +2,60 @@
 
 <!-- version list -->
 
+## v1.21.3 (2026-07-22)
+
+### Bug Fixes
+
+- Bump mypy from 2.1.0 to 2.2.0 ([#117](https://github.com/TETRA-2023/pytaiga-mcp/pull/117),
+  [`129a7ce`](https://github.com/TETRA-2023/pytaiga-mcp/commit/129a7ce4f5283fec3f8a5dad61aca1ae3b3f1d90))
+
+- Bump mypy from 2.2.0 to 2.3.0 ([#118](https://github.com/TETRA-2023/pytaiga-mcp/pull/118),
+  [`541dfc4`](https://github.com/TETRA-2023/pytaiga-mcp/commit/541dfc419ab6569b39fb04054dc4fc1d069096b9))
+
+- Bump pre-commit from 4.5.1 to 4.6.0 ([#113](https://github.com/TETRA-2023/pytaiga-mcp/pull/113),
+  [`ebea75c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ebea75c54aa3cdc7e846789db1169d886d8193e6))
+
+- Bump pytest from 9.0.3 to 9.1.1 ([#112](https://github.com/TETRA-2023/pytaiga-mcp/pull/112),
+  [`a8ee435`](https://github.com/TETRA-2023/pytaiga-mcp/commit/a8ee4352f7fa8a95609296a0ee7c94e822843b16))
+
+- Bump ruff from 0.15.10 to 0.15.20 ([#111](https://github.com/TETRA-2023/pytaiga-mcp/pull/111),
+  [`8c88560`](https://github.com/TETRA-2023/pytaiga-mcp/commit/8c885605c31a4d388d13d4d544e3c62d1f238f51))
+
+- Bump ruff from 0.15.20 to 0.15.21 ([#116](https://github.com/TETRA-2023/pytaiga-mcp/pull/116),
+  [`88a3167`](https://github.com/TETRA-2023/pytaiga-mcp/commit/88a31678b73b66141acc79d91e139e473e0f7f4e))
+
+- Bump ruff from 0.15.21 to 0.15.22 ([#119](https://github.com/TETRA-2023/pytaiga-mcp/pull/119),
+  [`d113c4e`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d113c4ec53b56ede76f25c02ed2afce7ee2b39b7))
+
+- Update mcp[cli] requirement from >=0.1.0 to >=1.28.1
+  ([#110](https://github.com/TETRA-2023/pytaiga-mcp/pull/110),
+  [`417d354`](https://github.com/TETRA-2023/pytaiga-mcp/commit/417d354e12dc7b885a0d8f0305b628f1cd66ac44))
+
+- **resolve**: Tolerate null member/name fields in user & name resolution (#120)
+  ([#121](https://github.com/TETRA-2023/pytaiga-mcp/pull/121),
+  [`1560bdf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1560bdf005f19b98c8c8a8d47300940f3a105852))
+
+### Chores
+
+- Bump python-semantic-release from 10.5.3 to 10.6.1
+  ([#114](https://github.com/TETRA-2023/pytaiga-mcp/pull/114),
+  [`1e774a5`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1e774a5db04bf97815da25a8a1f8d39bd2f849c8))
+
+- Update setuptools requirement from >=82.0.1 to >=83.0.0
+  ([#115](https://github.com/TETRA-2023/pytaiga-mcp/pull/115),
+  [`dc93b59`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc93b5900db1d39db79195d161341318f7247263))
+
+### Continuous Integration
+
+- Drop redundant inline version/stable image steps
+  ([#107](https://github.com/TETRA-2023/pytaiga-mcp/pull/107),
+  [`3de1749`](https://github.com/TETRA-2023/pytaiga-mcp/commit/3de1749559fdd4bc92ebb06c1575aaaecfc0121b))
+
+- Split Dependabot commit prefix (runtime=fix, dev=chore)
+  ([#108](https://github.com/TETRA-2023/pytaiga-mcp/pull/108),
+  [`d0553da`](https://github.com/TETRA-2023/pytaiga-mcp/commit/d0553da494a0bdf879f705f7a18493f04d39b76a))
+
+
 ## v1.21.2 (2026-06-26)
 
 ### Bug Fixes
