@@ -2729,7 +2729,51 @@ class TestSingleItemGettersReturnDescription:
         assert result["description"] == "Issue detail."
         assert result["ref"] == 5
 
-    def test_story_summary_helper_stays_lean(self):
-        """The shared helper must NOT gain description (boards/lists reuse it)."""
-        summary = wf._story_summary({"ref": 1, "subject": "X", "description": "big blob"})
-        assert "description" not in summary
+    def test_get_task_null_description_surfaced_as_none(self, session, mock_client):
+        task = {"id": 200, "ref": 7}
+
+        def api_get(path, params=None):
+            if "/tasks/by_ref" in str(path):
+                return task
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        result = wf.get_task("p", 7, session_id=session)
+        assert "description" in result
+        assert result["description"] is None
+
+    def test_get_issue_null_description_surfaced_as_none(self, session, mock_client):
+        mock_client.api.get.return_value = self._project()
+        mock_client.api.issues.get_by_ref.return_value = {"id": 300, "ref": 5}
+        result = wf.get_issue("p", 5, session_id=session)
+        assert "description" in result
+        assert result["description"] is None
+
+    def test_get_epic_overview_includes_epic_description(self, session, mock_client):
+        epic = {
+            "id": 900,
+            "ref": 12,
+            "subject": "Epic X",
+            "description": "Epic-level description.",
+            "status_extra_info": {"name": "New"},
+        }
+
+        def api_get(path, params=None):
+            if "/epics/by_ref" in str(path):
+                return epic
+            return self._project()
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = []
+        result = wf.get_epic_overview("p", 12, session_id=session)
+        assert result["epic"]["description"] == "Epic-level description."
+        assert result["epic"]["ref"] == 12
+
+    def test_summary_helpers_stay_lean(self):
+        """The shared *_summary helpers must NOT gain description — they are reused
+        by list/board composites (get_sprint_board reuses both story + task) where
+        a full description per row would bloat responses."""
+        blob = {"ref": 1, "subject": "X", "description": "big blob"}
+        assert "description" not in wf._story_summary(blob)
+        assert "description" not in wf._task_summary(blob)
+        assert "description" not in wf._issue_summary(blob)

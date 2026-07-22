@@ -860,7 +860,9 @@ def get_issue(
         issue = client.api.issues.get_by_ref(ref=ref, project=proj["id"])
         if not issue:
             raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
-        # Single-item read: include the full description (see get_story rationale).
+        # Single-item read: include the full description. Kept off the shared
+        # _issue_summary shape for consistency with get_story/get_task, whose
+        # helpers are reused by lean board/list composites.
         result = _issue_summary(issue)
         result["description"] = issue.get("description")
         return result
@@ -1807,8 +1809,9 @@ def close_sprint(
 @mcp.tool(
     "get_epic_overview",
     description=(
-        "Return an epic and all user stories linked to it, with per-status counts. "
-        "ref is the epic ref number. project accepts slug or ID."
+        "Return an epic (including its full description) and all user stories linked "
+        "to it, with per-status counts. ref is the epic ref number. project accepts "
+        "slug or ID."
     ),
 )
 def get_epic_overview(
@@ -1845,6 +1848,7 @@ def get_epic_overview(
                 "status": (epic.get("status_extra_info") or {}).get("name"),
                 "assignee": (epic.get("assigned_to_extra_info") or {}).get("full_name_display"),
                 "color": epic.get("color"),
+                "description": epic.get("description"),
             },
             "summary": {
                 "total_stories": len(stories),
