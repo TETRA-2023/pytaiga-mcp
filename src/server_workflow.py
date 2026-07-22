@@ -2003,7 +2003,15 @@ def assign_item(
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
-        result = collection.edit(current["id"], assigned_to=user_id, version=current["version"])
+        # pytaigaclient's edit() signatures diverge: Tasks/Issues take a
+        # data={...} dict, while UserStories/Epics take **kwargs. Route
+        # accordingly — matching the update_* tools (pytaiga-mcp#123).
+        if collection_name in ("tasks", "issues"):
+            result = collection.edit(
+                current["id"], version=current["version"], data={"assigned_to": user_id}
+            )
+        else:
+            result = collection.edit(current["id"], version=current["version"], assigned_to=user_id)
         return {
             "ref": ref,
             "entity_type": entity_type,

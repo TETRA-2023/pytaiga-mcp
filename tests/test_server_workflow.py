@@ -1995,7 +1995,46 @@ class TestAssignItem:
         }
         result = wf.assign_item("p", 9, "bob", entity_type="issue", session_id=session)
         assert result["entity_type"] == "issue"
-        mock_client.api.issues.edit.assert_called_once_with(300, assigned_to=7, version=1)
+        # Issues.edit(id, version, data) — must be data={...}, not an assigned_to kwarg (#123)
+        mock_client.api.issues.edit.assert_called_once_with(300, version=1, data={"assigned_to": 7})
+
+    def test_assigns_task_via_entity_type(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [
+            {
+                "user": 7,
+                "full_name": "Bob",
+                "email": "bob@x",
+                "user_extra_info": {"username": "bob"},
+            }
+        ]
+        mock_client.api.tasks.get_by_ref.return_value = {"id": 400, "version": 3}
+        mock_client.api.tasks.edit.return_value = {
+            "assigned_to_extra_info": {"full_name_display": "Bob"}
+        }
+        result = wf.assign_item("p", 12, "bob", entity_type="task", session_id=session)
+        assert result["entity_type"] == "task"
+        # Tasks.edit(id, version, data) — same data={...} requirement as issues (#123)
+        mock_client.api.tasks.edit.assert_called_once_with(400, version=3, data={"assigned_to": 7})
+
+    def test_assigns_epic_via_entity_type(self, session, mock_client):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = [
+            {
+                "user": 7,
+                "full_name": "Bob",
+                "email": "bob@x",
+                "user_extra_info": {"username": "bob"},
+            }
+        ]
+        mock_client.api.epics.get_by_ref.return_value = {"id": 500, "version": 4}
+        mock_client.api.epics.edit.return_value = {
+            "assigned_to_extra_info": {"full_name_display": "Bob"}
+        }
+        result = wf.assign_item("p", 20, "bob", entity_type="epic", session_id=session)
+        assert result["entity_type"] == "epic"
+        # Epics.edit(id, version, **kwargs) — kwargs path, like user stories (#123)
+        mock_client.api.epics.edit.assert_called_once_with(500, version=4, assigned_to=7)
 
     def test_invalid_entity_type_raises(self, session, mock_client):
         with pytest.raises(ValueError, match="Invalid entity_type"):
