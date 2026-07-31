@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pytaigaclient.exceptions import TaigaException
 
 # Import the server module instead of specific functions
 import src.server_full as src_server
@@ -1061,6 +1062,20 @@ class TestTaigaTools:
         result = src_server.get_issue(100, session_id, verbosity="minimal")
         assert result["priority"] == 3
         assert "priority_name" not in result
+        # And it must not PAY for names it discards: 'minimal' filters the *_name
+        # keys straight back out, so resolving them would burn three API calls per
+        # project on data guaranteed to be dropped. Asserting absence alone let
+        # that waste hide.
+        assert mock_client.list_resources.call_count == 0
+
+    def test_invalid_verbosity_still_resolves_names(self, session_setup):
+        # _filter_response normalises an unknown verbosity to 'standard', so the
+        # skip must key on the exact string 'minimal' and nothing else.
+        session_id, mock_client = session_setup
+        mock_client.api.issues.get.return_value = self._issue()
+        mock_client.list_resources.side_effect = self._attr_tables()
+        result = src_server.get_issue(100, session_id, verbosity="nonsense")
+        assert result["priority_name"] == "High"
 
     def test_unknown_id_and_lookup_failure_degrade_gracefully(self, session_setup):
         session_id, mock_client = session_setup
@@ -1075,14 +1090,61 @@ class TestTaigaTools:
         assert result["priority"] == 999  # raw ID still returned
         assert result["priority_name"] is None
 
-    def test_logout_purges_attribute_cache(self, session_setup):
-        session_id, mock_client = session_setup
+    def _cached_keys(self, session_id):
+        return [k for k in src_server._issue_attr_cache if k.startswith(f"{session_id}:")]
+
+    def _populate_cache(self, session_id, mock_client):
         mock_client.api.issues.get.return_value = self._issue()
         mock_client.list_resources.side_effect = self._attr_tables()
         src_server.get_issue(100, session_id)
-        assert any(k.startswith(f"{session_id}:") for k in src_server._issue_attr_cache)
+        assert self._cached_keys(session_id), "cache should be populated"
+
+    # Three paths replace or evict a session's client. Every one must clear the
+    # cached per-project tables, because session ids are REUSABLE —
+    # DEFAULT_SESSION_ID is the fixed string "default" — so a re-bind would
+    # otherwise serve the previous holder's tables. Covering only logout is how
+    # the original leak survived.
+
+    def test_logout_purges_attribute_cache(self, session_setup):
+        session_id, mock_client = session_setup
+        self._populate_cache(session_id, mock_client)
         src_server.logout(session_id)
-        assert not any(k.startswith(f"{session_id}:") for k in src_server._issue_attr_cache)
+        assert not self._cached_keys(session_id)
+
+    def test_invalid_token_eviction_purges_attribute_cache(self, session_setup):
+        session_id, mock_client = session_setup
+        self._populate_cache(session_id, mock_client)
+        mock_client.api.users.get_me.side_effect = TaigaException("token invalid")
+        assert src_server.session_status(session_id)["status"] == "inactive"
+        assert not self._cached_keys(session_id)
+
+    def test_rebinding_a_session_id_purges_the_previous_holders_cache(self):
+        # Regression for the proven leak: user A populates the fixed "default"
+        # session, A's client is evicted, user B re-binds the same id — B must not
+        # be served A's table.
+        sid = src_server.DEFAULT_SESSION_ID
+        a = MagicMock()
+        a.is_authenticated = True
+        src_server._bind_session(sid, a)
+        try:
+            a.api.issues.get.return_value = self._issue()
+            a.list_resources.side_effect = lambda r, **k: (
+                [{"id": 3, "name": "A-ONLY"}] if r == "priorities" else []
+            )
+            assert src_server.get_issue(100, sid)["priority_name"] == "A-ONLY"
+
+            b = MagicMock()
+            b.is_authenticated = True
+            src_server._bind_session(sid, b)  # same id, different client
+            b.api.issues.get.return_value = self._issue()
+            b.list_resources.side_effect = lambda r, **k: (
+                [{"id": 3, "name": "B-OWN"}] if r == "priorities" else []
+            )
+            assert src_server.get_issue(100, sid)["priority_name"] == "B-OWN"
+            assert b.list_resources.call_count > 0, "B must query its own tables"
+        finally:
+            src_server.active_sessions.pop(sid, None)
+            src_server._purge_issue_attr_cache(sid)
 
     def test_issue_without_project_is_left_alone(self, session_setup):
         session_id, mock_client = session_setup

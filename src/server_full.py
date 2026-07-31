@@ -389,6 +389,36 @@ active_sessions: Dict[str, TaigaClientWrapper] = {}
 # Reserved session ID for auto-authenticated session from environment variables
 DEFAULT_SESSION_ID = "default"
 
+# Per-(session, project) cache of issue attribute tables; see _issue_attr_tables.
+# Declared up here because _bind_session purges it, and binding happens during
+# import-time auto-authentication — before the issue helpers are defined.
+# {"<session_id>:<project_id>": {"priority": {id: name}, ...}}
+_issue_attr_cache: Dict[str, Dict[str, Dict[int, str]]] = {}
+
+
+def _purge_issue_attr_cache(session_id: str) -> None:
+    """Drop every cached attribute table for a session.
+
+    Keys are ``"<session_id>:<project_id>"``, so one session's entries span every
+    project it touched.
+    """
+    prefix = f"{session_id}:"
+    for key in [k for k in _issue_attr_cache if k.startswith(prefix)]:
+        del _issue_attr_cache[key]
+
+
+def _bind_session(session_id: str, wrapper: TaigaClientWrapper) -> None:
+    """Register an authenticated client under ``session_id``, clearing stale state.
+
+    Session ids are reusable — ``DEFAULT_SESSION_ID`` is the fixed string "default",
+    re-bound by auto-authentication and by ``login`` — so binding a new client to an
+    existing id must not leave the previous holder's cached project tables in place.
+    Every write into ``active_sessions`` goes through here so a future call site
+    cannot silently miss the purge.
+    """
+    _purge_issue_attr_cache(session_id)
+    active_sessions[session_id] = wrapper
+
 
 # --- Lifespan for Auto-Authentication ---
 @asynccontextmanager
@@ -405,7 +435,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
                 username=settings.get_username_value(), password=settings.get_password_value()
             )
             if success:
-                active_sessions[DEFAULT_SESSION_ID] = wrapper
+                _bind_session(DEFAULT_SESSION_ID, wrapper)
                 logger.info(
                     f"Auto-authentication successful. Default session created: '{DEFAULT_SESSION_ID}'"
                 )
@@ -695,7 +725,7 @@ def _get_item_by_ref(
             f"{item_label.capitalize()} with ref #{ref} not found in project {project_id}"
         )
     if item_type == "issue":
-        result = _annotate_issue_attr_names(result, actual_session_id)
+        result = _annotate_issue_attr_names(result, actual_session_id, verbosity)
     return _filter_response(result, item_type, verbosity)
 
 
@@ -713,10 +743,6 @@ _ISSUE_ATTR_RESOURCES = {
     "severity": "severities",
     "type": "issue_types",
 }
-
-# {"<session_id>:<project_id>": {"priority": {id: name}, ...}}. Cleared on logout so a
-# re-login cannot serve another user's project tables.
-_issue_attr_cache: Dict[str, Dict[str, Dict[int, str]]] = {}
 
 
 def _issue_attr_tables(
@@ -750,27 +776,20 @@ def _issue_attr_tables(
     return tables
 
 
-def _purge_issue_attr_cache(session_id: str) -> None:
-    """Drop every cached attribute table for a session (called on logout).
-
-    Keys are ``"<session_id>:<project_id>"``, so a session's entries span every project
-    it touched. Without this, a re-login reusing a session id could be served another
-    user's project tables.
-    """
-    prefix = f"{session_id}:"
-    for key in [k for k in _issue_attr_cache if k.startswith(prefix)]:
-        del _issue_attr_cache[key]
-
-
-def _annotate_issue_attr_names(response, session_id: str):
+def _annotate_issue_attr_names(response, session_id: str, verbosity: str = "standard"):
     """Add priority_name / severity_name / type_name beside the raw integer IDs.
 
     Accepts a single issue dict or a list of them, and mutates in place (the dicts come
     straight from the API layer). Issues without a ``project`` are skipped — the project
     is what scopes the attribute tables. Must run BEFORE ``_filter_response``, and the
     added keys are allow-listed in ``RESPONSE_FIELDS['issue']['standard']``.
+
+    Skipped entirely at ``verbosity='minimal'``: that tier filters the ``*_name`` keys
+    straight back out, so resolving them would spend three API calls per project on data
+    guaranteed to be discarded. Any other value (including an invalid one, which
+    ``_filter_response`` normalises to 'standard') still resolves.
     """
-    if response is None:
+    if response is None or verbosity == "minimal":
         return response
     items = response if isinstance(response, list) else [response]
     client: Optional[TaigaClientWrapper] = None
@@ -859,10 +878,10 @@ def login(
             # Generate a unique session ID
             new_session_id = str(uuid.uuid4())
             # Store the authenticated wrapper in our manual session store
-            active_sessions[new_session_id] = wrapper
+            _bind_session(new_session_id, wrapper)
             # Set as default session if none exists yet
             if DEFAULT_SESSION_ID not in active_sessions:
-                active_sessions[DEFAULT_SESSION_ID] = wrapper
+                _bind_session(DEFAULT_SESSION_ID, wrapper)
                 logger.info(
                     f"Login successful. Session created and set as default: '{DEFAULT_SESSION_ID}'"
                 )
@@ -1739,7 +1758,7 @@ def list_issues(
         ),
         f"project {project_id}",
     )
-    result = _annotate_issue_attr_names(result, actual_session_id)
+    result = _annotate_issue_attr_names(result, actual_session_id, verbosity)
     return _filter_response(result, "issue", verbosity)
 
 
@@ -1790,7 +1809,7 @@ def create_issue(
         ),
         f"issue '{subject}'",
     )
-    result = _annotate_issue_attr_names(result, actual_session_id)
+    result = _annotate_issue_attr_names(result, actual_session_id, verbosity)
     return _filter_response(result, "issue", verbosity)
 
 
@@ -1811,7 +1830,7 @@ def get_issue(
         lambda: taiga_client_wrapper.api.issues.get(issue_id),
         f"issue {issue_id}",
     )
-    result = _annotate_issue_attr_names(result, actual_session_id)
+    result = _annotate_issue_attr_names(result, actual_session_id, verbosity)
     return _filter_response(result, "issue", verbosity)
 
 
@@ -1868,7 +1887,7 @@ def update_issue(
             issue_id=issue_id, version=version, data=parsed_kwargs
         )
         logger.info(f"Issue {issue_id} update request sent.")
-        updated_issue = _annotate_issue_attr_names(updated_issue, actual_session_id)
+        updated_issue = _annotate_issue_attr_names(updated_issue, actual_session_id, verbosity)
         return _filter_response(updated_issue, "issue", verbosity)
     except TaigaException as e:
         logger.error(f"Taiga API error updating issue {issue_id}: {e}", exc_info=False)
@@ -3633,8 +3652,10 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
             logger.warning(
                 f"Session {actual_session_id[:8]} found but token seems invalid (API check failed)."
             )
-            # Clean up invalid session
+            # Clean up invalid session (and its cached per-project state, or a
+            # re-bind of this id would be served these tables).
             active_sessions.pop(actual_session_id, None)
+            _purge_issue_attr_cache(actual_session_id)
             return {
                 "status": "inactive",
                 "reason": "token_invalid",
@@ -4143,7 +4164,7 @@ def bulk_create_issues(
     result = _execute_taiga_operation(
         "bulk_create_issues", do_bulk, f"{len(cleaned)} issues in project {project_id}"
     )
-    result = _annotate_issue_attr_names(result, actual_session_id)
+    result = _annotate_issue_attr_names(result, actual_session_id, verbosity)
     return _filter_response(result, "issue", verbosity)
 
 
