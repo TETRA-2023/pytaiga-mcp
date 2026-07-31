@@ -555,11 +555,14 @@ class TestUpsertWiki:
     def test_non_404_lookup_error_propagates(self, session, mock_client):
         # The guard must be narrow: a server or auth failure on the lookup is not
         # "page does not exist" and must not silently create a duplicate page.
+        # Asserting the exact type matters — _execute_taiga_operation re-raises
+        # TaigaAPIError unchanged, so a bare `raises(Exception)` would also pass if the
+        # call blew up for an unrelated reason, which is not what this test claims.
         mock_client.api.get.side_effect = [
             {"id": 1, "slug": "p", "name": "P"},
             _api_error(TaigaServerError, 500, "upstream exploded"),
         ]
-        with pytest.raises(Exception):
+        with pytest.raises(TaigaServerError):
             wf.upsert_wiki("p", "my-page", "Content here", session_id=session)
         mock_client.api.wiki.create.assert_not_called()
 
