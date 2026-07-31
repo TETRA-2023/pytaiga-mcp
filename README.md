@@ -35,7 +35,7 @@ The bridge ships two servers in a single image. Select one at runtime via the `T
 | `workflow` (default) | ~34 intent tools | Product Owners and team members managing projects daily |
 | `full` | 107 CRUD tools | Automation scripts, admin tasks, full API access |
 
-**Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, username — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
+**Workflow mode** (default) accepts human-readable names everywhere — project slug, sprint name, status name, member email or full name — and resolves them internally. One call to `get_sprint_board` returns a complete board view with all stories and tasks; `plan_sprint` creates a sprint and assigns stories in a single step.
 
 **Full mode** gives direct access to every Taiga API endpoint. Useful when you need precise control, bulk operations, or access to resources not surfaced in workflow mode (swimlanes, custom attributes, attachments, story points).
 
@@ -77,7 +77,7 @@ Intent-based tools that resolve names and composite API calls:
 | `get_epic_overview` | Epic + all linked stories with progress counts |
 | `create_epic` | Create epic + optionally link existing stories |
 | `get_team_workload` | Per-member story/task counts for a sprint |
-| `assign_item` | Assign any entity by username |
+| `assign_item` | Assign any entity by member email or full name |
 | `get_wiki` / `upsert_wiki` | Get or create/update wiki pages |
 | `add_comment` | Comment on any entity by ref |
 | `search` | Full-text search across all entity types (status resolved to name + `is_closed`) |

@@ -26,7 +26,7 @@ src/
   config.py          — Pydantic settings (env vars, SecretStr credentials)
 ```
 
-- `server_workflow.py` — intent-oriented tools that accept human-readable names (project slug, sprint name, status name, username) and resolve them internally. Tools composite multiple API calls to answer PO-level questions in one step.
+- `server_workflow.py` — intent-oriented tools that accept human-readable names (project slug, sprint name, status name, member email or full name) and resolve them internally. Note: Taiga `/memberships` exposes no username field, so user resolution matches on `user_email` / `email` / `full_name` only. Tools composite multiple API calls to answer PO-level questions in one step.
 - `server_full.py` — 1:1 mapping of Taiga REST API. Tools are grouped by resource type: auth, projects, user stories, tasks, issues, epics, milestones, wiki, memberships, comments.
 - `taiga_client.py` wraps `pytaigaclient.TaigaClient` and adds `list_resources()` with `x-disable-pagination` header.
 - Session management: `active_sessions` dict keyed by UUID (or `"default"` for auto-auth).

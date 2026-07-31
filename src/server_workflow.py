@@ -3,7 +3,7 @@
 Exposes ~28 intent-based tools designed for everyday project management:
 sprint planning, backlog grooming, team workload, epic tracking, task
 breakdown, wiki, and comments. All tools accept human-readable names
-(project slug, sprint name, status name, username) and resolve them to
+(project slug, sprint name, status name, user email) and resolve them to
 API IDs internally.
 
 Start with:
@@ -282,7 +282,11 @@ def _resolve_user(
     username: str,
     session_id: str,
 ) -> int:
-    """Resolve a username, email, or full name to a user ID within project members."""
+    """Resolve an email or full name to a user ID within project members.
+
+    Resolution runs against ``/memberships``, which exposes no username field —
+    see ``resolve_user_id``. The parameter name is historical.
+    """
     members = _cached(
         session_id,
         f"members_{project_id}",
@@ -336,6 +340,38 @@ def _resolve_issue_attribute(
     return matches[0]["id"]
 
 
+def _name_for_issue_attribute(
+    client: TaigaClientWrapper,
+    project_id: int,
+    attr_type: str,
+    attr_id: Optional[int],
+    session_id: str,
+) -> Optional[str]:
+    """Resolve an issue priority/severity/type ID back to its name.
+
+    Taiga exposes NO ``priority_extra_info`` / ``severity_extra_info`` /
+    ``type_extra_info`` on its issue serializer — the only ``*_extra_info``
+    objects it returns are ``assigned_to``, ``owner``, ``project`` and
+    ``status``. These three fields come back as bare integer IDs, so reading a
+    ``*_extra_info`` key for them silently yields None on every call and makes a
+    correctly-set field look unset. Reverse-map the ID instead.
+
+    Reads the same session cache that ``_resolve_issue_attribute`` populates, so
+    this costs no extra API request after the first lookup per project.
+    """
+    if attr_id is None:
+        return None
+    resource = _ISSUE_ATTR_RESOURCE_MAP.get(attr_type)
+    if not resource:
+        raise ValueError(f"Unknown attribute type '{attr_type}'.")
+    items = _cached(
+        session_id,
+        f"{resource}_{project_id}",
+        lambda: client.list_resources(resource, project_id=project_id),
+    )
+    return next((i.get("name") for i in items if i.get("id") == attr_id), None)
+
+
 def _resolve_story_refs(client: TaigaClientWrapper, project_id: int, refs: List[int]) -> List[int]:
     """Resolve a list of user story ref numbers to IDs with a single API call.
 
@@ -377,7 +413,9 @@ def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
         "assignee": (us.get("assigned_to_extra_info") or {}).get("full_name_display"),
         "is_blocked": us.get("is_blocked", False),
         "is_closed": _is_closed(us),
-        "sprint": (us.get("milestone_extra_info") or {}).get("name"),
+        # Taiga publishes NO milestone_extra_info on user stories — the sprint
+        # arrives as `milestone` (ID) plus flat `milestone_name`/`milestone_slug`.
+        "sprint": us.get("milestone_name") or us.get("milestone_slug"),
         "tags": us.get("tags", []),
     }
 
@@ -393,16 +431,48 @@ def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _issue_summary(issue: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract readable fields from a raw issue dict (resolved names, not raw ids)."""
+def _issue_summary(
+    issue: Dict[str, Any],
+    client: Optional[TaigaClientWrapper] = None,
+    project_id: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extract readable fields from a raw issue dict (resolved names, not raw ids).
+
+    priority/severity/type arrive as bare integer IDs — Taiga publishes no
+    ``*_extra_info`` for them (see _name_for_issue_attribute). Pass client,
+    project_id and session_id to get their names; without that context the raw
+    IDs are returned rather than a misleading None.
+
+    The three context arguments are all-or-nothing: supplying a subset raises
+    rather than silently degrading to raw IDs, which would look like a successful
+    resolution to the caller.
+    """
+    context = (client, project_id, session_id)
+    if any(v is not None for v in context) and not all(v is not None for v in context):
+        raise ValueError(
+            "_issue_summary: client, project_id and session_id must be passed together "
+            "(or all omitted)."
+        )
+    if all(v is not None for v in context):
+        # Fall back to the raw ID when an ID is absent from the project's table,
+        # mirroring the `status` line below — an unresolvable value should degrade
+        # to something identifiable, not vanish.
+        names = {
+            attr: _name_for_issue_attribute(client, project_id, attr, issue.get(attr), session_id)
+            or issue.get(attr)
+            for attr in ("priority", "severity", "type")
+        }
+    else:
+        names = {attr: issue.get(attr) for attr in ("priority", "severity", "type")}
     return {
         "ref": issue.get("ref"),
         "subject": issue.get("subject"),
         "status": (issue.get("status_extra_info") or {}).get("name") or issue.get("status"),
         "assignee": (issue.get("assigned_to_extra_info") or {}).get("full_name_display"),
-        "priority": (issue.get("priority_extra_info") or {}).get("name"),
-        "severity": (issue.get("severity_extra_info") or {}).get("name"),
-        "type": (issue.get("type_extra_info") or {}).get("name"),
+        "priority": names["priority"],
+        "severity": names["severity"],
+        "type": names["type"],
         "is_blocked": issue.get("is_blocked", False),
         "is_closed": _is_closed(issue),
         "tags": issue.get("tags", []),
@@ -662,9 +732,13 @@ def get_project_overview(
 
         # Team
         members = client.list_resources("memberships", project_id=project_id)
+        # Memberships carry NO user_extra_info (and no username at all). Identity
+        # comes from flat fields: `user_email` is the reliable one — `email` is
+        # often blank on established members. Email is also what user resolution
+        # matches on, so it is the useful handle to surface here.
         team = [
             {
-                "username": (m.get("user_extra_info") or {}).get("username"),
+                "email": m.get("user_email") or m.get("email"),
                 "full_name": m.get("full_name"),
                 "role": m.get("role_name"),
                 "is_admin": m.get("is_admin", False),
@@ -863,7 +937,7 @@ def get_issue(
         # Single-item read: include the full description. Kept off the shared
         # _issue_summary shape for consistency with get_story/get_task, whose
         # helpers are reused by lean board/list composites.
-        result = _issue_summary(issue)
+        result = _issue_summary(issue, client, proj["id"], actual_session_id)
         result["description"] = issue.get("description")
         return result
 
@@ -879,7 +953,7 @@ def get_issue(
     "browse_backlog",
     description=(
         "List user stories in the backlog (not assigned to any sprint) with optional filters. "
-        "Filters: status (name), assignee (username/email), epic (ref number), tags (comma-separated). "
+        "Filters: status (name), assignee (email/full name), epic (ref number), tags (comma-separated). "
         "project accepts slug or ID."
     ),
 )
@@ -923,7 +997,7 @@ def browse_backlog(
     "create_story",
     description=(
         "Create a user story in the backlog with optional epic link, sprint assignment, and assignee. "
-        "project accepts slug or ID. assignee accepts username or email. "
+        "project accepts slug or ID. assignee accepts an email or full name. "
         "sprint accepts name or ID (omit to place in backlog). epic accepts ref number."
     ),
 )
@@ -978,7 +1052,8 @@ def create_story(
             "ref": result.get("ref"),
             "id": result.get("id"),
             "subject": result.get("subject"),
-            "sprint": (result.get("milestone_extra_info") or {}).get("name"),
+            # No milestone_extra_info on user stories — see _story_summary.
+            "sprint": result.get("milestone_name") or result.get("milestone_slug"),
             "epic_linked": epic is not None,
         }
 
@@ -1090,7 +1165,7 @@ def update_story(
         "Add a single task under an existing user story. story_ref is the parent US ref number. "
         "By default the task inherits the parent story's sprint; pass sprint=<name|id> to "
         "place the task in a different sprint, or sprint=0 to keep it out of any sprint. "
-        "All name fields are resolved (assignee username, status name, sprint name). "
+        "All name fields are resolved (assignee email/full name, status name, sprint name). "
         "project accepts slug or ID."
     ),
 )
@@ -1351,7 +1426,7 @@ def break_down_story(
     "create_issue",
     description=(
         "Create a new issue. type, priority, and severity default to the project's first configured value "
-        "when not provided. All name fields are resolved (project slug, assignee username). "
+        "when not provided. All name fields are resolved (project slug, assignee email/full name). "
         "project accepts slug or ID."
     ),
 )
@@ -1420,9 +1495,20 @@ def create_issue(
             "ref": result.get("ref"),
             "id": result.get("id"),
             "subject": result.get("subject"),
-            "type": (result.get("type_extra_info") or {}).get("name"),
-            "priority": (result.get("priority_extra_info") or {}).get("name"),
-            "severity": (result.get("severity_extra_info") or {}).get("name"),
+            # `or result.get(...)` degrades an unresolvable ID to the raw integer
+            # rather than None — see _issue_summary.
+            "type": _name_for_issue_attribute(
+                client, project_id, "type", result.get("type"), actual_session_id
+            )
+            or result.get("type"),
+            "priority": _name_for_issue_attribute(
+                client, project_id, "priority", result.get("priority"), actual_session_id
+            )
+            or result.get("priority"),
+            "severity": _name_for_issue_attribute(
+                client, project_id, "severity", result.get("severity"), actual_session_id
+            )
+            or result.get("severity"),
         }
 
     return _execute_taiga_operation("create_issue", do_create, str(project))
@@ -1499,9 +1585,19 @@ def update_issue(
             "ref": result.get("ref"),
             "subject": result.get("subject"),
             "status": (result.get("status_extra_info") or {}).get("name"),
-            "priority": (result.get("priority_extra_info") or {}).get("name"),
-            "severity": (result.get("severity_extra_info") or {}).get("name"),
-            "type": (result.get("type_extra_info") or {}).get("name"),
+            # Raw-ID fallback on unresolvable IDs — see _issue_summary.
+            "priority": _name_for_issue_attribute(
+                client, project_id, "priority", result.get("priority"), actual_session_id
+            )
+            or result.get("priority"),
+            "severity": _name_for_issue_attribute(
+                client, project_id, "severity", result.get("severity"), actual_session_id
+            )
+            or result.get("severity"),
+            "type": _name_for_issue_attribute(
+                client, project_id, "type", result.get("type"), actual_session_id
+            )
+            or result.get("type"),
             "assignee": (result.get("assigned_to_extra_info") or {}).get("full_name_display"),
             "is_blocked": result.get("is_blocked"),
             "is_closed": result.get("is_closed", False),
@@ -1864,7 +1960,7 @@ def get_epic_overview(
     "create_epic",
     description=(
         "Create a new epic and optionally link existing user stories to it by ref number. "
-        "assignee accepts username or email. story_refs is a list of existing US ref numbers to link. "
+        "assignee accepts an email or full name. story_refs is a list of existing US ref numbers to link. "
         "project accepts slug or ID."
     ),
 )
@@ -1981,7 +2077,9 @@ def get_team_workload(
 @mcp.tool(
     "assign_item",
     description=(
-        "Assign a user story, task, issue, or epic to a team member by username or email. "
+        "Assign a user story, task, issue, or epic to a team member by email or full name. "
+        "The `username` parameter name is historical — Taiga memberships expose no "
+        "username, so pass an email address or the member's full name. "
         "entity_type: 'story' (default), 'task', 'issue', or 'epic'. "
         "ref is the item ref number. project accepts slug or ID."
     ),
