@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v2.1.1 (2026-07-31)
+
+### Bug Fixes
+
+- **upsert_wiki**: Create path was unreachable — /wiki/by_slug raises 404
+  ([#131](https://github.com/TETRA-2023/pytaiga-mcp/pull/131),
+  [`9d4f206`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9d4f20684456b671444bcbb186418bd101b11454))
+
+### Testing
+
+- **upsert_wiki**: Assert the exact exception type, not bare Exception
+  ([#131](https://github.com/TETRA-2023/pytaiga-mcp/pull/131),
+  [`9d4f206`](https://github.com/TETRA-2023/pytaiga-mcp/commit/9d4f20684456b671444bcbb186418bd101b11454))
+
+
 ## v2.1.0 (2026-07-31)
 
 ### Bug Fixes
