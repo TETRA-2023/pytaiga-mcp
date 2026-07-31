@@ -265,10 +265,15 @@ RESPONSE_FIELDS: Dict[str, Dict[str, Optional[List[str]]]] = {
             "status_extra_info",
             # priority/severity/type are bare integer IDs. Taiga publishes no
             # *_extra_info for them (only assigned_to/owner/project/status), so
-            # listing those keys here would be dead config.
+            # listing those keys here would be dead config. The `*_name`
+            # companions are injected by _annotate_issue_attr_names before
+            # filtering; 'minimal' deliberately keeps only the raw IDs.
             "priority",
+            "priority_name",
             "severity",
+            "severity_name",
             "type",
+            "type_name",
             "assigned_to",
             "assigned_to_extra_info",
             "milestone",
@@ -689,7 +694,100 @@ def _get_item_by_ref(
         raise ValueError(
             f"{item_label.capitalize()} with ref #{ref} not found in project {project_id}"
         )
+    if item_type == "issue":
+        result = _annotate_issue_attr_names(result, actual_session_id)
     return _filter_response(result, item_type, verbosity)
+
+
+# --- Issue attribute name resolution ---
+#
+# Taiga publishes no priority_extra_info / severity_extra_info / type_extra_info on its
+# issue serializer (only assigned_to / owner / project / status), so those three fields
+# arrive as bare integer IDs. Workflow mode reverse-maps them to names; full mode is a
+# deliberate 1:1 mapping of the REST API, so the raw IDs stay put and we ADD `*_name`
+# companions rather than replacing them. That keeps existing callers working while making
+# a response like `"priority": 27` interpretable without three extra tool calls.
+
+_ISSUE_ATTR_RESOURCES = {
+    "priority": "priorities",
+    "severity": "severities",
+    "type": "issue_types",
+}
+
+# {"<session_id>:<project_id>": {"priority": {id: name}, ...}}. Cleared on logout so a
+# re-login cannot serve another user's project tables.
+_issue_attr_cache: Dict[str, Dict[str, Dict[int, str]]] = {}
+
+
+def _issue_attr_tables(
+    client: TaigaClientWrapper, project_id: int, session_id: str
+) -> Dict[str, Dict[int, str]]:
+    """Return {attr: {id: name}} for a project's priorities/severities/issue types.
+
+    Cached per (session, project): without this, annotating a list of issues would cost
+    three extra API calls per issue. Fetch failures degrade to an empty table so a read
+    still succeeds with the raw IDs rather than failing outright.
+    """
+    key = f"{session_id}:{project_id}"
+    tables = _issue_attr_cache.get(key)
+    if tables is None:
+        tables = {}
+        for attr, resource in _ISSUE_ATTR_RESOURCES.items():
+            try:
+                items = client.list_resources(resource, project_id=project_id)
+            except Exception as exc:  # noqa: BLE001 — name lookup is best-effort
+                logger.warning(
+                    f"Could not load {resource} for project {project_id}; "
+                    f"issue {attr} names unavailable: {exc}"
+                )
+                items = []
+            tables[attr] = {
+                i["id"]: i.get("name")
+                for i in items
+                if isinstance(i, dict) and i.get("id") is not None
+            }
+        _issue_attr_cache[key] = tables
+    return tables
+
+
+def _purge_issue_attr_cache(session_id: str) -> None:
+    """Drop every cached attribute table for a session (called on logout).
+
+    Keys are ``"<session_id>:<project_id>"``, so a session's entries span every project
+    it touched. Without this, a re-login reusing a session id could be served another
+    user's project tables.
+    """
+    prefix = f"{session_id}:"
+    for key in [k for k in _issue_attr_cache if k.startswith(prefix)]:
+        del _issue_attr_cache[key]
+
+
+def _annotate_issue_attr_names(response, session_id: str):
+    """Add priority_name / severity_name / type_name beside the raw integer IDs.
+
+    Accepts a single issue dict or a list of them, and mutates in place (the dicts come
+    straight from the API layer). Issues without a ``project`` are skipped — the project
+    is what scopes the attribute tables. Must run BEFORE ``_filter_response``, and the
+    added keys are allow-listed in ``RESPONSE_FIELDS['issue']['standard']``.
+    """
+    if response is None:
+        return response
+    items = response if isinstance(response, list) else [response]
+    client: Optional[TaigaClientWrapper] = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        project_id = item.get("project")
+        if project_id is None:
+            continue
+        if client is None:
+            client = _get_authenticated_client(session_id)
+        tables = _issue_attr_tables(client, project_id, session_id)
+        for attr in _ISSUE_ATTR_RESOURCES:
+            attr_id = item.get(attr)
+            if attr_id is not None:
+                item[f"{attr}_name"] = tables.get(attr, {}).get(attr_id)
+    return response
 
 
 # --- MCP Tools ---
@@ -1618,7 +1716,7 @@ def get_task_statuses(project_id: int, session_id: Optional[str] = None) -> List
 
 @mcp.tool(
     "list_issues",
-    description="Lists issues within a specific project, optionally filtered. Results include both 'id' (internal, use for get/update/delete) and 'ref' (human-readable '#N' shown in Taiga UI). verbosity: 'minimal' (id/ref/subject/status/priority/severity/project), 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description="Lists issues within a specific project, optionally filtered. Results include both 'id' (internal, use for get/update/delete) and 'ref' (human-readable '#N' shown in Taiga UI). verbosity: 'minimal' (id/ref/subject/status/priority/severity/project), 'standard' (default), 'full'. At 'standard' and 'full' verbosity the response also carries priority_name / severity_name / type_name resolved from those integer IDs (Taiga sends no *_extra_info for them); 'minimal' returns the raw IDs only. Uses default session if session_id not provided.",
 )
 def list_issues(
     project_id: int,
@@ -1641,6 +1739,7 @@ def list_issues(
         ),
         f"project {project_id}",
     )
+    result = _annotate_issue_attr_names(result, actual_session_id)
     return _filter_response(result, "issue", verbosity)
 
 
@@ -1691,12 +1790,13 @@ def create_issue(
         ),
         f"issue '{subject}'",
     )
+    result = _annotate_issue_attr_names(result, actual_session_id)
     return _filter_response(result, "issue", verbosity)
 
 
 @mcp.tool(
     "get_issue",
-    description="Gets detailed information about a specific issue by its internal ID (not the ref number shown in Taiga UI). Use get_issue_by_ref if you have the '#N' reference number instead. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description="Gets detailed information about a specific issue by its internal ID (not the ref number shown in Taiga UI). Use get_issue_by_ref if you have the '#N' reference number instead. verbosity: 'minimal', 'standard' (default), 'full'. At 'standard' and 'full' verbosity the response also carries priority_name / severity_name / type_name resolved from those integer IDs (Taiga sends no *_extra_info for them); 'minimal' returns the raw IDs only. Uses default session if session_id not provided.",
 )
 def get_issue(
     issue_id: int, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -1711,12 +1811,13 @@ def get_issue(
         lambda: taiga_client_wrapper.api.issues.get(issue_id),
         f"issue {issue_id}",
     )
+    result = _annotate_issue_attr_names(result, actual_session_id)
     return _filter_response(result, "issue", verbosity)
 
 
 @mcp.tool(
     "get_issue_by_ref",
-    description="Gets an issue by its human-readable reference number (the '#N' shown in Taiga UI). Requires the project_id. Use this instead of get_issue when you have a ref number. verbosity: 'minimal', 'standard' (default), 'full'. Uses default session if session_id not provided.",
+    description="Gets an issue by its human-readable reference number (the '#N' shown in Taiga UI). Requires the project_id. Use this instead of get_issue when you have a ref number. verbosity: 'minimal', 'standard' (default), 'full'. At 'standard' and 'full' verbosity the response also carries priority_name / severity_name / type_name resolved from those integer IDs (Taiga sends no *_extra_info for them); 'minimal' returns the raw IDs only. Uses default session if session_id not provided.",
 )
 def get_issue_by_ref(
     project_id: int, ref: int, session_id: Optional[str] = None, verbosity: str = "standard"
@@ -1767,6 +1868,7 @@ def update_issue(
             issue_id=issue_id, version=version, data=parsed_kwargs
         )
         logger.info(f"Issue {issue_id} update request sent.")
+        updated_issue = _annotate_issue_attr_names(updated_issue, actual_session_id)
         return _filter_response(updated_issue, "issue", verbosity)
     except TaigaException as e:
         logger.error(f"Taiga API error updating issue {issue_id}: {e}", exc_info=False)
@@ -3500,6 +3602,7 @@ def logout(session_id: Optional[str] = None) -> Dict[str, Any]:
     logger.info(f"Executing logout for session {actual_session_id[:8]}...")
     # Remove from dict, return None if not found
     client_wrapper = active_sessions.pop(actual_session_id, None)
+    _purge_issue_attr_cache(actual_session_id)
     if client_wrapper:
         logger.info(f"Session {actual_session_id[:8]} logged out successfully.")
         # No specific API logout call needed usually for token-based auth
@@ -4040,6 +4143,7 @@ def bulk_create_issues(
     result = _execute_taiga_operation(
         "bulk_create_issues", do_bulk, f"{len(cleaned)} issues in project {project_id}"
     )
+    result = _annotate_issue_attr_names(result, actual_session_id)
     return _filter_response(result, "issue", verbosity)
 
 

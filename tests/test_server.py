@@ -993,6 +993,107 @@ class TestTaigaTools:
         assert result["id"] == 100
         mock_client.api.issues.get.assert_called_once_with(100)
 
+    # ─── Issue priority/severity/type name resolution ─────────────────
+    #
+    # Taiga sends these three as bare integer IDs with no *_extra_info, so full
+    # mode adds `*_name` companions beside the IDs (it stays a 1:1 API mapping,
+    # so the IDs are not replaced).
+
+    @staticmethod
+    def _attr_tables():
+        tables = {
+            "priorities": [{"id": 1, "name": "Low"}, {"id": 3, "name": "High"}],
+            "severities": [{"id": 2, "name": "Normal"}, {"id": 5, "name": "Critical"}],
+            "issue_types": [{"id": 7, "name": "Bug"}],
+        }
+        return lambda resource, **kw: tables.get(resource, [])
+
+    @staticmethod
+    def _issue(**over):
+        base = {
+            "id": 100,
+            "ref": 10,
+            "subject": "Bug",
+            "status": 1,
+            "priority": 3,
+            "severity": 5,
+            "type": 7,
+            "project": 123,
+            "version": 1,
+        }
+        base.update(over)
+        return base
+
+    def test_get_issue_adds_resolved_attribute_names(self, session_setup):
+        session_id, mock_client = session_setup
+        mock_client.api.issues.get.return_value = self._issue()
+        mock_client.list_resources.side_effect = self._attr_tables()
+        result = src_server.get_issue(100, session_id)
+        # Raw IDs preserved (1:1 mapping) AND names added beside them.
+        assert result["priority"] == 3 and result["priority_name"] == "High"
+        assert result["severity"] == 5 and result["severity_name"] == "Critical"
+        assert result["type"] == 7 and result["type_name"] == "Bug"
+
+    def test_attribute_tables_are_cached_per_session_and_project(self, session_setup):
+        session_id, mock_client = session_setup
+        mock_client.api.issues.get.return_value = self._issue()
+        mock_client.list_resources.side_effect = self._attr_tables()
+        src_server.get_issue(100, session_id)
+        src_server.get_issue(100, session_id)
+        # Three tables fetched once, not once per read — otherwise annotating a
+        # list of issues would cost three extra calls each.
+        assert mock_client.list_resources.call_count == 3
+
+    def test_list_issues_annotates_every_item(self, session_setup):
+        session_id, mock_client = session_setup
+        mock_client.list_resources.side_effect = lambda resource, **kw: (
+            [self._issue(id=1, priority=1), self._issue(id=2, priority=3)]
+            if resource == "issues"
+            else self._attr_tables()(resource, **kw)
+        )
+        result = src_server.list_issues(123, session_id=session_id)
+        assert [r["priority_name"] for r in result] == ["Low", "High"]
+
+    def test_minimal_verbosity_keeps_raw_ids_only(self, session_setup):
+        session_id, mock_client = session_setup
+        mock_client.api.issues.get.return_value = self._issue()
+        mock_client.list_resources.side_effect = self._attr_tables()
+        result = src_server.get_issue(100, session_id, verbosity="minimal")
+        assert result["priority"] == 3
+        assert "priority_name" not in result
+
+    def test_unknown_id_and_lookup_failure_degrade_gracefully(self, session_setup):
+        session_id, mock_client = session_setup
+        # 999 is absent from the table; and a failing lookup must not fail the read.
+        mock_client.api.issues.get.return_value = self._issue(priority=999)
+        mock_client.list_resources.side_effect = self._attr_tables()
+        assert src_server.get_issue(100, session_id)["priority_name"] is None
+
+        src_server._purge_issue_attr_cache(session_id)
+        mock_client.list_resources.side_effect = RuntimeError("boom")
+        result = src_server.get_issue(100, session_id)
+        assert result["priority"] == 999  # raw ID still returned
+        assert result["priority_name"] is None
+
+    def test_logout_purges_attribute_cache(self, session_setup):
+        session_id, mock_client = session_setup
+        mock_client.api.issues.get.return_value = self._issue()
+        mock_client.list_resources.side_effect = self._attr_tables()
+        src_server.get_issue(100, session_id)
+        assert any(k.startswith(f"{session_id}:") for k in src_server._issue_attr_cache)
+        src_server.logout(session_id)
+        assert not any(k.startswith(f"{session_id}:") for k in src_server._issue_attr_cache)
+
+    def test_issue_without_project_is_left_alone(self, session_setup):
+        session_id, mock_client = session_setup
+        # The project scopes the attribute tables; without it there is nothing to
+        # resolve against, and the read must still succeed.
+        mock_client.api.issues.get.return_value = self._issue(project=None)
+        mock_client.list_resources.side_effect = self._attr_tables()
+        result = src_server.get_issue(100, session_id)
+        assert "priority_name" not in result
+        mock_client.list_resources.assert_not_called()
+
     def test_get_issue_by_ref(self, session_setup):
         """Test get_issue_by_ref returns issue by ref number."""
         session_id, mock_client = session_setup
