@@ -722,18 +722,24 @@ class TestTaigaTools:
             user_story_id=456, version=1, assigned_to=10
         )
 
-    def test_assign_user_story_to_user_by_username(self, session_setup):
-        """assign_*_to_user resolves a username to an ID via the entity's project members."""
+    def test_assign_user_story_to_user_by_email(self, session_setup):
+        """assign_*_to_user resolves an email to an ID via the entity's project members.
+
+        Previously asserted resolution from the bare username "bob", which only
+        worked because the fixture supplied a phantom ``user_extra_info``.
+        Memberships carry no username at all, so email (or full name) is the only
+        identifier that resolves against a real payload.
+        """
         session_id, mock_client = session_setup
         mock_client.get_resource.return_value = {"id": 456, "project": 1}
         mock_client.list_resources.return_value = [
             # pending-invite member with null fields first — must not crash (pytaiga-mcp#120)
-            {"user": None, "email": None, "full_name": None, "user_extra_info": None},
+            {"user": None, "email": None, "user_email": None, "full_name": None},
             {
                 "user": 10,
-                "email": "bob@example.com",
+                "email": "",
+                "user_email": "bob@example.com",
                 "full_name": "Bob Stone",
-                "user_extra_info": {"username": "bob", "full_name_display": "Bob Stone"},
             },
         ]
         mock_client.api.user_stories.get.return_value = {
@@ -746,7 +752,7 @@ class TestTaigaTools:
             "assigned_to": 10,
             "version": 2,
         }
-        src_server.assign_user_story_to_user(456, "bob", session_id)
+        src_server.assign_user_story_to_user(456, "bob@example.com", session_id)
         mock_client.get_resource.assert_called_once_with("user_stories", 456)
         mock_client.api.user_stories.edit.assert_called_once_with(
             user_story_id=456, version=1, assigned_to=10

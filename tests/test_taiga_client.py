@@ -141,15 +141,38 @@ class TestResolveUserId:
     """Shared None-safe user resolver used by both server flavors (pytaiga-mcp#120)."""
 
     def _members(self):
+        """A REAL /memberships payload.
+
+        Membership rows carry no ``user_extra_info`` and no ``username`` field at
+        all, and the flat ``email`` is frequently blank on established members
+        while ``user_email`` holds the real address. The previous fixture supplied
+        ``user_extra_info``, so username/display-name tests passed against a
+        payload Taiga never sends while those code paths were dead in production.
+        """
         return [
             # pending-invite membership with null fields — must not abort matching
-            {"user": None, "email": None, "full_name": None, "user_extra_info": None},
+            {"user": None, "email": None, "user_email": None, "full_name": None},
             {
                 "user": 42,
-                "email": "alice@example.com",
+                "email": "",
+                "user_email": "alice@example.com",
                 "full_name": "Alice Martin",
-                "user_extra_info": {"username": "alice", "full_name_display": "Alice Martin"},
             },
+        ]
+
+    def _members_with_extra_info(self):
+        """A non-memberships payload that DOES carry ``user_extra_info``.
+
+        Only for the forward-compatibility lookups: ``resolve_user_id`` accepts
+        member lists from other endpoints, so it still probes
+        ``user_extra_info.username`` / ``.full_name_display``. Kept separate so it
+        is never mistaken for a memberships shape.
+        """
+        return [
+            {
+                "user": 7,
+                "user_extra_info": {"username": "carol", "full_name_display": "Carol Danvers"},
+            }
         ]
 
     def test_int_passes_through_without_lookup(self):
@@ -164,22 +187,39 @@ class TestResolveUserId:
         with pytest.raises(ValueError, match="Empty username"):
             resolve_user_id(self._members(), "")
 
-    def test_resolves_by_username_case_insensitive(self):
-        assert resolve_user_id(self._members(), "ALICE") == 42
-
-    def test_resolves_by_email(self):
+    def test_resolves_by_user_email_when_flat_email_is_blank(self):
+        # THE regression this fix exists for: on a real memberships row `email` is
+        # "" and the address lives in `user_email`. Matching only the flat `email`
+        # made assignment-by-email fail for every established member.
         assert resolve_user_id(self._members(), "alice@example.com") == 42
+
+    def test_resolves_by_user_email_case_insensitive(self):
+        assert resolve_user_id(self._members(), "ALICE@EXAMPLE.COM") == 42
+
+    def test_resolves_by_flat_email_when_populated(self):
+        # Some payloads do fill `email`; that path must keep working.
+        members = [{"user": 9, "email": "dave@example.com", "user_email": None}]
+        assert resolve_user_id(members, "dave@example.com") == 9
 
     def test_resolves_by_full_name(self):
         assert resolve_user_id(self._members(), "Alice Martin") == 42
 
-    def test_resolves_by_display_name(self):
+    def test_resolves_by_full_name_case_insensitive(self):
         assert resolve_user_id(self._members(), "alice martin") == 42
+
+    def test_resolves_by_username_on_non_memberships_payload(self):
+        # Forward-compat only — memberships never carry username. See
+        # _members_with_extra_info.
+        assert resolve_user_id(self._members_with_extra_info(), "CAROL") == 7
+
+    def test_resolves_by_display_name_on_non_memberships_payload(self):
+        # Forward-compat only — see above.
+        assert resolve_user_id(self._members_with_extra_info(), "carol danvers") == 7
 
     def test_null_field_member_does_not_crash(self):
         # The regression: the leading null-field member previously raised
         # "'NoneType' object has no attribute 'lower'" before reaching Alice.
-        assert resolve_user_id(self._members(), "alice") == 42
+        assert resolve_user_id(self._members(), "alice@example.com") == 42
 
     def test_skips_match_when_member_user_is_none(self):
         # A member matching by email but with user=None must not return None;
@@ -190,6 +230,17 @@ class TestResolveUserId:
 
     def test_raises_when_not_found(self):
         with pytest.raises(ValueError, match="not found"):
+            resolve_user_id(self._members(), "bob")
+
+    def test_not_found_error_falls_back_to_user_email_in_listing(self):
+        # A member whose only address is user_email must still be named in the
+        # diagnostic — it previously rendered "?" because only flat `email` was
+        # consulted, and that is blank on real rows.
+        with pytest.raises(ValueError, match="alice@example.com"):
+            resolve_user_id([{"user": 42, "email": "", "user_email": "alice@example.com"}], "bob")
+
+    def test_not_found_error_prefers_full_name_in_listing(self):
+        with pytest.raises(ValueError, match="Alice Martin"):
             resolve_user_id(self._members(), "bob")
 
 

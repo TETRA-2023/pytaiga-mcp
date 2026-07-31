@@ -47,9 +47,11 @@ def resolve_user_id(members: List[Dict[str, Any]], identifier: "int | str") -> i
     """Resolve a user identifier to a Taiga user ID against a project's memberships.
 
     ``identifier`` may be an ``int`` (returned unchanged — treated as a user ID)
-    or a string matched case-insensitively against each member's email or full
-    name. Matching is None-safe (see ``safe_lower``): a single member with a null
-    field no longer aborts resolution before the intended user is reached.
+    or a string matched case-insensitively against each member's ``user_email``,
+    ``email``, ``full_name``, or — on non-memberships payloads only — the
+    ``user_extra_info`` username / display name. Matching is None-safe (see
+    ``safe_lower``): a single member with a null field no longer aborts resolution
+    before the intended user is reached.
 
     Membership rows carry NO ``user_extra_info`` and no ``username`` field, so
     those lookups are kept only for forward-compatibility with endpoints that do

@@ -305,29 +305,34 @@ class TestResolveStatus:
 
 class TestResolveUser:
     def _members(self):
+        """A REAL /memberships payload: no user_extra_info, no username, and the
+        flat `email` blank while `user_email` carries the address."""
         return [
             {
                 "user": 42,
                 "full_name": "Alice Martin",
-                "email": "alice@example.com",
-                "user_extra_info": {
-                    "username": "alice",
-                    "full_name_display": "Alice Martin",
-                },
+                "email": "",
+                "user_email": "alice@example.com",
             }
         ]
 
-    def test_resolves_by_username(self, mock_client):
-        mock_client.list_resources.return_value = self._members()
-        assert wf._resolve_user(mock_client, 1, "alice", "sess") == 42
-
-    def test_resolves_by_email(self, mock_client):
+    def test_resolves_by_user_email(self, mock_client):
+        # Memberships expose no username, so email is the practical handle.
         mock_client.list_resources.return_value = self._members()
         assert wf._resolve_user(mock_client, 1, "alice@example.com", "sess") == 42
 
     def test_resolves_by_full_name(self, mock_client):
         mock_client.list_resources.return_value = self._members()
         assert wf._resolve_user(mock_client, 1, "Alice Martin", "sess") == 42
+
+    def test_resolves_by_username_only_on_non_memberships_payload(self, mock_client):
+        # Forward-compat: resolution still probes user_extra_info for endpoints
+        # that return it. A memberships payload never does, so this shape is
+        # deliberately synthetic and must not be copied into other fixtures.
+        mock_client.list_resources.return_value = [
+            {"user": 7, "user_extra_info": {"username": "carol"}}
+        ]
+        assert wf._resolve_user(mock_client, 1, "CAROL", "sess") == 7
 
     def test_raises_when_not_found(self, mock_client):
         mock_client.list_resources.return_value = self._members()
@@ -336,14 +341,14 @@ class TestResolveUser:
 
     def test_resolves_past_member_with_null_fields(self, mock_client):
         # Regression for pytaiga-mcp#120: a pending-invite membership with null
-        # email/full_name/user_extra_info must not abort resolution before the
-        # valid member is reached (previously raised 'NoneType' ... 'lower').
+        # email/full_name must not abort resolution before the valid member is
+        # reached (previously raised 'NoneType' ... 'lower').
         members = [
-            {"user": None, "email": None, "full_name": None, "user_extra_info": None},
+            {"user": None, "email": None, "user_email": None, "full_name": None},
             *self._members(),
         ]
         mock_client.list_resources.return_value = members
-        assert wf._resolve_user(mock_client, 1, "alice", "sess") == 42
+        assert wf._resolve_user(mock_client, 1, "alice@example.com", "sess") == 42
 
     def test_int_identifier_passthrough(self, mock_client):
         mock_client.list_resources.return_value = self._members()
@@ -372,11 +377,27 @@ class TestCreateStory:
             "id": 100,
             "ref": 5,
             "subject": "As a user",
-            "milestone_extra_info": None,
         }
         result = wf.create_story("test", "As a user", session_id=session)
         assert result["status"] == "created"
         assert result["ref"] == 5
+        # No milestone on the created story -> no sprint, and notably not a crash
+        # from reaching into a phantom milestone_extra_info.
+        assert result["sprint"] is None
+
+    def test_returned_sprint_comes_from_flat_milestone_name(self, session, mock_client):
+        # create_story's own return block had the same phantom-key bug as
+        # _story_summary; cover it directly rather than only via the helper.
+        mock_client.api.get.return_value = {"id": 1, "slug": "test", "name": "Test"}
+        mock_client.api.user_stories.create.return_value = {
+            "id": 101,
+            "ref": 6,
+            "subject": "Sprinted",
+            "milestone": 85,
+            "milestone_name": "Sprint 9",
+        }
+        result = wf.create_story("test", "Sprinted", session_id=session)
+        assert result["sprint"] == "Sprint 9"
 
     def test_creates_story_with_assignee(self, session, mock_client):
         mock_client.api.get.return_value = {"id": 1, "slug": "test", "name": "Test"}
@@ -385,14 +406,12 @@ class TestCreateStory:
                 "user": 7,
                 "full_name": "Bob",
                 "email": "bob@example.com",
-                "user_extra_info": {"username": "bob", "full_name_display": "Bob"},
             }
         ]
         mock_client.api.user_stories.create.return_value = {
             "id": 200,
             "ref": 10,
             "subject": "Story",
-            "milestone_extra_info": None,
         }
         result = wf.create_story("test", "Story", assignee="bob", session_id=session)
         assert result["status"] == "created"
@@ -409,7 +428,6 @@ class TestCreateStory:
             "id": 100,
             "ref": 5,
             "subject": "Story",
-            "milestone_extra_info": None,
         }
         result = wf.create_story("test", "Story", epic=7, session_id=session)
         assert result["status"] == "created"
@@ -475,7 +493,7 @@ class TestGetSprintBoard:
                     "subject": "Story A",
                     "status_extra_info": {"name": "In Progress"},
                     "assigned_to_extra_info": {"full_name_display": "Alice"},
-                    "milestone_extra_info": {"name": "Sprint 1"},
+                    "milestone_name": "Sprint 1",
                     "is_blocked": False,
                     "is_closed": False,
                     "tags": [],
@@ -540,9 +558,6 @@ class TestUpdateIssue:
             "ref": 5,
             "subject": "Bug",
             "status_extra_info": {"name": "In Progress"},
-            "priority_extra_info": None,
-            "severity_extra_info": None,
-            "type_extra_info": None,
             "assigned_to_extra_info": None,
             "is_blocked": False,
         }
@@ -559,9 +574,7 @@ class TestUpdateIssue:
             "ref": 5,
             "subject": "Bug",
             "status_extra_info": None,
-            "priority_extra_info": {"name": "High"},
-            "severity_extra_info": None,
-            "type_extra_info": None,
+            "priority": 3,
             "assigned_to_extra_info": None,
             "is_blocked": False,
         }
@@ -584,9 +597,6 @@ class TestUpdateIssue:
             "ref": 5,
             "subject": "Bug",
             "status_extra_info": {"name": "Done"},
-            "priority_extra_info": None,
-            "severity_extra_info": None,
-            "type_extra_info": None,
             "assigned_to_extra_info": None,
             "is_blocked": False,
         }
@@ -689,7 +699,6 @@ class TestGetEpicOverviewBatched:
                 "subject": "Story A",
                 "status_extra_info": {"name": "Done"},
                 "assigned_to_extra_info": None,
-                "milestone_extra_info": None,
                 "is_blocked": False,
                 "is_closed": True,
                 "tags": [],
@@ -700,7 +709,6 @@ class TestGetEpicOverviewBatched:
                 "subject": "Story B",
                 "status_extra_info": {"name": "Done"},
                 "assigned_to_extra_info": None,
-                "milestone_extra_info": None,
                 "is_blocked": False,
                 "is_closed": True,
                 "tags": [],
@@ -842,7 +850,6 @@ class TestCreateTask:
                     "user": 7,
                     "full_name": "Alice",
                     "email": "alice@example.com",
-                    "user_extra_info": {"username": "alice", "full_name_display": "Alice"},
                 }
             ],
         ]
@@ -1103,7 +1110,6 @@ class TestBreakDownStory:
                 "user": 7,
                 "full_name": "Alice",
                 "email": "a@x",
-                "user_extra_info": {"username": "alice", "full_name_display": "Alice"},
             }
         ]
         mock_client.api.tasks.create.side_effect = [
@@ -1736,6 +1742,28 @@ class TestSearch:
         mock_client.list_resources.assert_called_once_with("epic_statuses", project_id=1)
 
 
+class TestStorySummary:
+    """_story_summary shape — the sprint field in particular."""
+
+    def test_sprint_comes_from_flat_milestone_name(self):
+        # Taiga sends no milestone_extra_info on user stories — the sprint is the
+        # flat milestone_name (slug as fallback). Reading the phantom key returned
+        # None for every story that had a sprint.
+        assert (
+            wf._story_summary({"ref": 1, "milestone": 85, "milestone_name": "Sprint 9"})["sprint"]
+            == "Sprint 9"
+        )
+
+    def test_sprint_falls_back_to_slug(self):
+        assert (
+            wf._story_summary({"ref": 2, "milestone": 85, "milestone_slug": "sprint-9"})["sprint"]
+            == "sprint-9"
+        )
+
+    def test_sprint_is_none_when_story_has_no_milestone(self):
+        assert wf._story_summary({"ref": 3})["sprint"] is None
+
+
 class TestGetStory:
     def test_returns_resolved_summary(self, session, mock_client):
         mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
@@ -1831,9 +1859,10 @@ class TestGetIssue:
         assert result["type"] == "Bug"
         mock_client.api.issues.get_by_ref.assert_called_once_with(ref=1212, project=1)
 
-    def test_unknown_attribute_id_yields_none_not_crash(self, session, mock_client):
+    def test_unknown_attribute_id_falls_back_to_raw_id(self, session, mock_client):
         # An ID absent from the project's table (stale cache, cross-project ref)
-        # must degrade to None rather than raising.
+        # must degrade to the raw ID — mirroring the `status` field — rather than
+        # raising or silently vanishing.
         mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
         mock_client.list_resources.side_effect = self._attr_lists()
         mock_client.api.issues.get_by_ref.return_value = {
@@ -1845,23 +1874,15 @@ class TestGetIssue:
             "type": 25,
         }
         result = wf.get_issue("p", 1213, session_id=session)
-        assert result["priority"] is None
+        assert result["priority"] == 9999
         assert result["severity"] is None
         assert result["type"] == "Bug"
 
-    def test_story_sprint_comes_from_flat_milestone_name(self):
-        # Taiga sends no milestone_extra_info on user stories — the sprint is the
-        # flat milestone_name (slug as fallback). Reading the phantom key returned
-        # None for every story that had a sprint.
-        assert (
-            wf._story_summary({"ref": 1, "milestone": 85, "milestone_name": "Sprint 9"})["sprint"]
-            == "Sprint 9"
-        )
-        assert (
-            wf._story_summary({"ref": 2, "milestone": 85, "milestone_slug": "sprint-9"})["sprint"]
-            == "sprint-9"
-        )
-        assert wf._story_summary({"ref": 3})["sprint"] is None
+    def test_partial_resolver_context_raises(self):
+        # All-or-nothing: a caller that passes client+project_id but forgets
+        # session_id must not silently receive raw IDs that look resolved.
+        with pytest.raises(ValueError, match="passed together"):
+            wf._issue_summary({"ref": 1}, client=object(), project_id=1)
 
     def test_summary_without_resolver_context_returns_raw_ids(self):
         # _issue_summary is also reachable without client/project context. It must
@@ -2011,7 +2032,6 @@ class TestCreateEpic:
                 "user": 7,
                 "full_name": "Bob",
                 "email": "bob@x",
-                "user_extra_info": {"username": "bob"},
             }
         ]
         mock_client.api.epics.create.return_value = {"id": 7, "ref": 70, "subject": "Big"}
@@ -2029,7 +2049,6 @@ class TestAssignItem:
                 "user": 7,
                 "full_name": "Bob",
                 "email": "bob@x",
-                "user_extra_info": {"username": "bob"},
             }
         ]
         mock_client.api.user_stories.get_by_ref.return_value = {"id": 100, "version": 2}
@@ -2047,7 +2066,6 @@ class TestAssignItem:
                 "user": 7,
                 "full_name": "Bob",
                 "email": "bob@x",
-                "user_extra_info": {"username": "bob"},
             }
         ]
         mock_client.api.issues.get_by_ref.return_value = {"id": 300, "version": 1}
@@ -2066,7 +2084,6 @@ class TestAssignItem:
                 "user": 7,
                 "full_name": "Bob",
                 "email": "bob@x",
-                "user_extra_info": {"username": "bob"},
             }
         ]
         mock_client.api.tasks.get_by_ref.return_value = {"id": 400, "version": 3}
@@ -2085,7 +2102,6 @@ class TestAssignItem:
                 "user": 7,
                 "full_name": "Bob",
                 "email": "bob@x",
-                "user_extra_info": {"username": "bob"},
             }
         ]
         mock_client.api.epics.get_by_ref.return_value = {"id": 500, "version": 4}
@@ -2470,7 +2486,6 @@ class TestBrowseBacklogFilters:
                         "user": 7,
                         "full_name": "Bob",
                         "email": "b@x",
-                        "user_extra_info": {"username": "bob"},
                     }
                 ],
                 "user_stories": [],
@@ -2506,7 +2521,6 @@ class TestCreateTaskOptionalFields:
                         "user": 7,
                         "full_name": "Bob",
                         "email": "b@x",
-                        "user_extra_info": {"username": "bob"},
                     }
                 ],
             }[resource]
@@ -2558,7 +2572,6 @@ class TestUpdateTaskBranches:
                         "user": 7,
                         "full_name": "Bob",
                         "email": "b@x",
-                        "user_extra_info": {"username": "bob"},
                     }
                 ],
                 "milestones": [{"id": 9, "name": "S1"}],
@@ -2625,7 +2638,6 @@ class TestCreateIssueAttributeResolution:
                         "user": 7,
                         "full_name": "Bob",
                         "email": "b@x",
-                        "user_extra_info": {"username": "bob"},
                     }
                 ],
                 "issue_statuses": [{"id": 40, "name": "New"}],
@@ -2670,7 +2682,6 @@ class TestUpdateIssueBranches:
                         "user": 7,
                         "full_name": "Bob",
                         "email": "b@x",
-                        "user_extra_info": {"username": "bob"},
                     }
                 ],
             }[resource]

@@ -439,10 +439,24 @@ def _issue_summary(
     ``*_extra_info`` for them (see _name_for_issue_attribute). Pass client,
     project_id and session_id to get their names; without that context the raw
     IDs are returned rather than a misleading None.
+
+    The three context arguments are all-or-nothing: supplying a subset raises
+    rather than silently degrading to raw IDs, which would look like a successful
+    resolution to the caller.
     """
-    if client is not None and project_id is not None and session_id is not None:
+    context = (client, project_id, session_id)
+    if any(v is not None for v in context) and not all(v is not None for v in context):
+        raise ValueError(
+            "_issue_summary: client, project_id and session_id must be passed together "
+            "(or all omitted)."
+        )
+    if all(v is not None for v in context):
+        # Fall back to the raw ID when an ID is absent from the project's table,
+        # mirroring the `status` line below — an unresolvable value should degrade
+        # to something identifiable, not vanish.
         names = {
             attr: _name_for_issue_attribute(client, project_id, attr, issue.get(attr), session_id)
+            or issue.get(attr)
             for attr in ("priority", "severity", "type")
         }
     else:
@@ -1477,15 +1491,20 @@ def create_issue(
             "ref": result.get("ref"),
             "id": result.get("id"),
             "subject": result.get("subject"),
+            # `or result.get(...)` degrades an unresolvable ID to the raw integer
+            # rather than None — see _issue_summary.
             "type": _name_for_issue_attribute(
                 client, project_id, "type", result.get("type"), actual_session_id
-            ),
+            )
+            or result.get("type"),
             "priority": _name_for_issue_attribute(
                 client, project_id, "priority", result.get("priority"), actual_session_id
-            ),
+            )
+            or result.get("priority"),
             "severity": _name_for_issue_attribute(
                 client, project_id, "severity", result.get("severity"), actual_session_id
-            ),
+            )
+            or result.get("severity"),
         }
 
     return _execute_taiga_operation("create_issue", do_create, str(project))
@@ -1562,15 +1581,19 @@ def update_issue(
             "ref": result.get("ref"),
             "subject": result.get("subject"),
             "status": (result.get("status_extra_info") or {}).get("name"),
+            # Raw-ID fallback on unresolvable IDs — see _issue_summary.
             "priority": _name_for_issue_attribute(
                 client, project_id, "priority", result.get("priority"), actual_session_id
-            ),
+            )
+            or result.get("priority"),
             "severity": _name_for_issue_attribute(
                 client, project_id, "severity", result.get("severity"), actual_session_id
-            ),
+            )
+            or result.get("severity"),
             "type": _name_for_issue_attribute(
                 client, project_id, "type", result.get("type"), actual_session_id
-            ),
+            )
+            or result.get("type"),
             "assignee": (result.get("assigned_to_extra_info") or {}).get("full_name_display"),
             "is_blocked": result.get("is_blocked"),
             "is_closed": result.get("is_closed", False),
