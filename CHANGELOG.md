@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v2.1.0 (2026-07-31)
+
+### Bug Fixes
+
+- **server_full**: Purge attr cache on every session rebind; skip lookup at minimal
+  ([#130](https://github.com/TETRA-2023/pytaiga-mcp/pull/130),
+  [`7422559`](https://github.com/TETRA-2023/pytaiga-mcp/commit/74225595224c2a60ed34e05180408dd3d86a5633))
+
+### Features
+
+- **server_full**: Resolve issue priority/severity/type names alongside the IDs
+  ([#130](https://github.com/TETRA-2023/pytaiga-mcp/pull/130),
+  [`7422559`](https://github.com/TETRA-2023/pytaiga-mcp/commit/74225595224c2a60ed34e05180408dd3d86a5633))
+
+### Refactoring
+
+- **server_full**: Funnel all session teardown through chokepoints too
+  ([#130](https://github.com/TETRA-2023/pytaiga-mcp/pull/130),
+  [`7422559`](https://github.com/TETRA-2023/pytaiga-mcp/commit/74225595224c2a60ed34e05180408dd3d86a5633))
+
+
 ## v2.0.0 (2026-07-31)
 
 ### Bug Fixes
