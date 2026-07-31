@@ -1118,6 +1118,40 @@ class TestTaigaTools:
         assert src_server.session_status(session_id)["status"] == "inactive"
         assert not self._cached_keys(session_id)
 
+    def test_shutdown_clear_also_drops_all_cached_tables(self, session_setup):
+        # The lifespan shutdown clears every session; the cache must go with it, or
+        # sessions and their tables fall out of lockstep. Not reachable as a leak
+        # (a rebind is required to get back in, and that purges) but the invariant
+        # should hold by construction.
+        session_id, mock_client = session_setup
+        self._populate_cache(session_id, mock_client)
+        src_server._unbind_all_sessions()
+        assert src_server._issue_attr_cache == {}
+        assert src_server.active_sessions == {}
+
+    def test_only_the_session_helpers_mutate_active_sessions(self):
+        """Structural guard: every active_sessions mutation stays in the 3 helpers.
+
+        The first fix for the cache leak patched individual call sites and missed
+        one (the shutdown clear). This asserts the chokepoint holds, so a new call
+        site cannot reintroduce the class of bug.
+        """
+        import inspect
+        import re
+
+        source = inspect.getsource(src_server)
+        allowed = {"_bind_session", "_unbind_session", "_unbind_all_sessions"}
+        offenders = []
+        current = None
+        for line in source.splitlines():
+            func = re.match(r"def (\w+)", line)
+            if func:
+                current = func.group(1)
+            if re.search(r"active_sessions\s*\[[^\]]+\]\s*=|active_sessions\.(pop|clear)\(", line):
+                if current not in allowed:
+                    offenders.append(f"{current}: {line.strip()}")
+        assert not offenders, "active_sessions mutated outside the helpers: " + "; ".join(offenders)
+
     def test_rebinding_a_session_id_purges_the_previous_holders_cache(self):
         # Regression for the proven leak: user A populates the fixed "default"
         # session, A's client is evicted, user B re-binds the same id — B must not

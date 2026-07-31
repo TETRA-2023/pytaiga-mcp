@@ -413,11 +413,26 @@ def _bind_session(session_id: str, wrapper: TaigaClientWrapper) -> None:
     Session ids are reusable — ``DEFAULT_SESSION_ID`` is the fixed string "default",
     re-bound by auto-authentication and by ``login`` — so binding a new client to an
     existing id must not leave the previous holder's cached project tables in place.
-    Every write into ``active_sessions`` goes through here so a future call site
-    cannot silently miss the purge.
+
+    This and the two ``_unbind_*`` helpers are the ONLY places that mutate
+    ``active_sessions``. Routing every mutation through them keeps "a session and its
+    cached tables move together" true by construction rather than by argument — the
+    first attempt patched individual call sites and missed one.
     """
     _purge_issue_attr_cache(session_id)
     active_sessions[session_id] = wrapper
+
+
+def _unbind_session(session_id: str) -> Optional[TaigaClientWrapper]:
+    """Remove one session and its cached per-project state; return its client, if any."""
+    _purge_issue_attr_cache(session_id)
+    return active_sessions.pop(session_id, None)
+
+
+def _unbind_all_sessions() -> None:
+    """Drop every session and all cached per-project state (server shutdown)."""
+    active_sessions.clear()
+    _issue_attr_cache.clear()
 
 
 # --- Lifespan for Auto-Authentication ---
@@ -452,7 +467,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
     finally:
         # Cleanup on shutdown
         logger.info("Server shutting down. Cleaning up sessions...")
-        active_sessions.clear()
+        _unbind_all_sessions()
 
 
 # --- MCP Server Definition ---
@@ -3620,8 +3635,7 @@ def logout(session_id: Optional[str] = None) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
     logger.info(f"Executing logout for session {actual_session_id[:8]}...")
     # Remove from dict, return None if not found
-    client_wrapper = active_sessions.pop(actual_session_id, None)
-    _purge_issue_attr_cache(actual_session_id)
+    client_wrapper = _unbind_session(actual_session_id)
     if client_wrapper:
         logger.info(f"Session {actual_session_id[:8]} logged out successfully.")
         # No specific API logout call needed usually for token-based auth
@@ -3654,8 +3668,7 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
             )
             # Clean up invalid session (and its cached per-project state, or a
             # re-bind of this id would be served these tables).
-            active_sessions.pop(actual_session_id, None)
-            _purge_issue_attr_cache(actual_session_id)
+            _unbind_session(actual_session_id)
             return {
                 "status": "inactive",
                 "reason": "token_invalid",
