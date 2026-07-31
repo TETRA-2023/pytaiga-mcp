@@ -3,7 +3,7 @@
 Exposes ~28 intent-based tools designed for everyday project management:
 sprint planning, backlog grooming, team workload, epic tracking, task
 breakdown, wiki, and comments. All tools accept human-readable names
-(project slug, sprint name, status name, username) and resolve them to
+(project slug, sprint name, status name, user email) and resolve them to
 API IDs internally.
 
 Start with:
@@ -282,7 +282,11 @@ def _resolve_user(
     username: str,
     session_id: str,
 ) -> int:
-    """Resolve a username, email, or full name to a user ID within project members."""
+    """Resolve an email or full name to a user ID within project members.
+
+    Resolution runs against ``/memberships``, which exposes no username field —
+    see ``resolve_user_id``. The parameter name is historical.
+    """
     members = _cached(
         session_id,
         f"members_{project_id}",
@@ -949,7 +953,7 @@ def get_issue(
     "browse_backlog",
     description=(
         "List user stories in the backlog (not assigned to any sprint) with optional filters. "
-        "Filters: status (name), assignee (username/email), epic (ref number), tags (comma-separated). "
+        "Filters: status (name), assignee (email/full name), epic (ref number), tags (comma-separated). "
         "project accepts slug or ID."
     ),
 )
@@ -993,7 +997,7 @@ def browse_backlog(
     "create_story",
     description=(
         "Create a user story in the backlog with optional epic link, sprint assignment, and assignee. "
-        "project accepts slug or ID. assignee accepts username or email. "
+        "project accepts slug or ID. assignee accepts an email or full name. "
         "sprint accepts name or ID (omit to place in backlog). epic accepts ref number."
     ),
 )
@@ -1161,7 +1165,7 @@ def update_story(
         "Add a single task under an existing user story. story_ref is the parent US ref number. "
         "By default the task inherits the parent story's sprint; pass sprint=<name|id> to "
         "place the task in a different sprint, or sprint=0 to keep it out of any sprint. "
-        "All name fields are resolved (assignee username, status name, sprint name). "
+        "All name fields are resolved (assignee email/full name, status name, sprint name). "
         "project accepts slug or ID."
     ),
 )
@@ -1422,7 +1426,7 @@ def break_down_story(
     "create_issue",
     description=(
         "Create a new issue. type, priority, and severity default to the project's first configured value "
-        "when not provided. All name fields are resolved (project slug, assignee username). "
+        "when not provided. All name fields are resolved (project slug, assignee email/full name). "
         "project accepts slug or ID."
     ),
 )
@@ -1956,7 +1960,7 @@ def get_epic_overview(
     "create_epic",
     description=(
         "Create a new epic and optionally link existing user stories to it by ref number. "
-        "assignee accepts username or email. story_refs is a list of existing US ref numbers to link. "
+        "assignee accepts an email or full name. story_refs is a list of existing US ref numbers to link. "
         "project accepts slug or ID."
     ),
 )
@@ -2073,7 +2077,9 @@ def get_team_workload(
 @mcp.tool(
     "assign_item",
     description=(
-        "Assign a user story, task, issue, or epic to a team member by username or email. "
+        "Assign a user story, task, issue, or epic to a team member by email or full name. "
+        "The `username` parameter name is historical — Taiga memberships expose no "
+        "username, so pass an email address or the member's full name. "
         "entity_type: 'story' (default), 'task', 'issue', or 'epic'. "
         "ref is the item ref number. project accepts slug or ID."
     ),

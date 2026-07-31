@@ -1309,8 +1309,8 @@ def _resolve_assignee_id(
     """Resolve ``user`` to a Taiga user ID for the assign_* tools.
 
     Ints pass through unchanged (backward-compatible with the historical
-    ``user_id: int`` API — no extra API calls). Strings are treated as a
-    username / email / full name and resolved against the members of the
+    ``user_id: int`` API — no extra API calls). Strings are treated as an
+    email / full name and resolved against the members of the
     entity's project (looked up from the entity), reusing the shared None-safe
     ``resolve_user_id`` so full mode gets the same robust resolution as
     workflow mode (pytaiga-mcp#120).
@@ -1325,12 +1325,12 @@ def _resolve_assignee_id(
 
 @mcp.tool(
     "assign_user_story_to_user",
-    description="Assigns a specific user story to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
+    description="Assigns a specific user story to a user. `user` accepts a numeric user ID, or an email or full name (resolved against the project's members; Taiga memberships expose no username). Uses default session if session_id not provided.",
 )
 def assign_user_story_to_user(
     user_story_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns a user story to a user (by ID or username/email/full name)."""
+    """Assigns a user story to a user (by ID, email, or full name)."""
     actual_session_id = _get_session_id(session_id)
     user_id = _resolve_assignee_id(user, "user_stories", user_story_id, actual_session_id)
     logger.info(
@@ -1565,12 +1565,12 @@ def delete_task(task_id: int, session_id: Optional[str] = None) -> Dict[str, Any
 
 @mcp.tool(
     "assign_task_to_user",
-    description="Assigns a specific task to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
+    description="Assigns a specific task to a user. `user` accepts a numeric user ID, or an email or full name (resolved against the project's members; Taiga memberships expose no username). Uses default session if session_id not provided.",
 )
 def assign_task_to_user(
     task_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns a task to a user (by ID or username/email/full name)."""
+    """Assigns a task to a user (by ID, email, or full name)."""
     actual_session_id = _get_session_id(session_id)
     user_id = _resolve_assignee_id(user, "tasks", task_id, actual_session_id)
     logger.info(
@@ -1798,12 +1798,12 @@ def delete_issue(issue_id: int, session_id: Optional[str] = None) -> Dict[str, A
 
 @mcp.tool(
     "assign_issue_to_user",
-    description="Assigns a specific issue to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
+    description="Assigns a specific issue to a user. `user` accepts a numeric user ID, or an email or full name (resolved against the project's members; Taiga memberships expose no username). Uses default session if session_id not provided.",
 )
 def assign_issue_to_user(
     issue_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns an issue to a user (by ID or username/email/full name)."""
+    """Assigns an issue to a user (by ID, email, or full name)."""
     actual_session_id = _get_session_id(session_id)
     user_id = _resolve_assignee_id(user, "issues", issue_id, actual_session_id)
     logger.info(
@@ -2856,12 +2856,12 @@ def delete_epic(epic_id: int, session_id: Optional[str] = None) -> Dict[str, Any
 
 @mcp.tool(
     "assign_epic_to_user",
-    description="Assigns a specific epic to a user. `user` accepts a numeric user ID or a username/email/full name (resolved against the project's members). Uses default session if session_id not provided.",
+    description="Assigns a specific epic to a user. `user` accepts a numeric user ID, or an email or full name (resolved against the project's members; Taiga memberships expose no username). Uses default session if session_id not provided.",
 )
 def assign_epic_to_user(
     epic_id: int, user: Union[int, str], session_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Assigns an epic to a user (by ID or username/email/full name)."""
+    """Assigns an epic to a user (by ID, email, or full name)."""
     actual_session_id = _get_session_id(session_id)
     user_id = _resolve_assignee_id(user, "epics", epic_id, actual_session_id)
     logger.info(

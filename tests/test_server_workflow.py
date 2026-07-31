@@ -1882,7 +1882,7 @@ class TestGetIssue:
         # All-or-nothing: a caller that passes client+project_id but forgets
         # session_id must not silently receive raw IDs that look resolved.
         with pytest.raises(ValueError, match="passed together"):
-            wf._issue_summary({"ref": 1}, client=object(), project_id=1)
+            wf._issue_summary({"ref": 1}, client=MagicMock(), project_id=1)
 
     def test_summary_without_resolver_context_returns_raw_ids(self):
         # _issue_summary is also reachable without client/project context. It must
