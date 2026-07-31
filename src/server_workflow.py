@@ -336,6 +336,38 @@ def _resolve_issue_attribute(
     return matches[0]["id"]
 
 
+def _name_for_issue_attribute(
+    client: TaigaClientWrapper,
+    project_id: int,
+    attr_type: str,
+    attr_id: Optional[int],
+    session_id: str,
+) -> Optional[str]:
+    """Resolve an issue priority/severity/type ID back to its name.
+
+    Taiga exposes NO ``priority_extra_info`` / ``severity_extra_info`` /
+    ``type_extra_info`` on its issue serializer — the only ``*_extra_info``
+    objects it returns are ``assigned_to``, ``owner``, ``project`` and
+    ``status``. These three fields come back as bare integer IDs, so reading a
+    ``*_extra_info`` key for them silently yields None on every call and makes a
+    correctly-set field look unset. Reverse-map the ID instead.
+
+    Reads the same session cache that ``_resolve_issue_attribute`` populates, so
+    this costs no extra API request after the first lookup per project.
+    """
+    if attr_id is None:
+        return None
+    resource = _ISSUE_ATTR_RESOURCE_MAP.get(attr_type)
+    if not resource:
+        raise ValueError(f"Unknown attribute type '{attr_type}'.")
+    items = _cached(
+        session_id,
+        f"{resource}_{project_id}",
+        lambda: client.list_resources(resource, project_id=project_id),
+    )
+    return next((i.get("name") for i in items if i.get("id") == attr_id), None)
+
+
 def _resolve_story_refs(client: TaigaClientWrapper, project_id: int, refs: List[int]) -> List[int]:
     """Resolve a list of user story ref numbers to IDs with a single API call.
 
@@ -377,7 +409,9 @@ def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
         "assignee": (us.get("assigned_to_extra_info") or {}).get("full_name_display"),
         "is_blocked": us.get("is_blocked", False),
         "is_closed": _is_closed(us),
-        "sprint": (us.get("milestone_extra_info") or {}).get("name"),
+        # Taiga publishes NO milestone_extra_info on user stories — the sprint
+        # arrives as `milestone` (ID) plus flat `milestone_name`/`milestone_slug`.
+        "sprint": us.get("milestone_name") or us.get("milestone_slug"),
         "tags": us.get("tags", []),
     }
 
@@ -393,16 +427,34 @@ def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _issue_summary(issue: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract readable fields from a raw issue dict (resolved names, not raw ids)."""
+def _issue_summary(
+    issue: Dict[str, Any],
+    client: Optional[TaigaClientWrapper] = None,
+    project_id: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extract readable fields from a raw issue dict (resolved names, not raw ids).
+
+    priority/severity/type arrive as bare integer IDs — Taiga publishes no
+    ``*_extra_info`` for them (see _name_for_issue_attribute). Pass client,
+    project_id and session_id to get their names; without that context the raw
+    IDs are returned rather than a misleading None.
+    """
+    if client is not None and project_id is not None and session_id is not None:
+        names = {
+            attr: _name_for_issue_attribute(client, project_id, attr, issue.get(attr), session_id)
+            for attr in ("priority", "severity", "type")
+        }
+    else:
+        names = {attr: issue.get(attr) for attr in ("priority", "severity", "type")}
     return {
         "ref": issue.get("ref"),
         "subject": issue.get("subject"),
         "status": (issue.get("status_extra_info") or {}).get("name") or issue.get("status"),
         "assignee": (issue.get("assigned_to_extra_info") or {}).get("full_name_display"),
-        "priority": (issue.get("priority_extra_info") or {}).get("name"),
-        "severity": (issue.get("severity_extra_info") or {}).get("name"),
-        "type": (issue.get("type_extra_info") or {}).get("name"),
+        "priority": names["priority"],
+        "severity": names["severity"],
+        "type": names["type"],
         "is_blocked": issue.get("is_blocked", False),
         "is_closed": _is_closed(issue),
         "tags": issue.get("tags", []),
@@ -662,9 +714,13 @@ def get_project_overview(
 
         # Team
         members = client.list_resources("memberships", project_id=project_id)
+        # Memberships carry NO user_extra_info (and no username at all). Identity
+        # comes from flat fields: `user_email` is the reliable one — `email` is
+        # often blank on established members. Email is also what user resolution
+        # matches on, so it is the useful handle to surface here.
         team = [
             {
-                "username": (m.get("user_extra_info") or {}).get("username"),
+                "email": m.get("user_email") or m.get("email"),
                 "full_name": m.get("full_name"),
                 "role": m.get("role_name"),
                 "is_admin": m.get("is_admin", False),
@@ -863,7 +919,7 @@ def get_issue(
         # Single-item read: include the full description. Kept off the shared
         # _issue_summary shape for consistency with get_story/get_task, whose
         # helpers are reused by lean board/list composites.
-        result = _issue_summary(issue)
+        result = _issue_summary(issue, client, proj["id"], actual_session_id)
         result["description"] = issue.get("description")
         return result
 
@@ -978,7 +1034,8 @@ def create_story(
             "ref": result.get("ref"),
             "id": result.get("id"),
             "subject": result.get("subject"),
-            "sprint": (result.get("milestone_extra_info") or {}).get("name"),
+            # No milestone_extra_info on user stories — see _story_summary.
+            "sprint": result.get("milestone_name") or result.get("milestone_slug"),
             "epic_linked": epic is not None,
         }
 
@@ -1420,9 +1477,15 @@ def create_issue(
             "ref": result.get("ref"),
             "id": result.get("id"),
             "subject": result.get("subject"),
-            "type": (result.get("type_extra_info") or {}).get("name"),
-            "priority": (result.get("priority_extra_info") or {}).get("name"),
-            "severity": (result.get("severity_extra_info") or {}).get("name"),
+            "type": _name_for_issue_attribute(
+                client, project_id, "type", result.get("type"), actual_session_id
+            ),
+            "priority": _name_for_issue_attribute(
+                client, project_id, "priority", result.get("priority"), actual_session_id
+            ),
+            "severity": _name_for_issue_attribute(
+                client, project_id, "severity", result.get("severity"), actual_session_id
+            ),
         }
 
     return _execute_taiga_operation("create_issue", do_create, str(project))
@@ -1499,9 +1562,15 @@ def update_issue(
             "ref": result.get("ref"),
             "subject": result.get("subject"),
             "status": (result.get("status_extra_info") or {}).get("name"),
-            "priority": (result.get("priority_extra_info") or {}).get("name"),
-            "severity": (result.get("severity_extra_info") or {}).get("name"),
-            "type": (result.get("type_extra_info") or {}).get("name"),
+            "priority": _name_for_issue_attribute(
+                client, project_id, "priority", result.get("priority"), actual_session_id
+            ),
+            "severity": _name_for_issue_attribute(
+                client, project_id, "severity", result.get("severity"), actual_session_id
+            ),
+            "type": _name_for_issue_attribute(
+                client, project_id, "type", result.get("type"), actual_session_id
+            ),
             "assignee": (result.get("assigned_to_extra_info") or {}).get("full_name_display"),
             "is_blocked": result.get("is_blocked"),
             "is_closed": result.get("is_closed", False),
