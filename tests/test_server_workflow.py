@@ -5,7 +5,12 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
-from pytaigaclient.exceptions import TaigaAPIError, TaigaException
+from pytaigaclient.exceptions import (
+    TaigaAPIError,
+    TaigaException,
+    TaigaNotFoundError,
+    TaigaServerError,
+)
 
 import src.server_workflow as wf
 
@@ -519,16 +524,44 @@ class TestGetSprintBoard:
         assert len(result["stories"][0]["tasks"]) == 1
 
 
+def _api_error(exc_cls, status_code: int, message: str = "boom"):
+    """Build a real pytaigaclient API exception.
+
+    TaigaAPIError.__init__ takes (status_code, requests.Response) and reads
+    `_error_message` off the JSON body, so the exception cannot be constructed from a
+    bare string.
+    """
+    response = MagicMock()
+    response.json.return_value = {"_error_message": message}
+    response.text = message
+    return exc_cls(status_code, response)
+
+
 class TestUpsertWiki:
     def test_creates_new_page_when_not_found(self, session, mock_client):
-        # project resolution
+        # REAL behaviour: /wiki/by_slug RAISES 404 for an unknown slug, it does not
+        # return None. The previous fixture returned None, so this test passed while
+        # the create path was unreachable in production — the 404 escaped before the
+        # else branch. Modelling the raise is what makes this a real regression test.
         mock_client.api.get.side_effect = [
             {"id": 1, "slug": "p", "name": "P"},  # _resolve_project
-            None,  # /wiki/by_slug → not found
+            _api_error(TaigaNotFoundError, 404, "wiki page not found"),  # /wiki/by_slug
         ]
         mock_client.api.wiki.create.return_value = {"id": 9, "slug": "my-page"}
         result = wf.upsert_wiki("p", "my-page", "Content here", session_id=session)
         assert result["status"] == "created"
+        assert mock_client.api.wiki.create.call_args.kwargs["slug"] == "my-page"
+
+    def test_non_404_lookup_error_propagates(self, session, mock_client):
+        # The guard must be narrow: a server or auth failure on the lookup is not
+        # "page does not exist" and must not silently create a duplicate page.
+        mock_client.api.get.side_effect = [
+            {"id": 1, "slug": "p", "name": "P"},
+            _api_error(TaigaServerError, 500, "upstream exploded"),
+        ]
+        with pytest.raises(Exception):
+            wf.upsert_wiki("p", "my-page", "Content here", session_id=session)
+        mock_client.api.wiki.create.assert_not_called()
 
     def test_updates_existing_page(self, session, mock_client):
         mock_client.api.get.side_effect = [
