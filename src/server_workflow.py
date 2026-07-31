@@ -20,7 +20,7 @@ from datetime import date
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
-from pytaigaclient.exceptions import TaigaAPIError, TaigaException
+from pytaigaclient.exceptions import TaigaAPIError, TaigaException, TaigaNotFoundError
 
 from src.config import settings
 from src.taiga_client import TaigaClientWrapper, resolve_user_id, safe_lower
@@ -2192,7 +2192,15 @@ def upsert_wiki(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        existing = client.api.get("/wiki/by_slug", params={"slug": slug, "project": project_id})
+        # `/wiki/by_slug` RAISES 404 for an unknown slug — it does not return a falsy
+        # value. Without this guard the exception escaped do_upsert and the `else`
+        # branch below was unreachable, so upsert_wiki could only ever UPDATE an
+        # existing page and never create one, despite its description. Catch the
+        # not-found case specifically so a 500 / auth failure still surfaces.
+        try:
+            existing = client.api.get("/wiki/by_slug", params={"slug": slug, "project": project_id})
+        except TaigaNotFoundError:
+            existing = None
         if existing:
             result = client.api.wiki.edit(
                 existing["id"], version=existing["version"], data={"slug": slug, "content": content}
