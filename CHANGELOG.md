@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-07-31)
+
+### Bug Fixes
+
+- Bump gitpython from 3.1.52 to 3.1.54 ([#128](https://github.com/TETRA-2023/pytaiga-mcp/pull/128),
+  [`a72d29d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/a72d29d7b9f7a5336ac5f59641403d47b9069e8e))
+
+- Bump pre-commit from 4.6.0 to 4.6.1 ([#126](https://github.com/TETRA-2023/pytaiga-mcp/pull/126),
+  [`4b2789c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4b2789cc5b7707dc2d9d25612194b003fe7a0244))
+
+- Bump ruff from 0.15.22 to 0.16.0 ([#127](https://github.com/TETRA-2023/pytaiga-mcp/pull/127),
+  [`1221f48`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1221f48e206c5815f0d425ac6aabf1f2de8341b0))
+
+- **docs**: Stop advertising username-based assignee resolution
+  ([#129](https://github.com/TETRA-2023/pytaiga-mcp/pull/129),
+  [`ddb9b54`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ddb9b545370f3fa0d99d4b1f24795c8d4e53cd4c))
+
+- **extra_info**: Stop reading *_extra_info keys Taiga never publishes
+  ([#129](https://github.com/TETRA-2023/pytaiga-mcp/pull/129),
+  [`ddb9b54`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ddb9b545370f3fa0d99d4b1f24795c8d4e53cd4c))
+
+- **tests**: Purge remaining phantom-key fixtures; harden resolver fallbacks
+  ([#129](https://github.com/TETRA-2023/pytaiga-mcp/pull/129),
+  [`ddb9b54`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ddb9b545370f3fa0d99d4b1f24795c8d4e53cd4c))
+
+### Documentation
+
+- Correct username-based assignment claims in README and CLAUDE.md
+  ([#129](https://github.com/TETRA-2023/pytaiga-mcp/pull/129),
+  [`ddb9b54`](https://github.com/TETRA-2023/pytaiga-mcp/commit/ddb9b545370f3fa0d99d4b1f24795c8d4e53cd4c))
+
+
 ## v1.22.0 (2026-07-22)
 
 ### Features
