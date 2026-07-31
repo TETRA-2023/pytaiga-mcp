@@ -1793,15 +1793,33 @@ class TestGetTask:
 
 
 class TestGetIssue:
+    @staticmethod
+    def _attr_lists():
+        """side_effect for list_resources — the project's issue attribute tables."""
+        tables = {
+            "priorities": [{"id": 25, "name": "Low"}, {"id": 27, "name": "High"}],
+            "severities": [{"id": 43, "name": "Normal"}, {"id": 45, "name": "Critical"}],
+            "issue_types": [{"id": 25, "name": "Bug"}, {"id": 26, "name": "Question"}],
+        }
+        return lambda resource_type, **kwargs: tables[resource_type]
+
     def test_returns_resolved_summary(self, session, mock_client):
+        # REAL Taiga shape: priority/severity/type come back as bare integer IDs.
+        # Taiga publishes no priority_extra_info/severity_extra_info/type_extra_info
+        # (only assigned_to/owner/project/status), so the names must come from a
+        # reverse lookup against the project's attribute tables. Deliberately no
+        # *_extra_info keys here — an earlier fixture supplied them, which made this
+        # test pass against a payload Taiga never sends while production returned
+        # None for all three.
         mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.side_effect = self._attr_lists()
         mock_client.api.issues.get_by_ref.return_value = {
             "ref": 1212,
             "subject": "Bug",
             "status_extra_info": {"name": "New"},
-            "priority_extra_info": {"name": "High"},
-            "severity_extra_info": {"name": "Normal"},
-            "type_extra_info": {"name": "Bug"},
+            "priority": 27,
+            "severity": 45,
+            "type": 25,
             "assigned_to_extra_info": None,
             "is_closed": False,
         }
@@ -1809,8 +1827,51 @@ class TestGetIssue:
         assert result["status"] == "New"
         assert result["is_closed"] is False
         assert result["priority"] == "High"
+        assert result["severity"] == "Critical"
         assert result["type"] == "Bug"
         mock_client.api.issues.get_by_ref.assert_called_once_with(ref=1212, project=1)
+
+    def test_unknown_attribute_id_yields_none_not_crash(self, session, mock_client):
+        # An ID absent from the project's table (stale cache, cross-project ref)
+        # must degrade to None rather than raising.
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.side_effect = self._attr_lists()
+        mock_client.api.issues.get_by_ref.return_value = {
+            "ref": 1213,
+            "subject": "Odd",
+            "status_extra_info": {"name": "New"},
+            "priority": 9999,
+            "severity": None,
+            "type": 25,
+        }
+        result = wf.get_issue("p", 1213, session_id=session)
+        assert result["priority"] is None
+        assert result["severity"] is None
+        assert result["type"] == "Bug"
+
+    def test_story_sprint_comes_from_flat_milestone_name(self):
+        # Taiga sends no milestone_extra_info on user stories — the sprint is the
+        # flat milestone_name (slug as fallback). Reading the phantom key returned
+        # None for every story that had a sprint.
+        assert (
+            wf._story_summary({"ref": 1, "milestone": 85, "milestone_name": "Sprint 9"})["sprint"]
+            == "Sprint 9"
+        )
+        assert (
+            wf._story_summary({"ref": 2, "milestone": 85, "milestone_slug": "sprint-9"})["sprint"]
+            == "sprint-9"
+        )
+        assert wf._story_summary({"ref": 3})["sprint"] is None
+
+    def test_summary_without_resolver_context_returns_raw_ids(self):
+        # _issue_summary is also reachable without client/project context. It must
+        # then surface the raw IDs, never a misleading None.
+        result = wf._issue_summary(
+            {"ref": 7, "subject": "s", "priority": 27, "severity": 45, "type": 25}
+        )
+        assert result["priority"] == 27
+        assert result["severity"] == 45
+        assert result["type"] == 25
 
     def test_raises_when_not_found(self, session, mock_client):
         mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
@@ -2058,9 +2119,13 @@ class TestGetProjectOverview:
 
         def lr(resource, **kw):
             return {
+                # REAL membership shape: no user_extra_info, no username. Identity
+                # is flat, and `email` is often blank while `user_email` is set.
                 "memberships": [
                     {
-                        "user_extra_info": {"username": "bob"},
+                        "user": 8,
+                        "user_email": "bob@example.com",
+                        "email": "",
                         "full_name": "Bob",
                         "role_name": "Dev",
                         "is_admin": False,
@@ -2089,7 +2154,10 @@ class TestGetProjectOverview:
         assert result["total_stories"] == 3
         assert result["stories_by_status"] == {"New": 2, "Done": 1}
         assert result["active_sprint"]["name"] == "S1"
-        assert result["team"][0]["username"] == "bob"
+        # Sourced from user_email, not the blank `email` and not a phantom
+        # user_extra_info.username (which Taiga never sends on memberships).
+        assert result["team"][0]["email"] == "bob@example.com"
+        assert result["team"][0]["full_name"] == "Bob"
 
     def test_no_active_sprint_when_none_cover_today(self, session, mock_client):
         mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}

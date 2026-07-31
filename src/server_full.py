@@ -263,12 +263,12 @@ RESPONSE_FIELDS: Dict[str, Dict[str, Optional[List[str]]]] = {
             "description",
             "status",
             "status_extra_info",
+            # priority/severity/type are bare integer IDs. Taiga publishes no
+            # *_extra_info for them (only assigned_to/owner/project/status), so
+            # listing those keys here would be dead config.
             "priority",
-            "priority_extra_info",
             "severity",
-            "severity_extra_info",
             "type",
-            "type_extra_info",
             "assigned_to",
             "assigned_to_extra_info",
             "milestone",

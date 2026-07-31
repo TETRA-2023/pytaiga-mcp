@@ -47,10 +47,15 @@ def resolve_user_id(members: List[Dict[str, Any]], identifier: "int | str") -> i
     """Resolve a user identifier to a Taiga user ID against a project's memberships.
 
     ``identifier`` may be an ``int`` (returned unchanged — treated as a user ID)
-    or a string matched case-insensitively against each member's username, email,
-    full name, or display name. Matching is None-safe (see ``safe_lower``): a
-    single member with a null field no longer aborts resolution before the
-    intended user is reached.
+    or a string matched case-insensitively against each member's email or full
+    name. Matching is None-safe (see ``safe_lower``): a single member with a null
+    field no longer aborts resolution before the intended user is reached.
+
+    Membership rows carry NO ``user_extra_info`` and no ``username`` field, so
+    those lookups are kept only for forward-compatibility with endpoints that do
+    return them — they never match on a memberships payload. ``user_email`` is
+    the reliable address: the flat ``email`` field is frequently blank on
+    established members, which is why email resolution needs both.
 
     Raises ``ValueError`` if the identifier is empty or not found.
     """
@@ -65,6 +70,7 @@ def resolve_user_id(members: List[Dict[str, Any]], identifier: "int | str") -> i
         info = m.get("user_extra_info") or {}
         if needle in (
             safe_lower(info.get("username")),
+            safe_lower(m.get("user_email")),
             safe_lower(m.get("email")),
             safe_lower(m.get("full_name")),
             safe_lower(info.get("full_name_display")),
@@ -72,7 +78,9 @@ def resolve_user_id(members: List[Dict[str, Any]], identifier: "int | str") -> i
             uid = m.get("user")
             if uid is not None:
                 return uid
-    available = [m.get("full_name") or m.get("email") or "?" for m in members]
+    available = [
+        m.get("full_name") or m.get("user_email") or m.get("email") or "?" for m in members
+    ]
     raise ValueError(f"User '{identifier}' not found in project. Members: {available}")
 
 
