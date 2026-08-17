@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 authors = [{ name = "Talha Orak", email = "talhaorak.git@gmail.com" }]
 maintainers = [{ name = "TETRA" }]
 dependencies = [
-    "mcp[cli]>=1.28.1",
+    "mcp[cli]>=2.0.0",
     "python-dotenv>=0.15.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
