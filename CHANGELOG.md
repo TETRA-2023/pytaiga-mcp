@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.1.4 (2026-10-06)
+
+### Bug Fixes
+
+- Bump dependabot/fetch-metadata from 2 to 3
+  ([#109](https://github.com/TETRA-2023/pytaiga-mcp/pull/109),
+  [`b89c296`](https://github.com/TETRA-2023/pytaiga-mcp/commit/b89c296dea860d55ecce8273682a898eae6d0eba))
+
+
 ## v2.1.3 (2026-10-06)
 
 ### Bug Fixes
