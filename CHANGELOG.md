@@ -2,6 +2,111 @@
 
 <!-- version list -->
 
+## v2.1.2 (2026-10-06)
+
+### Bug Fixes
+
+- Bump anyio from 4.13.0 to 4.14.2 ([#152](https://github.com/TETRA-2023/pytaiga-mcp/pull/152),
+  [`4b33f05`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4b33f05421d92e77d58e68cf01604b27b60bfdcc))
+
+- Bump gitpython from 3.1.54 to 3.1.57 ([#134](https://github.com/TETRA-2023/pytaiga-mcp/pull/134),
+  [`5e06627`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5e06627e556fbfd65464b2417b8c1683d00b0228))
+
+- Bump gitpython from 3.1.57 to 3.1.58 ([#136](https://github.com/TETRA-2023/pytaiga-mcp/pull/136),
+  [`1926d04`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1926d04dfd07d222bc0b2bfb32d3753b076e06cf))
+
+- Bump gitpython from 3.1.58 to 3.1.59 ([#150](https://github.com/TETRA-2023/pytaiga-mcp/pull/150),
+  [`cee0e3d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/cee0e3dbf23d2da040fd932aa997ae790b9eca7f))
+
+- Bump gitpython from 3.1.59 to 3.1.62 ([#158](https://github.com/TETRA-2023/pytaiga-mcp/pull/158),
+  [`28a879e`](https://github.com/TETRA-2023/pytaiga-mcp/commit/28a879e029f550e1a5cd6cc1637f3907007e910f))
+
+- Bump mypy from 2.3.0 to 2.3.1 ([#146](https://github.com/TETRA-2023/pytaiga-mcp/pull/146),
+  [`4a266f7`](https://github.com/TETRA-2023/pytaiga-mcp/commit/4a266f77145f913a811653fb004d2441194afe00))
+
+- Bump mypy from 2.3.1 to 2.4.0 ([#162](https://github.com/TETRA-2023/pytaiga-mcp/pull/162),
+  [`2b21449`](https://github.com/TETRA-2023/pytaiga-mcp/commit/2b21449e3d4230203623fb43c2b6af25d538fd73))
+
+- Bump pre-commit from 4.6.1 to 4.6.2 ([#142](https://github.com/TETRA-2023/pytaiga-mcp/pull/142),
+  [`17aaa58`](https://github.com/TETRA-2023/pytaiga-mcp/commit/17aaa58b8949636d9694e245108717bc97c2c75b))
+
+- Bump pydantic from 2.13.4 to 2.13.5 ([#148](https://github.com/TETRA-2023/pytaiga-mcp/pull/148),
+  [`5c33bd2`](https://github.com/TETRA-2023/pytaiga-mcp/commit/5c33bd22fb84e45ecd1fec4a2812cabecc73aeff))
+
+- Bump pydantic-settings from 2.14.2 to 2.15.0
+  ([#138](https://github.com/TETRA-2023/pytaiga-mcp/pull/138),
+  [`6b5138f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/6b5138fde5b30d6dc8cf32c4f81c31fe75cfc07c))
+
+- Bump pyjwt from 2.13.0 to 2.15.0 ([#157](https://github.com/TETRA-2023/pytaiga-mcp/pull/157),
+  [`0587074`](https://github.com/TETRA-2023/pytaiga-mcp/commit/0587074ca3a474f6df625ae14e7fe533d1f0c20f))
+
+- Bump python-dotenv from 1.2.2 to 1.2.3
+  ([#141](https://github.com/TETRA-2023/pytaiga-mcp/pull/141),
+  [`de25a85`](https://github.com/TETRA-2023/pytaiga-mcp/commit/de25a8572d8d01219c4c85bcc7be971007a9b25d))
+
+- Bump python-dotenv from 1.2.3 to 1.2.4
+  ([#163](https://github.com/TETRA-2023/pytaiga-mcp/pull/163),
+  [`74e2421`](https://github.com/TETRA-2023/pytaiga-mcp/commit/74e2421f5acfec93e999961f2be00018fc0fee54))
+
+- Bump ruff from 0.16.0 to 0.16.1 ([#133](https://github.com/TETRA-2023/pytaiga-mcp/pull/133),
+  [`64aea0b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/64aea0b14de31545375e37795cd3492c060502f6))
+
+- Bump ruff from 0.16.1 to 0.16.3 ([#139](https://github.com/TETRA-2023/pytaiga-mcp/pull/139),
+  [`e8b6665`](https://github.com/TETRA-2023/pytaiga-mcp/commit/e8b66655600d5b17e4478621cf1ee7712a785504))
+
+- Bump ruff from 0.16.3 to 0.16.4 ([#140](https://github.com/TETRA-2023/pytaiga-mcp/pull/140),
+  [`26a53cd`](https://github.com/TETRA-2023/pytaiga-mcp/commit/26a53cd2ade30e9f077fe57aa3583c85b12c46d9))
+
+- Bump ruff from 0.16.4 to 0.16.5 ([#145](https://github.com/TETRA-2023/pytaiga-mcp/pull/145),
+  [`46695d1`](https://github.com/TETRA-2023/pytaiga-mcp/commit/46695d12da97852dd12f27a5349967f50d237e11))
+
+- Bump ruff from 0.16.5 to 0.16.6 ([#149](https://github.com/TETRA-2023/pytaiga-mcp/pull/149),
+  [`090388d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/090388d9b79eef4618f41f516a361db60120b049))
+
+- Bump ruff from 0.16.6 to 0.16.7 ([#151](https://github.com/TETRA-2023/pytaiga-mcp/pull/151),
+  [`93be27c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/93be27c69550e90c7c2e523bc66ee52465e7b8a0))
+
+- Bump ruff from 0.16.7 to 0.16.8 ([#153](https://github.com/TETRA-2023/pytaiga-mcp/pull/153),
+  [`50a3d0c`](https://github.com/TETRA-2023/pytaiga-mcp/commit/50a3d0c3fabe910954b8c6a7cbe80356720b40a5))
+
+- Bump ruff from 0.16.8 to 0.16.9 ([#155](https://github.com/TETRA-2023/pytaiga-mcp/pull/155),
+  [`26669cc`](https://github.com/TETRA-2023/pytaiga-mcp/commit/26669ccfe48334ea720fc0f8be76d3f5205e83ec))
+
+- Bump ruff from 0.16.9 to 0.16.10 ([#161](https://github.com/TETRA-2023/pytaiga-mcp/pull/161),
+  [`252e75b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/252e75b0576e2d48bafdfc1ca0ad0e6f08934ed4))
+
+- Bump urllib3 from 2.7.0 to 2.8.0 ([#160](https://github.com/TETRA-2023/pytaiga-mcp/pull/160),
+  [`1c2f80f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/1c2f80f5d75738fdc691fd2b6bfb82d62b3e8687))
+
+- Bump virtualenv from 21.2.3 to 21.7.12
+  ([#159](https://github.com/TETRA-2023/pytaiga-mcp/pull/159),
+  [`3689b47`](https://github.com/TETRA-2023/pytaiga-mcp/commit/3689b47aecbf14f5a8b711858b562e943f7d42f0))
+
+- Bump virtualenv from 21.7.12 to 21.7.13
+  ([#164](https://github.com/TETRA-2023/pytaiga-mcp/pull/164),
+  [`7cb8e93`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7cb8e9334f2618af610bfe0924f5f91d40109fb9))
+
+### Chores
+
+- Bump python-semantic-release from 10.6.1 to 10.6.2
+  ([#147](https://github.com/TETRA-2023/pytaiga-mcp/pull/147),
+  [`7446fdb`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7446fdbb7b7a0c5b4b2ff2aa7d887a491efcc4ce))
+
+- Bump python-semantic-release from 10.6.2 to 10.7.0
+  ([#156](https://github.com/TETRA-2023/pytaiga-mcp/pull/156),
+  [`60b831b`](https://github.com/TETRA-2023/pytaiga-mcp/commit/60b831b73885422d740f450ab84696ba7fc0c121))
+
+- Update setuptools requirement from >=83.0.0 to >=84.0.0
+  ([#137](https://github.com/TETRA-2023/pytaiga-mcp/pull/137),
+  [`0b40d97`](https://github.com/TETRA-2023/pytaiga-mcp/commit/0b40d972980c035c06c2576325cd939e7b5de566))
+
+### Continuous Integration
+
+- **deps**: Auto-merge minor/patch only via allowlist
+  ([#165](https://github.com/TETRA-2023/pytaiga-mcp/pull/165),
+  [`144c565`](https://github.com/TETRA-2023/pytaiga-mcp/commit/144c5651e4757d64ced92c391e232aabc07ed593))
+
+
 ## v2.1.1 (2026-07-31)
 
 ### Bug Fixes
