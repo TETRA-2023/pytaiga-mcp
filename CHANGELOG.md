@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.1.3 (2026-10-06)
+
+### Bug Fixes
+
+- Bump cryptography from 48.0.1 to 50.0.0
+  ([#135](https://github.com/TETRA-2023/pytaiga-mcp/pull/135),
+  [`f7aead2`](https://github.com/TETRA-2023/pytaiga-mcp/commit/f7aead2ff5471714d603a884487e6a30afc9182d))
+
+
 ## v2.1.2 (2026-10-06)
 
 ### Bug Fixes
