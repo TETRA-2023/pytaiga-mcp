@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v2.1.5 (2026-10-07)
+
+### Bug Fixes
+
+- **deps**: Pin mcp<2 before a relock pulls the FastMCP-less 2.x
+  ([#167](https://github.com/TETRA-2023/pytaiga-mcp/pull/167),
+  [`33b8e31`](https://github.com/TETRA-2023/pytaiga-mcp/commit/33b8e3192f88af052e8aaa59e6e78d51bd6a3cdc))
+
+### Continuous Integration
+
+- Gate merges and :stable on a container smoke test (initialize + tools/list)
+  ([#168](https://github.com/TETRA-2023/pytaiga-mcp/pull/168),
+  [`dc65bbf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc65bbf0745168820963f4564d04bd4cd19d737b))
+
+- **deps**: Auto-merge with the GH_TOKEN PAT so merges fire main's CI and release
+  ([#166](https://github.com/TETRA-2023/pytaiga-mcp/pull/166),
+  [`fb10d8f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/fb10d8fa24557a94de2dc64640454a6edf31dad2))
+
+- **smoke**: Pipe the script on stdin instead of bind-mounting it
+  ([#168](https://github.com/TETRA-2023/pytaiga-mcp/pull/168),
+  [`dc65bbf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc65bbf0745168820963f4564d04bd4cd19d737b))
+
+- **smoke**: Run the server under test with --network none
+  ([#168](https://github.com/TETRA-2023/pytaiga-mcp/pull/168),
+  [`dc65bbf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc65bbf0745168820963f4564d04bd4cd19d737b))
+
+
 ## v2.1.4 (2026-10-06)
 
 ### Bug Fixes
