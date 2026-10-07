@@ -48,7 +48,9 @@ jobs:
       # transport, then initialize + tools/list. Unit tests stayed green while
       # langfuse-mcp v1.1.6/v1.1.7 crash-looped at import in prod (2026-10-07,
       # TETRA-2023/langfuse-mcp#81); this step is what catches that. Dummy
-      # credentials only: tools/list must not need a live Taiga. No host port is published.
+      # credentials only: tools/list must not need a live Taiga. No host port is published,
+      # and the script is piped on stdin (no bind mount: self-hosted runners
+      # drive the HOST daemon, which cannot see the runner's workspace).
       - name: Smoke test image (initialize + tools/list)
         run: |
           docker run -d --name "$SMOKE_NAME" \
@@ -56,9 +58,9 @@ jobs:
             -e TAIGA_TRANSPORT=streamable-http \
             -e MCP_HOST=0.0.0.0 \
             mcp-smoke:ci --streamable-http
-          docker run --rm --network "container:$SMOKE_NAME" \
-            -v "$PWD/scripts/ci:/s:ro" python:3.12-alpine \
-            python /s/mcp-smoke.py http http://127.0.0.1:8000/mcp --wait 60
+          docker run --rm -i --network "container:$SMOKE_NAME" python:3.12-alpine \
+            python - http http://127.0.0.1:8000/mcp --wait 60 \
+            < scripts/ci/mcp-smoke.py
         timeout-minutes: 3
 
       - name: Smoke test logs and cleanup
