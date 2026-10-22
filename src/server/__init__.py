@@ -14,6 +14,7 @@ from src.server import app, core, resolve
 from src.server.tools import (
     admin,
     attachments,
+    bulk,
     comments,
     epics,
     issues,
@@ -47,6 +48,7 @@ for _module in (
     attachments,
     tags,
     admin,
+    bulk,
 ):
     globals().update({k: v for k, v in vars(_module).items() if not k.startswith("__")})
 del _module

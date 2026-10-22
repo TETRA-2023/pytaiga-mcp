@@ -4230,3 +4230,171 @@ class TestMembers:
         with pytest.raises(ValueError, match=match):
             wf.invite_members("p", emails, role, session_id=session)
         mock_client.api.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# v3 B9: create_items, link_to_epic, reorder_stories. Payloads per taiga-back.
+# ---------------------------------------------------------------------------
+
+
+class TestCreateItems:
+    @pytest.mark.parametrize(
+        "entity_type,endpoint,key",
+        [
+            ("story", "/userstories/bulk_create", "bulk_stories"),
+            ("issue", "/issues/bulk_create", "bulk_issues"),
+            ("epic", "/epics/bulk_create", "bulk_epics"),
+        ],
+    )
+    def test_one_newline_joined_payload(self, session, mock_client, entity_type, endpoint, key):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            post={
+                endpoint: [
+                    {"ref": 7, "id": 70, "subject": "a"},
+                    {"ref": 8, "id": 80, "subject": "b"},
+                ]
+            },
+        )
+        result = wf.create_items("p", [" a ", "b", ""], entity_type=entity_type, session_id=session)
+        assert result["count"] == 2 and [i["ref"] for i in result["items"]] == [7, 8]
+        assert sent(mock_client, "post", endpoint) == [{"project_id": 1, key: "a\nb"}]
+
+    @pytest.mark.parametrize(
+        "subjects,match",
+        [([], "at least one"), (["a\nb"], "line breaks"), (["x"] * 101, "At most 100")],
+    )
+    def test_guards_before_any_call(self, session, mock_client, subjects, match):
+        with pytest.raises(ValueError, match=match):
+            wf.create_items("p", subjects, session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    def test_task_not_supported(self, session, mock_client):
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            wf.create_items("p", ["a"], entity_type="task", session_id=session)
+
+
+class TestLinkToEpic:
+    def _route(self, mock_client, related):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = [
+            {"ref": 1, "id": 10},
+            {"ref": 2, "id": 20},
+            {"ref": 3, "id": 30},
+        ]
+        route(
+            mock_client,
+            get={"/epics/by_ref": {"id": 500, "ref": 9}, "/epics/500/related_userstories": related},
+            post={"/epics/500/related_userstories": {}},
+        )
+
+    def test_links_new_skips_already_linked(self, session, mock_client):
+        self._route(mock_client, [{"epic": 500, "user_story": 20, "order": 1}])
+        result = wf.link_to_epic("p", 9, [1, 2, 3, 1], session_id=session)
+        assert result == {
+            "status": "linked",
+            "epic_ref": 9,
+            "linked": [1, 3],
+            "already_linked": [2],
+        }
+        assert sent(mock_client, "post", "/epics/500/related_userstories") == [
+            {"epic": 500, "user_story": 10},
+            {"epic": 500, "user_story": 30},
+        ]
+        for c in mock_client.api.post.call_args_list:
+            assert "bulk_create" not in c.args[0]  # #143
+
+    def test_partial_failure_names_what_was_linked(self, session, mock_client):
+        self._route(mock_client, [])
+        route(
+            mock_client,
+            post={"/epics/500/related_userstories": Seq({}, TaigaException("boom"), {})},
+        )
+        with pytest.raises(TaigaException, match=r"Linked \[1, 3\] to epic #9; failed: #2: boom"):
+            wf.link_to_epic("p", 9, [1, 2, 3], session_id=session)
+
+    def test_unknown_epic_real_404(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/epics/by_ref": _api_error(TaigaNotFoundError, 404)})
+        with pytest.raises(ValueError, match="Epic #9 not found"):
+            wf.link_to_epic("p", 9, [1], session_id=session)
+
+
+def _stories(*rows):
+    return [
+        {"ref": r, "id": r * 10, "milestone": m, "status": st, "swimlane": None}
+        for r, m, st in rows
+    ]
+
+
+class TestReorderStories:
+    def _route(self, mock_client, stories, milestones=None):
+        mock_client.api.get.return_value = PROJECT
+
+        def lr(resource, project_id=None, **kw):
+            return {"user_stories": stories, "milestones": milestones or []}[resource]
+
+        mock_client.list_resources.side_effect = lr
+        route(
+            mock_client,
+            post={
+                "/userstories/bulk_update_backlog_order": [],
+                "/userstories/bulk_update_kanban_order": [],
+            },
+        )
+
+    def test_backlog_before_anchor(self, session, mock_client):
+        self._route(mock_client, _stories((1, None, 5), (2, None, 5), (3, None, 5)))
+        wf.reorder_stories("p", [3, 2], before_ref=1, session_id=session)
+        assert sent(mock_client, "post", "/userstories/bulk_update_backlog_order") == [
+            {"project_id": 1, "bulk_userstories": [30, 20], "before_userstory_id": 10}
+        ]
+
+    def test_sprint_view_sends_milestone_and_after(self, session, mock_client):
+        self._route(
+            mock_client, _stories((1, 9, 5), (2, 9, 5)), milestones=[{"id": 9, "name": "S1"}]
+        )
+        wf.reorder_stories("p", [1], view="sprint", sprint="S1", after_ref=2, session_id=session)
+        assert sent(mock_client, "post", "/userstories/bulk_update_backlog_order") == [
+            {"project_id": 1, "bulk_userstories": [10], "after_userstory_id": 20, "milestone_id": 9}
+        ]
+
+    def test_kanban_needs_one_status(self, session, mock_client):
+        self._route(mock_client, _stories((1, None, 5), (2, None, 5)))
+        wf.reorder_stories("p", [2, 1], view="kanban", session_id=session)
+        assert sent(mock_client, "post", "/userstories/bulk_update_kanban_order") == [
+            {"project_id": 1, "bulk_userstories": [20, 10], "status_id": 5}
+        ]
+        self._route(mock_client, _stories((1, None, 5), (2, None, 6)))
+        with pytest.raises(ValueError, match="share one status"):
+            wf.reorder_stories("p", [2, 1], view="kanban", session_id=session)
+
+    def test_refuses_a_story_from_another_column(self, session, mock_client):
+        # The endpoint would SET milestone=None on it (and its tasks): never move silently.
+        self._route(mock_client, _stories((1, None, 5), (2, 9, 5)))
+        with pytest.raises(ValueError, match=r"Stories \[2\] are not in the backlog"):
+            wf.reorder_stories("p", [1, 2], session_id=session)
+        mock_client.api.post.assert_not_called()
+
+    def test_refuses_anchor_from_another_column(self, session, mock_client):
+        self._route(mock_client, _stories((1, None, 5), (2, 9, 5)))
+        with pytest.raises(ValueError, match=r"\[2\] are not in the backlog"):
+            wf.reorder_stories("p", [1], before_ref=2, session_id=session)
+        mock_client.api.post.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"story_refs": []}, "at least one"),
+            ({"story_refs": [1], "view": "board"}, "view must be"),
+            ({"story_refs": [1], "view": "sprint"}, "needs the sprint"),
+            ({"story_refs": [1], "sprint": "S1"}, "only applies"),
+            ({"story_refs": [1], "before_ref": 2, "after_ref": 3}, "not both"),
+            ({"story_refs": [1, 2], "before_ref": 2}, "cannot be one of"),
+        ],
+    )
+    def test_argument_guards_before_any_call(self, session, mock_client, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            wf.reorder_stories("p", session_id=session, **kwargs)
+        mock_client.api.get.assert_not_called()

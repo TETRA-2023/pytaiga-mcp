@@ -590,3 +590,99 @@ class TestSandboxWrites:
             for s in wf.list_project_settings(TEST_PROJECT, "story_statuses", session_id=session_id)
         ]
         assert after == original, "the sandbox's status order was not restored"
+
+    def test_b9_bulk_link_reorder_on_real_taiga(self, session_id):
+        """v3 B9: create_items, link_to_epic (already-linked), reorder_stories in the backlog,
+        a sprint and kanban, and the guard that keeps a sprint story where it is."""
+        tag = uuid.uuid4().hex[:6]
+        sess = wf.active_sessions[session_id]
+        project_id = wf.get_project_overview(TEST_PROJECT, session_id=session_id)["project"]["id"]
+        before_count = len(sess.list_resources("user_stories", project_id=project_id))
+        refs, epic, sprint_id = [], None, None
+        try:
+            made = wf.create_items(
+                TEST_PROJECT,
+                [f"[TEST - CAN DELETE] b9-{i} {tag}" for i in range(4)],
+                session_id=session_id,
+            )
+            assert made["count"] == 4
+            refs = [i["ref"] for i in made["items"]]
+
+            epic = wf.create_items(
+                TEST_PROJECT,
+                [f"[TEST - CAN DELETE] b9 epic {tag}"],
+                entity_type="epic",
+                session_id=session_id,
+            )["items"][0]
+            first = wf.link_to_epic(TEST_PROJECT, epic["ref"], refs[:2], session_id=session_id)
+            assert first["linked"] == refs[:2] and first["already_linked"] == []
+            again = wf.link_to_epic(TEST_PROJECT, epic["ref"], refs[1:3], session_id=session_id)
+            assert again == {
+                "status": "linked",
+                "epic_ref": epic["ref"],
+                "linked": [refs[2]],
+                "already_linked": [refs[1]],
+            }
+            overview = wf.get_epic_overview(TEST_PROJECT, epic["ref"], session_id=session_id)
+            assert sorted(s["ref"] for s in overview["stories"]) == sorted(refs[:3])
+
+            def order(field):
+                rows = sess.list_resources("user_stories", project_id=project_id)
+                by_ref = {r["ref"]: r[field] for r in rows if r["ref"] in refs}
+                return sorted((r for r in refs if r in by_ref), key=lambda r: by_ref[r])
+
+            # Backlog: the last two right AFTER the first. Without an anchor Taiga puts
+            # them at the top ([3, 2, 0, 1]), so this order tells the two apart.
+            wf.reorder_stories(
+                TEST_PROJECT, [refs[3], refs[2]], after_ref=refs[0], session_id=session_id
+            )
+            assert order("backlog_order") == [refs[0], refs[3], refs[2], refs[1]]
+
+            # A story inside a sprint is refused (the endpoint would pull it out).
+            sprint = f"[TEST] b9 {tag}"
+            planned = wf.plan_sprint(
+                TEST_PROJECT,
+                sprint,
+                "2026-01-01",
+                "2026-01-14",
+                story_refs=refs[:2],
+                session_id=session_id,
+            )
+            sprint_id = planned["sprint"]["id"]
+            with pytest.raises(ValueError, match="not in the backlog"):
+                wf.reorder_stories(TEST_PROJECT, [refs[0], refs[2]], session_id=session_id)
+            assert wf.get_story(TEST_PROJECT, refs[0], session_id=session_id)["sprint"] == sprint
+
+            # Sprint view: the first AFTER the second (top would keep it first).
+            wf.reorder_stories(
+                TEST_PROJECT,
+                [refs[0]],
+                view="sprint",
+                sprint=sprint,
+                after_ref=refs[1],
+                session_id=session_id,
+            )
+            sprint_order = [r for r in order("sprint_order") if r in refs[:2]]
+            assert sprint_order == [refs[1], refs[0]]
+
+            # Kanban (the two backlog stories share the default status): refs[2] AFTER
+            # refs[3]. They were created 2-then-3, and top would keep 2 first.
+            wf.reorder_stories(
+                TEST_PROJECT, [refs[2]], view="kanban", after_ref=refs[3], session_id=session_id
+            )
+            kanban = [r for r in order("kanban_order") if r in refs[2:]]
+            assert kanban == [refs[3], refs[2]]
+        finally:
+            for ref in refs:
+                try:
+                    wf.delete_item(TEST_PROJECT, "story", ref, session_id=session_id)
+                except Exception as e:
+                    print(f"cleanup: story #{ref}: {e}")
+            if epic:
+                try:
+                    wf.delete_item(TEST_PROJECT, "epic", epic["ref"], session_id=session_id)
+                except Exception:
+                    _delete(session_id, "epics", epic["id"])
+            if sprint_id:
+                _delete(session_id, "milestones", sprint_id)
+        assert len(sess.list_resources("user_stories", project_id=project_id)) == before_count
