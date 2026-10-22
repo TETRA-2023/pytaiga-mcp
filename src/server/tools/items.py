@@ -29,22 +29,9 @@ def assign_item(
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
-    # entity_type -> REST path segment (also the by_ref route prefix).
-    type_map = resolve._ENTITY_PATH_MAP
-    if entity_type not in type_map:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(type_map)}."
-        )
-
     def do_assign():
-        proj = resolve._resolve_project(client, project)
-        project_id = proj["id"]
-        user_id = resolve._resolve_user(client, project_id, username, actual_session_id)
-
-        segment = type_map[entity_type]
-        current = resolve._get_by_ref(client, segment, ref, project_id)
-        if not current:
-            raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
+        proj, current, segment = resolve._resolve_item_by_ref(client, project, entity_type, ref)
+        user_id = resolve._resolve_user(client, proj["id"], username, actual_session_id)
 
         result = client.api.patch(
             f"/{segment}/{current['id']}",

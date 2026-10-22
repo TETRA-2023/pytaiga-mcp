@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 
 def _resolve_project(client: TaigaClientWrapper, project: Any) -> Dict[str, Any]:
     """Resolve a project slug (str) or ID (int) to the full project dict."""
-    if isinstance(project, int) or (isinstance(project, str) and project.isdigit()):
-        result = client.api.get(f"/projects/{int(project)}")
-    else:
-        result = client.api.get("/projects/by_slug", params={"slug": project})
+    # Real Taiga answers an unknown slug or ID with a 404, never an empty body.
+    try:
+        if isinstance(project, int) or (isinstance(project, str) and project.isdigit()):
+            result = client.api.get(f"/projects/{int(project)}")
+        else:
+            result = client.api.get("/projects/by_slug", params={"slug": project})
+    except TaigaNotFoundError:
+        result = None
     if not result:
         raise ValueError(f"Project '{project}' not found.")
     return result

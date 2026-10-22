@@ -705,3 +705,9 @@ class TestMultipartUpload:
         assert b'name="project"' in body and b"13" in body
         assert b'name="object_id"' in body
         assert b'filename="a.txt"' in body and b"hello" in body
+
+
+def test_httpx_request_lines_not_logged_at_info():
+    import src.server.core  # noqa: F401  (applies the server's logging setup)
+
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING

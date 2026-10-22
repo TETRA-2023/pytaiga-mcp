@@ -16,6 +16,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()],
 )
+# httpx logs every request URL at INFO ("HTTP Request: GET https://...?slug=...").
+# taiga_client already logs method, path and status at DEBUG; keep httpx quiet so
+# query strings (slugs, refs, filters) don't fill the server log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 

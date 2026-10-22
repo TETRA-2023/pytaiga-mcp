@@ -4523,3 +4523,17 @@ def test_update_task_reparent_to_unknown_story_real_404(session, mock_client):
     with pytest.raises(ValueError, match="User story #44 not found"):
         wf.update_task("p", 7, story_ref=44, session_id=session)
     mock_client.api.patch.assert_not_called()
+
+
+def test_get_wiki_unknown_slug_real_404(session, mock_client):
+    route(mock_client, get=_not_found("/wiki/by_slug"))
+    mock_client.api.get.return_value = PROJECT
+    with pytest.raises(ValueError, match="Wiki page 'nope' not found"):
+        wf.get_wiki("p", slug="nope", session_id=session)
+
+
+@pytest.mark.parametrize("project,path", [("ghost", "/projects/by_slug"), (999, "/projects/999")])
+def test_unknown_project_real_404(session, mock_client, project, path):
+    route(mock_client, get=_not_found(path))
+    with pytest.raises(ValueError, match="not found"):
+        wf.get_story(project, 5, session_id=session)

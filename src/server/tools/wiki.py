@@ -36,7 +36,10 @@ def get_wiki(
         project_id = proj["id"]
 
         if slug:
-            page = client.api.get("/wiki/by_slug", params={"slug": slug, "project": project_id})
+            try:
+                page = client.api.get("/wiki/by_slug", params={"slug": slug, "project": project_id})
+            except TaigaNotFoundError:  # real Taiga 404s an unknown slug
+                page = None
             if not page:
                 raise ValueError(f"Wiki page '{slug}' not found in project '{proj['slug']}'.")
             return {"slug": page.get("slug"), "content": page.get("content"), "id": page.get("id")}
