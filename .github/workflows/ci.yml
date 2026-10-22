@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # feature/taiga-v3: v3 integration branch (Taiga tetra #2621). Image push and
+    # release stay gated on refs/heads/main below, so nothing from it is published.
+    branches: [main, feature/taiga-v3]
   pull_request:
-    branches: [main]
+    branches: [main, feature/taiga-v3]
 
 jobs:
   secrets:
