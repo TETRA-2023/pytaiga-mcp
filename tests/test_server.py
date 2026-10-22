@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from pytaigaclient.exceptions import TaigaException
@@ -2993,12 +2993,20 @@ class TestTaigaTools:
         session_id, mock_client = session_setup
         mock_client.api.post.return_value = None
         result = src_server.bulk_link_user_stories_to_epic(21, 10, [1, 2, 3], session_id=session_id)
-        mock_client.api.post.assert_called_once_with(
-            "/epics/10/related_userstories/bulk_create",
-            json={"project_id": 21, "bulk_userstories": [1, 2, 3]},
-        )
+        # One POST per story, never /bulk_create (it creates new stories — #143).
+        assert mock_client.api.post.call_args_list == [
+            call("/epics/10/related_userstories", json={"epic": 10, "user_story": i})
+            for i in (1, 2, 3)
+        ]
         assert result["status"] == "linked"
         assert result["count"] == 3
+
+    def test_bulk_link_user_stories_to_epic_partial_failure_raises(self, session_setup):
+        """Test bulk_link_user_stories_to_epic reports a partial failure instead of success."""
+        session_id, mock_client = session_setup
+        mock_client.api.post.side_effect = [None, TaigaException("boom")]
+        with pytest.raises(TaigaException, match=r"Linked only 1 of 2 .*2: boom"):
+            src_server.bulk_link_user_stories_to_epic(21, 10, [1, 2], session_id=session_id)
 
     def test_bulk_link_user_stories_to_epic_empty_raises(self):
         """Test bulk_link_user_stories_to_epic raises on empty list before session."""

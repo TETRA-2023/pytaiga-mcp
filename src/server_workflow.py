@@ -1993,12 +1993,25 @@ def create_epic(
 
         linked = 0
         if story_refs:
+            # One POST per story. Do NOT use /related_userstories/bulk_create: it
+            # creates NEW stories from newline-separated subjects, so a list of ids
+            # became one junk story and nothing was linked (pytaiga-mcp#143).
             us_ids = _resolve_story_refs(client, project_id, story_refs)
-            client.api.post(
-                f"/epics/{epic_id}/related_userstories/bulk_create",
-                json={"project_id": project_id, "bulk_userstories": us_ids},
-            )
-            linked = len(us_ids)
+            failed = []
+            for ref, us_id in zip(story_refs, us_ids):
+                try:
+                    client.api.post(
+                        f"/epics/{epic_id}/related_userstories",
+                        json={"epic": epic_id, "user_story": us_id},
+                    )
+                    linked += 1
+                except TaigaException as e:
+                    failed.append(f"#{ref}: {e}")
+            if failed:
+                raise TaigaException(
+                    f"Epic #{epic.get('ref')} (id {epic_id}) was created, but linked only "
+                    f"{linked} of {len(us_ids)} stories. Failed: {'; '.join(failed)}"
+                )
 
         return {
             "status": "created",
