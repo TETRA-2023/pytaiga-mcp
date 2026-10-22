@@ -42,7 +42,7 @@ def assign_item(
         user_id = resolve._resolve_user(client, project_id, username, actual_session_id)
 
         segment = type_map[entity_type]
-        current = client.api.get(f"/{segment}/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, segment, ref, project_id)
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 

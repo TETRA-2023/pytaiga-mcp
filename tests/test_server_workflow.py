@@ -4410,3 +4410,116 @@ class TestReorderStories:
         with pytest.raises(ValueError, match=match):
             wf.reorder_stories("p", session_id=session, **kwargs)
         mock_client.api.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Taiga tetra #2658: every by_ref lookup turns real Taiga's 404 into a clear
+# "not found" (the old `if not item` guards never fired: by_ref never returns
+# an empty body).
+# ---------------------------------------------------------------------------
+
+
+def _not_found(path):
+    return {path: _api_error(TaigaNotFoundError, 404, "No match")}
+
+
+@pytest.mark.parametrize(
+    "call,path,match",
+    [
+        (
+            lambda s: wf.get_story("p", 5, session_id=s),
+            "/userstories/by_ref",
+            "User story #5 not found",
+        ),
+        (lambda s: wf.get_task("p", 5, session_id=s), "/tasks/by_ref", "Task #5 not found"),
+        (lambda s: wf.get_issue("p", 5, session_id=s), "/issues/by_ref", "Issue #5 not found"),
+        (
+            lambda s: wf.update_story("p", 5, subject="x", session_id=s),
+            "/userstories/by_ref",
+            "User story #5 not found",
+        ),
+        (
+            lambda s: wf.update_task("p", 5, subject="x", session_id=s),
+            "/tasks/by_ref",
+            "Task #5 not found",
+        ),
+        (
+            lambda s: wf.update_issue("p", 5, subject="x", session_id=s),
+            "/issues/by_ref",
+            "Issue #5 not found",
+        ),
+        (
+            lambda s: wf.create_task("p", 5, "t", session_id=s),
+            "/userstories/by_ref",
+            "User story #5 not found",
+        ),
+        (
+            lambda s: wf.break_down_story("p", 5, ["t"], session_id=s),
+            "/userstories/by_ref",
+            "User story #5 not found",
+        ),
+        (
+            lambda s: wf.assign_item("p", 5, "bob", session_id=s),
+            "/userstories/by_ref",
+            "#5 not found",
+        ),
+        (
+            lambda s: wf.get_epic_overview("p", 5, session_id=s),
+            "/epics/by_ref",
+            "Epic #5 not found",
+        ),
+        (
+            lambda s: wf.create_story("p", "x", epic=5, session_id=s),
+            "/epics/by_ref",
+            "Epic #5 not found",
+        ),
+    ],
+)
+def test_real_404_on_by_ref_is_a_clear_not_found(session, mock_client, call, path, match):
+    mock_client.api.get.return_value = PROJECT
+    mock_client.list_resources.return_value = [{"user": 7, "full_name": "Bob", "email": "bob@x"}]
+    route(mock_client, get=_not_found(path))
+    with pytest.raises(ValueError, match=match):
+        call(session)
+    mock_client.api.post.assert_not_called()
+    mock_client.api.patch.assert_not_called()
+
+
+def test_set_status_tools_real_404(session, mock_client):
+    mock_client.api.get.return_value = PROJECT
+    mock_client.list_resources.return_value = [{"id": 1, "name": "Done"}]
+    route(mock_client, get={**_not_found("/userstories/by_ref"), **_not_found("/tasks/by_ref")})
+    with pytest.raises(ValueError, match="User story #5 not found"):
+        wf.set_story_status("p", 5, "Done", session_id=session)
+    with pytest.raises(ValueError, match="Task #5 not found"):
+        wf.set_task_status("p", 5, "Done", session_id=session)
+    mock_client.api.patch.assert_not_called()
+
+
+def test_update_story_relink_to_unknown_epic_real_404(session, mock_client):
+    route(
+        mock_client,
+        get={
+            "/projects/by_slug": PROJECT,
+            "/userstories/by_ref": {"id": 100, "ref": 5, "version": 1, "epics": []},
+            **_not_found("/epics/by_ref"),
+        },
+    )
+    with pytest.raises(ValueError, match="Epic #9 not found"):
+        wf.update_story("p", 5, epic=9, session_id=session)
+    mock_client.api.delete.assert_not_called()
+    mock_client.api.post.assert_not_called()
+
+
+def test_update_task_reparent_to_unknown_story_real_404(session, mock_client):
+    route(
+        mock_client,
+        get={
+            "/projects/by_slug": PROJECT,
+            "/tasks/by_ref": {"id": 200, "ref": 7, "version": 3},
+            **_not_found("/userstories/by_ref"),
+        },
+    )
+    with pytest.raises(ValueError, match="User story #44 not found"):
+        wf.update_task("p", 7, story_ref=44, session_id=session)
+    mock_client.api.patch.assert_not_called()

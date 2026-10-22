@@ -26,7 +26,7 @@ def get_issue(
 
     def do_get():
         proj = resolve._resolve_project(client, project)
-        issue = client.api.get("/issues/by_ref", params={"ref": ref, "project": proj["id"]})
+        issue = resolve._get_by_ref(client, "issues", ref, proj["id"])
         if not issue:
             raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
         # Single-item read: include the full description. Kept off the shared
@@ -160,7 +160,7 @@ def update_issue(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.get("/issues/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, "issues", ref, project_id)
         if not current:
             raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
 

@@ -62,7 +62,7 @@ def get_epic_overview(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        epic = client.api.get("/epics/by_ref", params={"ref": ref, "project": project_id})
+        epic = resolve._get_by_ref(client, "epics", ref, project_id)
         if not epic:
             raise ValueError(f"Epic #{ref} not found in project '{proj['slug']}'.")
 

@@ -31,7 +31,7 @@ def get_story(
 
     def do_get():
         proj = resolve._resolve_project(client, project)
-        story = client.api.get("/userstories/by_ref", params={"ref": ref, "project": proj["id"]})
+        story = resolve._get_by_ref(client, "userstories", ref, proj["id"])
         if not story:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
         # Single-item read: include the full description. The shared _story_summary
@@ -113,7 +113,7 @@ def create_story(
         # cleanly instead of leaving an orphaned (created-but-unlinked) story behind.
         epic_data = None
         if epic is not None:
-            epic_data = client.api.get("/epics/by_ref", params={"ref": epic, "project": project_id})
+            epic_data = resolve._get_by_ref(client, "epics", epic, project_id)
             if not epic_data:
                 raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
 
@@ -181,7 +181,7 @@ def update_story(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.get("/userstories/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, "userstories", ref, project_id)
         if not current:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
 
@@ -218,9 +218,7 @@ def update_story(
             # orphaned despite the caller seeing an error.
             new_epic = None
             if epic != 0:
-                new_epic = client.api.get(
-                    "/epics/by_ref", params={"ref": epic, "project": project_id}
-                )
+                new_epic = resolve._get_by_ref(client, "epics", epic, project_id)
                 if not new_epic:
                     raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
 
@@ -269,7 +267,7 @@ def set_story_status(
         project_id = proj["id"]
         status_id = resolve._resolve_status(client, project_id, "story", status, actual_session_id)
 
-        current = client.api.get("/userstories/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, "userstories", ref, project_id)
         if not current:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
 

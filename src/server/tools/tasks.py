@@ -39,7 +39,7 @@ def get_task(
 
     def do_get():
         proj = resolve._resolve_project(client, project)
-        task = client.api.get("/tasks/by_ref", params={"ref": ref, "project": proj["id"]})
+        task = resolve._get_by_ref(client, "tasks", ref, proj["id"])
         if not task:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
         # Single-item read: include the full description (see get_story rationale).
@@ -85,9 +85,7 @@ def create_task(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        story = client.api.get(
-            "/userstories/by_ref", params={"ref": story_ref, "project": project_id}
-        )
+        story = resolve._get_by_ref(client, "userstories", story_ref, project_id)
         if not story:
             raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
 
@@ -169,7 +167,7 @@ def update_task(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.get("/tasks/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, "tasks", ref, project_id)
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
@@ -190,9 +188,7 @@ def update_task(
             milestone = resolve._resolve_sprint(client, project_id, sprint)
             payload["milestone"] = milestone["id"]
         if story_ref is not None:
-            new_story = client.api.get(
-                "/userstories/by_ref", params={"ref": story_ref, "project": project_id}
-            )
+            new_story = resolve._get_by_ref(client, "userstories", story_ref, project_id)
             if not new_story:
                 raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
             payload["user_story"] = new_story["id"]
@@ -241,9 +237,7 @@ def break_down_story(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        story = client.api.get(
-            "/userstories/by_ref", params={"ref": story_ref, "project": project_id}
-        )
+        story = resolve._get_by_ref(client, "userstories", story_ref, project_id)
         if not story:
             raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
 
@@ -351,7 +345,7 @@ def set_task_status(
         project_id = proj["id"]
         status_id = resolve._resolve_status(client, project_id, "task", status, actual_session_id)
 
-        current = client.api.get("/tasks/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, "tasks", ref, project_id)
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
