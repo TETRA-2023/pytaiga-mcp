@@ -1,6 +1,7 @@
 """The FastMCP instance, its lifespan (env auto-auth), transport selection and main()."""
 
 import functools
+import inspect
 import logging
 import os
 import sys
@@ -64,7 +65,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("Server shutting down — clearing sessions.")
-        for wrapper in {id(w): w for w in core.active_sessions.values()}.values():
+        for wrapper in {id(w): w for w in list(core.active_sessions.values())}.values():
             wrapper.close()
         core.active_sessions.clear()
         core._session_cache.clear()
@@ -103,10 +104,24 @@ def tool(*args, **kwargs):
       (TaigaHTTP.refresh), and the shared dicts (active_sessions,
       _session_cache) only see single-key get/set/pop. Two concurrent misses
       on the same cache key may both fetch it; the reads are idempotent.
+      Closing a session's client defers until its in-flight requests end
+      (TaigaHTTP.close), and _cached never stores into a cache a concurrent
+      logout has cleared.
+    - Capacity: calls share anyio's default pool of 40 worker threads. A
+      cancelled or disconnected call keeps its thread until Taiga answers
+      (bounded by the 30 s client timeout). Raise the limit via
+      anyio.to_thread.current_default_thread_limiter() if a shared HTTP
+      deployment ever needs more concurrency.
     """
     register = mcp.tool(*args, **kwargs)
 
     def decorator(fn):
+        if inspect.iscoroutinefunction(fn):
+            # Already async: offloading would hand run_sync a coroutine function
+            # and return an un-awaited coroutine as the tool result.
+            register(fn)
+            return fn
+
         @functools.wraps(fn)
         async def run_in_worker_thread(*call_args, **call_kwargs):
             return await anyio.to_thread.run_sync(functools.partial(fn, *call_args, **call_kwargs))

@@ -241,6 +241,12 @@ class TaigaHTTP:
         self.auth_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._refresh_lock = threading.Lock()
+        # Tools run in worker threads (src/server/app.py:tool), so close() can be
+        # called while another thread's request is in flight. Close is deferred
+        # until the last in-flight request returns; new requests are refused.
+        self._state_lock = threading.Lock()
+        self._inflight = 0
+        self._closing = False
         self._http = httpx.Client(
             base_url=self.host + self.API_PATH,
             timeout=timeout,
@@ -333,9 +339,32 @@ class TaigaHTTP:
         return self.request("DELETE", path, params=params, **kwargs)
 
     def close(self) -> None:
-        self._http.close()
+        """Close the connection pool, once no request is in flight."""
+        with self._state_lock:
+            self._closing = True
+            idle = self._inflight == 0
+        if idle:
+            self._http.close()
 
-    def _send(
+    @property
+    def closed(self) -> bool:
+        return self._closing
+
+    def _send(self, *args: Any, **kwargs: Any) -> Union[Dict[str, Any], List[Any], str, None]:
+        with self._state_lock:
+            if self._closing:
+                raise TaigaException("Taiga session closed (logged out); log in again.")
+            self._inflight += 1
+        try:
+            return self._send_open(*args, **kwargs)
+        finally:
+            with self._state_lock:
+                self._inflight -= 1
+                close_now = self._closing and self._inflight == 0
+            if close_now:
+                self._http.close()
+
+    def _send_open(
         self,
         method: str,
         path: str,
@@ -414,16 +443,20 @@ class TaigaClientWrapper:
             raise TaigaException(f"Unexpected login error: {e}")
 
     def close(self) -> None:
-        """Release the HTTP connection pool. The wrapper is unauthenticated after."""
+        """Release the HTTP connection pool. The wrapper is unauthenticated after.
+
+        `api` is kept, not set to None: a tool already running in another thread
+        holds this wrapper and would crash on `api.get` (AttributeError on None).
+        Its in-flight request finishes; its next one gets a clear TaigaException.
+        """
         if self.api is not None:
             self.api.close()
-            self.api = None
 
     @property
     def is_authenticated(self) -> bool:
         """Checks if the client is currently authenticated (has an API instance with a token)."""
-        # Check if api exists and has a token
-        return self.api is not None and self.api.auth_token is not None
+        # Check if api exists, is still open, and has a token
+        return self.api is not None and not self.api.closed and self.api.auth_token is not None
 
     def _ensure_authenticated(self):
         """Internal helper to check authentication before API calls."""

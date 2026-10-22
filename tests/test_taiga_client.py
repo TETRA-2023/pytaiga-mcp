@@ -477,7 +477,7 @@ class TestGetResource:
 
     def test_fetches_single_resource_by_id(self):
         wrapper = TaigaClientWrapper(host="https://taiga.example")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "tok"
         wrapper.api.get.return_value = {"id": 5, "project": 1}
         result = wrapper.get_resource("user_stories", 5)
@@ -486,7 +486,7 @@ class TestGetResource:
 
     def test_rejects_unknown_resource_type(self):
         wrapper = TaigaClientWrapper(host="https://taiga.example")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "tok"
         with pytest.raises(ValueError, match="Unknown resource type"):
             wrapper.get_resource("bogus", 5)
@@ -526,7 +526,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_sends_disable_pagination_header(self):
         """Test list_resources sends x-disable-pagination header."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = [{"id": 1}]
         wrapper.list_resources("projects")
@@ -539,7 +539,7 @@ class TestTaigaClientWrapper:
         from src.taiga_client import _RESOURCE_ENDPOINTS
 
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = []
         for resource_type, endpoint in _RESOURCE_ENDPOINTS.items():
@@ -551,7 +551,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_with_filters(self):
         """Test list_resources passes filters as params."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = [{"id": 1}]
         result = wrapper.list_resources("issues", project_id=123, status=2)
@@ -569,7 +569,7 @@ class TestTaigaClientWrapper:
         param_name="swimnlane" so ?swimlane= is silently ignored by the backend.
         """
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = []
         wrapper.list_resources("user_stories", project_id=9, swimlane=17)
@@ -581,7 +581,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_user_stories_no_swimlane_unchanged(self):
         """Test list_resources does not inject 'swimnlane' when no 'swimlane' filter."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = []
         wrapper.list_resources("user_stories", project_id=9, status=65)
@@ -592,7 +592,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_user_stories_swimnlane_explicit_preserved(self):
         """Test caller-supplied 'swimnlane' is not overwritten by translation."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = []
         wrapper.list_resources("user_stories", project_id=9, swimlane=17, swimnlane=99)
@@ -603,7 +603,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_other_resource_swimlane_not_translated(self):
         """Test 'swimlane' filter on non-user_stories endpoints is not translated."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = []
         wrapper.list_resources("tasks", project_id=9, swimlane=17)
@@ -614,7 +614,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_user_stories_exclude_swimlane_not_translated(self):
         """Test 'exclude_swimlane' is passed through unchanged (no upstream typo there)."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = []
         wrapper.list_resources("user_stories", project_id=9, exclude_swimlane=17)
@@ -627,7 +627,7 @@ class TestTaigaClientWrapper:
     def test_list_resources_no_project_id(self):
         """Test list_resources omits project key when project_id is None."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         wrapper.api.get.return_value = [{"id": 1}]
         wrapper.list_resources("projects")
@@ -637,7 +637,49 @@ class TestTaigaClientWrapper:
     def test_list_resources_unknown_type(self):
         """Test list_resources raises for unknown resource type."""
         wrapper = TaigaClientWrapper(host="http://test:9000")
-        wrapper.api = MagicMock()
+        wrapper.api = MagicMock(closed=False)
         wrapper.api.auth_token = "test-token"
         with pytest.raises(ValueError, match="Unknown resource type"):
             wrapper.list_resources("nonexistent")
+
+
+class TestCloseWhileInFlight:
+    """Tools run in worker threads: a logout may close a client another thread is using."""
+
+    def test_close_waits_for_in_flight_request_then_refuses_new_ones(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def handler(request):
+            entered.set()
+            assert release.wait(timeout=5)
+            return httpx.Response(200, json={"ok": True})
+
+        api = _authed(handler)
+        result = {}
+        t = threading.Thread(target=lambda: result.setdefault("r", api.get("/users/me")))
+        t.start()
+        assert entered.wait(timeout=5)
+
+        api.close()  # e.g. logout from another thread, mid-request
+        assert api.closed
+        assert not api._http.is_closed, "pool closed under an in-flight request"
+
+        release.set()
+        t.join(timeout=5)
+        assert result["r"] == {"ok": True}  # the in-flight request completed
+        assert api._http.is_closed  # ...and the pool closed after it
+        with pytest.raises(TaigaException, match="session closed"):
+            api.get("/users/me")
+
+    def test_idle_close_is_immediate(self):
+        api = _authed(lambda request: httpx.Response(200, json={}))
+        api.close()
+        assert api._http.is_closed
+
+    def test_wrapper_close_keeps_api_but_unauthenticates(self):
+        # A tool already running holds the wrapper; api must not become None under it.
+        wrapper = TaigaClientWrapper(host=HOST)
+        wrapper.api = _authed(lambda request: httpx.Response(200, json={}))
+        wrapper.close()
+        assert wrapper.api is not None
+        assert wrapper.is_authenticated is False

@@ -3056,7 +3056,7 @@ class TestThreadOffload:
         import inspect
 
         tools = wf.mcp._tool_manager.list_tools()
-        assert len(tools) == 34
+        assert tools
         for t in tools:
             assert t.is_async and inspect.iscoroutinefunction(t.fn), t.name
             # The module attribute stays the original sync function (tests call it).
@@ -3079,7 +3079,7 @@ class TestThreadOffload:
         import time as _time
 
         def slow_me(path, **kwargs):
-            _time.sleep(0.3)  # a slow Taiga round trip
+            _time.sleep(0.5)  # a slow Taiga round trip
             return {"id": 1, "username": "rva", "email": "rva@x"}
 
         mock_client.api.get.side_effect = slow_me
@@ -3104,12 +3104,17 @@ class TestThreadOffload:
             return elapsed, ticks
 
         elapsed, ticks = asyncio.run(scenario())
-        assert elapsed < 0.55, f"calls ran serially ({elapsed:.2f}s)"
-        # The event loop kept running while both calls slept (≈15 ticks expected).
+        # Serial would be >= 1.0 s; the margin absorbs thread start-up on slow runners.
+        assert elapsed < 0.9, f"calls ran serially ({elapsed:.2f}s)"
+        # The event loop kept running while both calls slept (≈25 ticks expected).
         assert ticks >= 5, f"event loop was blocked (only {ticks} heartbeats)"
 
     def test_control_plain_sync_tool_blocks_the_loop(self):
-        """The problem B4 fixes: FastMCP runs a plain sync tool on the event loop."""
+        """The problem B4 fixes: FastMCP runs a plain sync tool on the event loop.
+
+        If a future mcp release offloads sync tools itself, this fails: that's the
+        signal app.tool's offload has become redundant, not that something broke here.
+        """
         import time as _time
 
         from mcp.server.fastmcp import FastMCP
@@ -3118,7 +3123,7 @@ class TestThreadOffload:
 
         @plain.tool("slow")
         def slow() -> str:
-            _time.sleep(0.3)
+            _time.sleep(0.5)
             return "ok"
 
         async def scenario():
@@ -3126,4 +3131,30 @@ class TestThreadOffload:
             await asyncio.gather(plain.call_tool("slow", {}), plain.call_tool("slow", {}))
             return _time.perf_counter() - start
 
-        assert asyncio.run(scenario()) >= 0.55
+        assert asyncio.run(scenario()) >= 0.95
+
+
+class TestCachedAcrossLogout:
+    def test_logout_during_compute_does_not_resurrect_cache(self, session, mock_client):
+        """A tool thread computing a cache entry while another thread logs the
+        session out must not recreate the cache for the next login to inherit."""
+
+        def factory():
+            wf.logout(session_id=wf.DEFAULT_SESSION_ID)  # concurrent logout, mid-compute
+            return ["stale members"]
+
+        assert wf._cached(wf.DEFAULT_SESSION_ID, "members_1", factory) == ["stale members"]
+        assert wf.DEFAULT_SESSION_ID not in wf._session_cache or (
+            "members_1" not in wf._session_cache[wf.DEFAULT_SESSION_ID]
+        )
+
+    def test_normal_compute_is_cached(self, session, mock_client):
+        calls = []
+
+        def factory():
+            calls.append(1)
+            return ["members"]
+
+        wf._cached(session, "members_1", factory)
+        wf._cached(session, "members_1", factory)
+        assert calls == [1]

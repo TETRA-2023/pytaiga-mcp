@@ -45,7 +45,9 @@ def _drop_session(session_id: str) -> None:
     "default", so closing on every pop would break the surviving alias.
     """
     wrapper = active_sessions.pop(session_id, None)
-    if wrapper is not None and not any(w is wrapper for w in active_sessions.values()):
+    # list() snapshots the values atomically: tools run in worker threads, and a
+    # concurrent login() inserting a key would break a live iteration.
+    if wrapper is not None and not any(w is wrapper for w in list(active_sessions.values())):
         wrapper.close()
 
 
@@ -105,8 +107,17 @@ def _cached(session_id: str, key: str, factory):
     Used by the resolvers in resolve.py to avoid re-fetching project lookup tables
     (statuses, members, priorities, …) on every tool call within a session.
     The cache is cleared when the session is logged out.
+
+    Tools run in worker threads, so a logout can clear the cache while this call
+    is still computing. The value is stored only if the session and its cache
+    dict are still the ones this call started with; otherwise a stale entry
+    could be inherited by the next login that takes the same session id.
     """
     cache = _session_cache_for(session_id)
-    if key not in cache:
-        cache[key] = factory()
-    return cache[key]
+    if key in cache:
+        return cache[key]
+    wrapper = active_sessions.get(session_id)
+    value = factory()
+    if active_sessions.get(session_id) is wrapper and _session_cache.get(session_id) is cache:
+        cache[key] = value
+    return value
