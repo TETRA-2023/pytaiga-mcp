@@ -1,13 +1,13 @@
-"""Workflow-oriented Taiga MCP server.
+"""Taiga MCP server.
 
-Exposes ~28 intent-based tools designed for everyday project management:
+Exposes intent-based tools designed for everyday project management:
 sprint planning, backlog grooming, team workload, epic tracking, task
 breakdown, wiki, and comments. All tools accept human-readable names
 (project slug, sprint name, status name, user email) and resolve them to
 API IDs internally.
 
-Start with:
-    TAIGA_SERVER_MODE=workflow  (default)
+Single server since v3: the former `full` CRUD mode and TAIGA_SERVER_MODE
+are gone. Start with `mcp-taiga [--sse | --streamable-http]`.
 """
 
 import json
@@ -59,7 +59,7 @@ def _clear_session_cache(session_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session helpers (mirrors server_full pattern)
+# Session helpers
 # ---------------------------------------------------------------------------
 
 
@@ -82,7 +82,7 @@ def _get_authenticated_client(session_id: str) -> TaigaClientWrapper:
 
 
 # ---------------------------------------------------------------------------
-# Error handling (mirrors server_full pattern)
+# Error handling
 # ---------------------------------------------------------------------------
 
 _TAIGA_API_ERROR_PLACEHOLDER = "No error message provided by API."
@@ -2446,9 +2446,25 @@ def add_comment(
 # ---------------------------------------------------------------------------
 
 
+def _warn_legacy_server_mode(env=None) -> None:
+    """Warn when a deployment still sets the pre-v3 TAIGA_SERVER_MODE.
+
+    v3 has one server, so the variable no longer selects anything. Start anyway
+    instead of failing: a stack still pinned to `full` keeps running (on the
+    single server's tools) and the log says why its CRUD tools are gone.
+    """
+    mode = (os.environ if env is None else env).get("TAIGA_SERVER_MODE", "").strip().lower()
+    if mode and mode != "workflow":
+        logger.warning(
+            f"TAIGA_SERVER_MODE={mode!r} is ignored: the full CRUD server was removed in v3. "
+            "Starting the single Taiga MCP server. Unset TAIGA_SERVER_MODE to silence this."
+        )
+
+
 def main() -> None:
+    _warn_legacy_server_mode()
     transport = _resolve_transport()
-    logger.info(f"Starting Taiga Workflow server with {transport} transport")
+    logger.info(f"Starting Taiga MCP server with {transport} transport")
     mcp.run(transport=transport)
 
 

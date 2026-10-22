@@ -1,177 +1,97 @@
+"""Integration tests against a real Taiga instance (run with `-m integration`).
+
+Read tests run against any account. Write tests need a sandbox project, named by
+slug in TAIGA_TEST_PROJECT, and are skipped without it: they create stories and
+tasks, and delete them again in `finally` through the session's raw client (the
+server has no delete tool yet). Never point TAIGA_TEST_PROJECT at a real project.
+
+    TAIGA_API_URL=... TAIGA_USERNAME=... TAIGA_PASSWORD=... \\
+    TAIGA_TEST_PROJECT=<sandbox-slug> ./run_integration_tests.sh
+"""
+
 import os
-import time
 import uuid
 
 import pytest
 
-import src.server_full
-from src.server_full import (
-    add_comment,
-    create_user_story,
-    delete_comment,
-    edit_comment,
-    get_comment_versions,
-    get_project,
-    list_comments,
-    list_projects,
-    list_user_stories,
-    login,
-    undelete_comment,
-    update_project,
-)
+import src.server_workflow as wf
 
-# Test constants - use environment variables or defaults for testing
 TEST_HOST = os.environ.get(
     "TAIGA_TEST_HOST", os.environ.get("TAIGA_API_URL", "http://localhost:9000")
 )
 TEST_USERNAME = os.environ.get("TAIGA_TEST_USERNAME", os.environ.get("TAIGA_USERNAME", "test"))
 TEST_PASSWORD = os.environ.get("TAIGA_TEST_PASSWORD", os.environ.get("TAIGA_PASSWORD", "test"))
+TEST_PROJECT = os.environ.get("TAIGA_TEST_PROJECT")
+
+needs_sandbox = pytest.mark.skipif(
+    not TEST_PROJECT, reason="set TAIGA_TEST_PROJECT to a sandbox project slug"
+)
 
 
-@pytest.mark.integration  # Mark these to run separately
-class TestTaigaIntegration:
-    @pytest.fixture
-    def session_id(self):
-        """Create a real session"""
-        result = login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)
-        return result["session_id"]
+@pytest.fixture
+def session_id():
+    """A real session, logged out afterwards."""
+    sid = wf.login(TEST_HOST, TEST_USERNAME, TEST_PASSWORD)["session_id"]
+    yield sid
+    wf.logout(sid)
 
-    def test_project_access(self, session_id):
-        """Test access to projects using real API calls"""
-        # 1. List projects
-        projects = list_projects(session_id)
 
-        # Verify we got at least one project
-        assert len(projects) > 0, "No projects found in your Taiga account"
+def _delete(session_id, resource, item_id):
+    """Best-effort cleanup through the raw client (no delete tool until v3 B5)."""
+    try:
+        wf.active_sessions[session_id].api.delete(f"/{resource}/{item_id}")
+    except Exception as e:  # leave a visible trace, don't mask the test's own failure
+        print(f"cleanup: could not delete {resource}/{item_id}: {e}")
 
-        # Prefer Project ID 10 (known working), otherwise avoid corrupted ID 9
-        project_id = next((p["id"] for p in projects if p["id"] == 10), None)
-        if not project_id:
-            project_id = next((p["id"] for p in projects if p["id"] != 9), projects[0]["id"])
 
-        # 2. Get details of a specific project - note: project_id first, then session_id
-        project = get_project(project_id, session_id)
-        assert project["id"] == project_id
+@pytest.mark.integration
+class TestReadOnly:
+    def test_list_projects_and_overview(self, session_id):
+        projects = wf.list_projects(session_id=session_id)
+        assert projects, "No projects visible to this account"
+        slug = TEST_PROJECT or projects[0]["slug"]
 
-        # Store the original name
-        original_name = project["name"]
+        overview = wf.get_project_overview(slug, session_id=session_id)
+        assert overview["project"]["slug"] == slug
 
-        try:
-            # 3. Update the project with a timestamp - note: project_id first, then kwargs dict, then session_id
-            new_name = f"{original_name} (Test {time.time()})"
-            updated = update_project(project_id, {"name": new_name}, session_id)
-            assert updated["name"] == new_name
+    def test_session_status(self, session_id):
+        status = wf.session_status(session_id=session_id)
+        assert status["status"] == "active"
 
-        finally:
-            # 4. Restore the original name
-            update_project(project_id, {"name": original_name}, session_id)
 
-    def test_user_story_workflow(self, session_id):
-        """Test user story creation and listing with real API calls"""
-        # Get the first project for testing
-        projects = list_projects(session_id)
-        print(f"DEBUG: Found {len(projects)} projects")  # DEBUG
-        assert len(projects) > 0, "No projects found in your Taiga account"
+@pytest.mark.integration
+@needs_sandbox
+class TestSandboxWrites:
+    def test_story_task_and_comment_round_trip(self, session_id):
+        """create → get by ref → update → task → comment, on real endpoints.
 
-        # Prefer Project ID 10 (known working), otherwise avoid corrupted ID 9
-        project_id = next((p["id"] for p in projects if p["id"] == 10), None)
-        if not project_id:
-            project_id = next((p["id"] for p in projects if p["id"] != 9), projects[0]["id"])
-        print(f"DEBUG: Using project ID {project_id}")  # DEBUG
-
-        # Create a user story with unique subject
-        subject = f"Test Story {uuid.uuid4()}"
-        description = "Integration test user story"
-
-        # Create the user story - note: project_id, subject, kwargs dict, session_id
-        story = create_user_story(project_id, subject, {"description": description}, session_id)
-        print(f"DEBUG: Created story: {story['id']} - {story['subject']}")  # DEBUG
-        story_id = story["id"]
-
-        try:
-            # Get the list of user stories and verify our story is there - note: project_id first
-            time.sleep(1)  # Small delay to ensure creation is complete
-            stories = list_user_stories(project_id, None, session_id)
-
-            found = False
-            for s in stories:
-                if s["id"] == story_id:
-                    found = True
-                    assert s["subject"] == subject
-                    break
-
-            assert found, "Created user story not found in stories list"
-
-        finally:
-            # Clean up - mark it as a test that can be ignored/deleted manually
-            # Note: story_id, kwargs dict, session_id
-            if "update_user_story" in dir(src.server):
-                src.server.update_user_story(
-                    story_id, {"subject": f"[TEST - CAN DELETE] {subject}"}, session_id
-                )
-
-    def test_comment_lifecycle(self, session_id):
-        """End-to-end: add → list → edit → versions → delete → list → undelete → list.
-
-        Regression test for the query-string-vs-body bug on Taiga's history endpoints
-        (delete_comment, undelete_comment, edit_comment, comment_versions). Mocked
-        unit tests cannot catch this because they do not observe the 404 Taiga returns
-        when the `id` query param is missing.
+        Covers the by-ref paths (stories and tasks) that the native client
+        migration (v3 B2) rewrites, plus a write with optimistic concurrency.
         """
-        projects = list_projects(session_id)
-        assert len(projects) > 0, "No projects found in your Taiga account"
-
-        project_id = next((p["id"] for p in projects if p["id"] == 10), None)
-        if not project_id:
-            project_id = next((p["id"] for p in projects if p["id"] != 9), projects[0]["id"])
-
-        subject = f"[TEST - CAN DELETE] comment lifecycle {uuid.uuid4()}"
-        story = create_user_story(project_id, subject, None, session_id)
-        story_id = story["id"]
-
-        original_text = f"first body {uuid.uuid4()}"
-        edited_text = f"edited body {uuid.uuid4()}"
-
+        subject = f"[TEST - CAN DELETE] round trip {uuid.uuid4()}"
+        story = wf.create_story(TEST_PROJECT, subject, session_id=session_id)
+        task_id = None
         try:
-            add_comment(story_id, "user_story", original_text, session_id)
-            time.sleep(1)  # let the history entry settle
+            got = wf.get_story(TEST_PROJECT, story["ref"], session_id=session_id)
+            assert got["subject"] == subject
 
-            comments = list_comments(story_id, "user_story", session_id)
-            ours = [c for c in comments if c["comment"] == original_text]
-            assert len(ours) == 1, f"Expected 1 new comment, got {len(ours)}"
-            comment_id = ours[0]["id"]
-
-            edit_result = edit_comment(story_id, "user_story", comment_id, edited_text, session_id)
-            assert edit_result["status"] == "comment_edited"
-
-            versions = get_comment_versions(story_id, "user_story", comment_id, session_id)
-            assert versions["comment_id"] == comment_id
-            assert len(versions["versions"]) >= 1, "Edit should have produced a version entry"
-
-            comments = list_comments(story_id, "user_story", session_id)
-            assert any(c["id"] == comment_id and c["comment"] == edited_text for c in comments), (
-                "Edited comment text not visible in list_comments"
+            wf.update_story(TEST_PROJECT, story["ref"], description="edited", session_id=session_id)
+            assert (
+                wf.get_story(TEST_PROJECT, story["ref"], session_id=session_id)["description"]
+                == "edited"
             )
 
-            delete_result = delete_comment(story_id, "user_story", comment_id, session_id)
-            assert delete_result["status"] == "comment_deleted"
-
-            comments = list_comments(story_id, "user_story", session_id)
-            assert not any(c["id"] == comment_id for c in comments), (
-                "Deleted comment should not appear in list_comments"
+            task = wf.create_task(TEST_PROJECT, story["ref"], "child task", session_id=session_id)
+            task_id = task["id"]
+            assert wf.get_task(TEST_PROJECT, task["ref"], session_id=session_id)["subject"] == (
+                "child task"
             )
 
-            undelete_result = undelete_comment(story_id, "user_story", comment_id, session_id)
-            assert undelete_result["status"] == "comment_restored"
-
-            comments = list_comments(story_id, "user_story", session_id)
-            assert any(c["id"] == comment_id for c in comments), (
-                "Restored comment should be visible again in list_comments"
+            result = wf.add_comment(
+                TEST_PROJECT, story["ref"], "integration comment", session_id=session_id
             )
+            assert result["status"] == "comment_added"
         finally:
-            # Match the existing pattern in this file: leave the story but mark it
-            # as a throwaway so maintainers can clean up manually later.
-            if "update_user_story" in dir(src.server):
-                src.server.update_user_story(
-                    story_id, {"subject": f"[TEST - CAN DELETE] {subject}"}, session_id
-                )
+            if task_id is not None:
+                _delete(session_id, "tasks", task_id)
+            _delete(session_id, "userstories", story["id"])

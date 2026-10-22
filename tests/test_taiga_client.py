@@ -262,3 +262,154 @@ class TestGetResource:
         wrapper.api.auth_token = "tok"
         with pytest.raises(ValueError, match="Unknown resource type"):
             wrapper.get_resource("bogus", 5)
+
+
+class TestTaigaClientWrapper:
+    """Tests for the TaigaClientWrapper class."""
+
+    def test_init_requires_host(self):
+        """Test wrapper requires a host."""
+        with pytest.raises(ValueError, match="Taiga host URL cannot be empty"):
+            TaigaClientWrapper(host="")
+
+    def test_init_sets_host(self):
+        """Test wrapper stores the host."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        assert wrapper.host == "http://test:9000"
+        assert wrapper.api is None
+
+    def test_is_authenticated_false_initially(self):
+        """Test wrapper is not authenticated initially."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        assert wrapper.is_authenticated is False
+
+    def test_ensure_authenticated_raises(self):
+        """Test _ensure_authenticated raises when not authenticated."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        with pytest.raises(PermissionError, match="Client not authenticated"):
+            wrapper._ensure_authenticated()
+
+    def test_list_resources_requires_auth(self):
+        """Test list_resources raises when not authenticated."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        with pytest.raises(PermissionError):
+            wrapper.list_resources("projects")
+
+    def test_list_resources_sends_disable_pagination_header(self):
+        """Test list_resources sends x-disable-pagination header."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = [{"id": 1}]
+        wrapper.list_resources("projects")
+        wrapper.api.get.assert_called_once_with(
+            "/projects", params={}, headers={"x-disable-pagination": "True"}
+        )
+
+    def test_list_resources_endpoint_mapping(self):
+        """Test list_resources maps resource types to correct endpoints."""
+        from src.taiga_client import _RESOURCE_ENDPOINTS
+
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        for resource_type, endpoint in _RESOURCE_ENDPOINTS.items():
+            wrapper.api.get.reset_mock()
+            wrapper.list_resources(resource_type)
+            call_args = wrapper.api.get.call_args
+            assert call_args[0][0] == endpoint, f"{resource_type} -> {endpoint}"
+
+    def test_list_resources_with_filters(self):
+        """Test list_resources passes filters as params."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = [{"id": 1}]
+        result = wrapper.list_resources("issues", project_id=123, status=2)
+        wrapper.api.get.assert_called_once_with(
+            "/issues",
+            params={"project": 123, "status": 2},
+            headers={"x-disable-pagination": "True"},
+        )
+        assert result == [{"id": 1}]
+
+    def test_list_resources_user_stories_swimlane_dual_emit(self):
+        """Test list_resources sends both 'swimlane' and 'swimnlane' for user_stories.
+
+        Workaround for upstream taiga-back typo (#68): SwimlanesFilter declares
+        param_name="swimnlane" so ?swimlane= is silently ignored by the backend.
+        """
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        wrapper.list_resources("user_stories", project_id=9, swimlane=17)
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert call_params["swimlane"] == 17
+        assert call_params["swimnlane"] == 17
+        assert call_params["project"] == 9
+
+    def test_list_resources_user_stories_no_swimlane_unchanged(self):
+        """Test list_resources does not inject 'swimnlane' when no 'swimlane' filter."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        wrapper.list_resources("user_stories", project_id=9, status=65)
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert "swimnlane" not in call_params
+        assert "swimlane" not in call_params
+
+    def test_list_resources_user_stories_swimnlane_explicit_preserved(self):
+        """Test caller-supplied 'swimnlane' is not overwritten by translation."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        wrapper.list_resources("user_stories", project_id=9, swimlane=17, swimnlane=99)
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert call_params["swimlane"] == 17
+        assert call_params["swimnlane"] == 99
+
+    def test_list_resources_other_resource_swimlane_not_translated(self):
+        """Test 'swimlane' filter on non-user_stories endpoints is not translated."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        wrapper.list_resources("tasks", project_id=9, swimlane=17)
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert call_params["swimlane"] == 17
+        assert "swimnlane" not in call_params
+
+    def test_list_resources_user_stories_exclude_swimlane_not_translated(self):
+        """Test 'exclude_swimlane' is passed through unchanged (no upstream typo there)."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = []
+        wrapper.list_resources("user_stories", project_id=9, exclude_swimlane=17)
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert call_params["exclude_swimlane"] == 17
+        assert "exclude_swimnlane" not in call_params
+        assert "swimlane" not in call_params
+        assert "swimnlane" not in call_params
+
+    def test_list_resources_no_project_id(self):
+        """Test list_resources omits project key when project_id is None."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        wrapper.api.get.return_value = [{"id": 1}]
+        wrapper.list_resources("projects")
+        call_params = wrapper.api.get.call_args[1]["params"]
+        assert "project" not in call_params
+
+    def test_list_resources_unknown_type(self):
+        """Test list_resources raises for unknown resource type."""
+        wrapper = TaigaClientWrapper(host="http://test:9000")
+        wrapper.api = MagicMock()
+        wrapper.api.auth_token = "test-token"
+        with pytest.raises(ValueError, match="Unknown resource type"):
+            wrapper.list_resources("nonexistent")

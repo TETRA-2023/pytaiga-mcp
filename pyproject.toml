@@ -28,8 +28,9 @@ dev = [
 ]
 
 [project.scripts]
+mcp-taiga = "src.server_workflow:main"
+# Pre-v3 name, kept for one release so existing launch configs keep working.
 mcp-taiga-workflow = "src.server_workflow:main"
-mcp-taiga-full = "src.server_full:main"
 
 [project.readme]
 file = "README.md"

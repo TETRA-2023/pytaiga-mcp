@@ -2916,3 +2916,20 @@ class TestSingleItemGettersReturnDescription:
         assert "description" not in wf._story_summary(blob)
         assert "description" not in wf._task_summary(blob)
         assert "description" not in wf._issue_summary(blob)
+
+
+class TestLegacyServerMode:
+    """v3 dropped the full server: TAIGA_SERVER_MODE no longer dispatches anything."""
+
+    def test_full_mode_warns_and_does_not_raise(self, caplog):
+        with caplog.at_level("WARNING", logger="src.server_workflow"):
+            wf._warn_legacy_server_mode({"TAIGA_SERVER_MODE": "full"})
+        assert "TAIGA_SERVER_MODE='full' is ignored" in caplog.text
+
+    @pytest.mark.parametrize(
+        "env", [{}, {"TAIGA_SERVER_MODE": "workflow"}, {"TAIGA_SERVER_MODE": ""}]
+    )
+    def test_unset_or_workflow_is_silent(self, caplog, env):
+        with caplog.at_level("WARNING", logger="src.server_workflow"):
+            wf._warn_legacy_server_mode(env)
+        assert "TAIGA_SERVER_MODE" not in caplog.text
