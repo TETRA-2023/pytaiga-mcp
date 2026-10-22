@@ -320,8 +320,11 @@ class TaigaHTTP:
         json: Any = None,
         files: Any = None,
         headers: Optional[Dict[str, str]] = None,
+        data: Optional[Dict[str, Any]] = None,
     ) -> Union[Dict[str, Any], List[Any], str, None]:
-        return self._send(method, path, params=params, json=json, files=files, headers=headers)
+        return self._send(
+            method, path, params=params, json=json, files=files, headers=headers, data=data
+        )
 
     def get(self, path: str, params: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
         return self.request("GET", path, params=params, **kwargs)
@@ -373,11 +376,12 @@ class TaigaHTTP:
         files: Any = None,
         headers: Optional[Dict[str, str]] = None,
         authenticate: bool = True,
+        data: Optional[Dict[str, Any]] = None,
     ) -> Union[Dict[str, Any], List[Any], str, None]:
         token = self.auth_token if authenticate else None
-        response = self._raw(method, path, params, json, files, headers, token)
+        response = self._raw(method, path, params, json, files, headers, token, data)
         if response.status_code == 401 and token is not None and self.refresh(token):
-            response = self._raw(method, path, params, json, files, headers, self.auth_token)
+            response = self._raw(method, path, params, json, files, headers, self.auth_token, data)
         # Method, path and status only: never bodies or headers (credentials).
         logger.debug(f"{method} {path} -> {response.status_code}")
         if not response.is_success:
@@ -389,7 +393,7 @@ class TaigaHTTP:
         except ValueError:
             return response.text
 
-    def _raw(self, method, path, params, json, files, headers, token) -> httpx.Response:
+    def _raw(self, method, path, params, json, files, headers, token, data=None) -> httpx.Response:
         request_headers = dict(headers or {})
         if token:
             request_headers["Authorization"] = f"Bearer {token}"
@@ -399,6 +403,8 @@ class TaigaHTTP:
                 path.lstrip("/"),
                 params=_encode_params(params),
                 json=json,
+                # Form fields; with files= this is a multipart upload (attachments).
+                data=data,
                 files=files,
                 headers=request_headers,
             )

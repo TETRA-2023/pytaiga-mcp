@@ -3649,3 +3649,205 @@ class TestActivityComments:
     def test_short_comment_untouched(self):
         s = wf._summarize_timeline_event(self._event("short"))
         assert s["comment"] == "short" and "comment_truncated" not in s
+
+
+# ---------------------------------------------------------------------------
+# v3 B7: attachments & tags. Shapes taken from real Taiga.
+# ---------------------------------------------------------------------------
+
+import base64 as _b64  # noqa: E402
+
+ATTACHMENT = {
+    "id": 183,
+    "name": "spec.txt",
+    "size": 5,
+    "description": "d",
+    "url": "https://taiga.example/media/attachments/x/spec.txt",
+    "is_deprecated": False,
+    "object_id": 50,
+    "created_date": "2026-10-22T13:11:07Z",
+}
+
+
+class TestAttachments:
+    def test_list_unpaginated_by_object_and_project(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY, "/userstories/attachments": [ATTACHMENT]},
+        )
+        result = wf.list_attachments("p", 3, session_id=session)
+        assert result == [
+            {
+                "id": 183,
+                "name": "spec.txt",
+                "size": 5,
+                "description": "d",
+                "url": ATTACHMENT["url"],
+                "is_deprecated": False,
+                "created_at": "2026-10-22T13:11:07Z",
+            }
+        ]
+        mock_client.api.get.assert_any_call(
+            "/userstories/attachments",
+            params={"object_id": 50, "project": 1},
+            headers={"x-disable-pagination": "True"},
+        )
+
+    def test_add_decodes_base64_and_uploads_multipart(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/tasks/by_ref": {"id": 77}},
+            post={"/tasks/attachments": {**ATTACHMENT, "object_id": 77}},
+        )
+        content = _b64.b64encode(b"hello").decode()
+        result = wf.add_attachment(
+            "p",
+            9,
+            "../../etc/spec.txt",
+            content,
+            description="d",
+            entity_type="task",
+            session_id=session,
+        )
+        assert result["status"] == "attached" and result["id"] == 183
+        mock_client.api.post.assert_called_once_with(
+            "/tasks/attachments",
+            data={"project": "1", "object_id": "77", "description": "d"},
+            files={"attached_file": ("spec.txt", b"hello", "text/plain")},  # basename only
+        )
+
+    @pytest.mark.parametrize(
+        "filename,content,match",
+        [
+            ("", "aGVsbG8=", "filename must not be empty"),
+            ("a.txt", "not base64!!", "not valid base64"),
+            ("a.txt", "", "empty file"),
+        ],
+    )
+    def test_add_rejects_bad_input_before_any_call(
+        self, session, mock_client, filename, content, match
+    ):
+        with pytest.raises(ValueError, match=match):
+            wf.add_attachment("p", 3, filename, content, session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    def test_add_rejects_over_10mb(self, session, mock_client, monkeypatch):
+        from src.server.tools import attachments as att
+
+        monkeypatch.setattr(att, "_MAX_ATTACHMENT_BYTES", 4)
+        with pytest.raises(ValueError, match="limit"):
+            wf.add_attachment(
+                "p", 3, "a.txt", _b64.b64encode(b"hello").decode(), session_id=session
+            )
+        mock_client.api.post.assert_not_called()
+
+    def test_delete_checks_ownership_then_deletes(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY, "/userstories/attachments/183": ATTACHMENT},
+            delete={"/userstories/attachments/183": None},
+        )
+        result = wf.delete_attachment("p", 3, 183, session_id=session)
+        assert result["status"] == "deleted" and result["name"] == "spec.txt"
+        mock_client.api.delete.assert_called_once_with("/userstories/attachments/183")
+
+    def test_delete_refuses_attachment_of_another_item(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": STORY,
+                "/userstories/attachments/183": {**ATTACHMENT, "object_id": 999},
+            },
+        )
+        with pytest.raises(ValueError, match="not attached to story #3"):
+            wf.delete_attachment("p", 3, 183, session_id=session)
+        mock_client.api.delete.assert_not_called()
+
+    def test_delete_unknown_attachment_real_404(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": STORY,
+                "/userstories/attachments/5": _api_error(TaigaNotFoundError, 404),
+            },
+        )
+        with pytest.raises(ValueError, match="not attached"):
+            wf.delete_attachment("p", 3, 5, session_id=session)
+        mock_client.api.delete.assert_not_called()
+
+
+class TestTags:
+    def test_list_sorted_with_colors(self, session, mock_client):
+        route(
+            mock_client,
+            get={"/projects/by_slug": PROJECT, "/projects/1/tags_colors": {"b": None, "a": "#fff"}},
+        )
+        assert wf.list_tags("p", session_id=session) == [
+            {"tag": "a", "color": "#fff"},
+            {"tag": "b", "color": None},
+        ]
+
+    @pytest.mark.parametrize(
+        "kwargs,payload",
+        [
+            ({"new_name": "y"}, {"from_tag": "x", "to_tag": "y"}),
+            ({"color": "#A5694F"}, {"from_tag": "x", "color": "#A5694F"}),
+            ({"new_name": "y", "color": "#000"}, {"from_tag": "x", "to_tag": "y", "color": "#000"}),
+        ],
+    )
+    def test_rename_uses_from_tag_to_tag(self, session, mock_client, kwargs, payload):
+        # Real Taiga's EditTagTagValidator: from_tag/to_tag/color (the pre-v3
+        # full server sent tag/new_tag, which Taiga does not read).
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, post={"/projects/1/edit_tag": None})
+        wf.rename_tag("p", "x", session_id=session, **kwargs)
+        assert sent(mock_client, "post", "/projects/1/edit_tag") == [payload]
+
+    def test_rename_needs_a_change(self, session, mock_client):
+        with pytest.raises(ValueError, match="new_name, color, or both"):
+            wf.rename_tag("p", "x", session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    def test_merge(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, post={"/projects/1/mix_tags": None})
+        result = wf.merge_tags("p", [" a ", "b", ""], "c", session_id=session)
+        assert result == {"status": "tags_merged", "from_tags": ["a", "b"], "to_tag": "c"}
+        assert sent(mock_client, "post", "/projects/1/mix_tags") == [
+            {"from_tags": ["a", "b"], "to_tag": "c"}
+        ]
+
+    @pytest.mark.parametrize(
+        "from_tags,to_tag,match",
+        [
+            ([], "c", "at least one"),
+            (["a"], "", "to_tag must not be empty"),
+            (["a"], "a", "not be one of"),
+        ],
+    )
+    def test_merge_validation(self, session, mock_client, from_tags, to_tag, match):
+        with pytest.raises(ValueError, match=match):
+            wf.merge_tags("p", from_tags, to_tag, session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "tool,args", [("rename_tag", ("p", "x", "y")), ("merge_tags", ("p", ["a"], "c"))]
+    )
+    def test_403_says_project_admin_required(self, session, mock_client, tool, args):
+        from src.taiga_client import TaigaAuthenticationError
+
+        mock_client.api.get.return_value = PROJECT
+        denied = TaigaAuthenticationError(
+            403, "You do not have permission to perform this action.", {}
+        )
+        path = "/projects/1/edit_tag" if tool == "rename_tag" else "/projects/1/mix_tags"
+        route(mock_client, post={path: denied})
+        with pytest.raises(
+            TaigaAuthenticationError, match=f"{tool} requires project admin rights on 'p'"
+        ):
+            getattr(wf, tool)(*args, session_id=session)

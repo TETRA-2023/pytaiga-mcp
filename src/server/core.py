@@ -1,10 +1,12 @@
 """Session registry, per-session cache and the tool error wrapper."""
 
 import logging
+from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 from src.taiga_client import (
     TaigaAPIError,
+    TaigaAuthenticationError,
     TaigaClientWrapper,
     TaigaException,
 )
@@ -121,3 +123,23 @@ def _cached(session_id: str, key: str, factory):
     if active_sessions.get(session_id) is wrapper and _session_cache.get(session_id) is cache:
         cache[key] = value
     return value
+
+
+@contextmanager
+def _admin_required(action: str, project_slug: str):
+    """Re-raise Taiga's bare 403 on an admin-only endpoint as an explicit message.
+
+    Taiga answers "You do not have permission to perform this action." The
+    operator account (rva) is write-tier everywhere, so on these endpoints a
+    403 almost always means "this needs project admin" — say so.
+    """
+    try:
+        yield
+    except TaigaAuthenticationError as e:
+        if e.status_code != 403:
+            raise
+        raise TaigaAuthenticationError(
+            403,
+            f"{action} requires project admin rights on '{project_slug}' (Taiga: {e.error_detail})",
+            e.body,
+        ) from e

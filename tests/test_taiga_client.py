@@ -683,3 +683,25 @@ class TestCloseWhileInFlight:
         wrapper.close()
         assert wrapper.api is not None
         assert wrapper.is_authenticated is False
+
+
+class TestMultipartUpload:
+    def test_data_and_files_sent_as_multipart(self):
+        seen = {}
+
+        def handler(request):
+            seen["ctype"] = request.headers["content-type"]
+            seen["body"] = request.content
+            return httpx.Response(201, json={"id": 1})
+
+        api = _authed(handler)
+        api.post(
+            "/userstories/attachments",
+            data={"project": "13", "object_id": "50"},
+            files={"attached_file": ("a.txt", b"hello", "text/plain")},
+        )
+        assert seen["ctype"].startswith("multipart/form-data")
+        body = seen["body"]
+        assert b'name="project"' in body and b"13" in body
+        assert b'name="object_id"' in body
+        assert b'filename="a.txt"' in body and b"hello" in body

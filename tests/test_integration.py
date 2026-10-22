@@ -323,6 +323,8 @@ class TestSandboxWrites:
             for resource in ("tasks", "epics", "wiki", "userstories", "milestones"):
                 for item_id in made[resource]:
                     _delete(session_id, resource, item_id)
+            # A tag outlives the items that used it in the project's tag list.
+            sess.api.post(f"/projects/{project_id}/delete_tag", json={"tag": f"t{tag}"})
         stories_after = len(sess.list_resources("user_stories", project_id=project_id))
         assert stories_after == stories_before
 
@@ -395,3 +397,63 @@ class TestSandboxWrites:
                 wf.delete_item(TEST_PROJECT, "story", story["ref"], session_id=session_id)
             except Exception:
                 _delete(session_id, "userstories", story["id"])
+
+    def test_b7_attachments_and_tags_on_real_taiga(self, session_id):
+        """v3 B7: multipart upload round trip (bytes compared), ownership guard on delete,
+        and tag rename/merge (rva is project admin on the smartagile sandbox)."""
+        import base64
+
+        import httpx
+
+        tag = uuid.uuid4().hex[:8]
+        api = wf.active_sessions[session_id].api
+        project_id = wf.get_project_overview(TEST_PROJECT, session_id=session_id)["project"]["id"]
+        a = wf.create_story(
+            TEST_PROJECT,
+            f"[TEST - CAN DELETE] b7a {tag}",
+            tags=[f"x{tag}", f"y{tag}"],
+            session_id=session_id,
+        )
+        b = wf.create_story(TEST_PROJECT, f"[TEST - CAN DELETE] b7b {tag}", session_id=session_id)
+        try:
+            content = f"attachment {tag} ✓\n".encode()
+            added = wf.add_attachment(
+                TEST_PROJECT,
+                a["ref"],
+                f"probe-{tag}.txt",
+                base64.b64encode(content).decode(),
+                description="b7",
+                session_id=session_id,
+            )
+            assert added["status"] == "attached" and added["size"] == len(content)
+            listed = wf.list_attachments(TEST_PROJECT, a["ref"], session_id=session_id)
+            assert [x["name"] for x in listed] == [f"probe-{tag}.txt"]
+            assert httpx.get(listed[0]["url"], timeout=30, follow_redirects=True).content == content
+
+            with pytest.raises(ValueError, match="not attached"):  # wrong item: nothing deleted
+                wf.delete_attachment(TEST_PROJECT, b["ref"], added["id"], session_id=session_id)
+            assert len(wf.list_attachments(TEST_PROJECT, a["ref"], session_id=session_id)) == 1
+            wf.delete_attachment(TEST_PROJECT, a["ref"], added["id"], session_id=session_id)
+            assert wf.list_attachments(TEST_PROJECT, a["ref"], session_id=session_id) == []
+
+            tags = {t["tag"] for t in wf.list_tags(TEST_PROJECT, session_id=session_id)}
+            assert {f"x{tag}", f"y{tag}"} <= tags
+            wf.rename_tag(
+                TEST_PROJECT, f"x{tag}", new_name=f"z{tag}", color="#A5694F", session_id=session_id
+            )
+            colors = {
+                t["tag"]: t["color"] for t in wf.list_tags(TEST_PROJECT, session_id=session_id)
+            }
+            assert colors.get(f"z{tag}") == "#A5694F" and f"x{tag}" not in colors
+            wf.merge_tags(TEST_PROJECT, [f"y{tag}"], f"z{tag}", session_id=session_id)
+            assert [t[0] for t in api.get(f"/userstories/{a['id']}")["tags"]] == [f"z{tag}"]
+            with pytest.raises(TaigaBadRequestError, match="doesn't exist"):
+                wf.rename_tag(TEST_PROJECT, f"nope{tag}", new_name="q", session_id=session_id)
+        finally:
+            for story in (a, b):
+                try:
+                    wf.delete_item(TEST_PROJECT, "story", story["ref"], session_id=session_id)
+                except Exception:
+                    _delete(session_id, "userstories", story["id"])
+            for t in [t for t in api.get(f"/projects/{project_id}/tags_colors") if tag in t]:
+                api.post(f"/projects/{project_id}/delete_tag", json={"tag": t})
