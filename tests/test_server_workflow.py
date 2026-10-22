@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from pytaigaclient.exceptions import (
@@ -2050,9 +2050,33 @@ class TestCreateEpic:
         assert result["stories_linked"] == 1
         mock_client.api.epics.create.assert_called_once_with(project=1, subject="Big")
         mock_client.api.post.assert_called_once_with(
-            "/epics/7/related_userstories/bulk_create",
-            json={"project_id": 1, "bulk_userstories": [120]},
+            "/epics/7/related_userstories",
+            json={"epic": 7, "user_story": 120},
         )
+
+    def test_links_each_story_and_never_uses_bulk_create(self, session, mock_client):
+        """Regression for #143: /related_userstories/bulk_create creates NEW stories
+        from subject lines, so linking must be one POST per story."""
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.epics.create.return_value = {"id": 7, "ref": 70, "subject": "Big"}
+        mock_client.list_resources.return_value = [{"ref": 12, "id": 120}, {"ref": 13, "id": 130}]
+        result = wf.create_epic("p", "Big", story_refs=[12, 13], session_id=session)
+        assert result["stories_linked"] == 2
+        assert mock_client.api.post.call_args_list == [
+            call("/epics/7/related_userstories", json={"epic": 7, "user_story": 120}),
+            call("/epics/7/related_userstories", json={"epic": 7, "user_story": 130}),
+        ]
+        for c in mock_client.api.post.call_args_list:
+            assert "bulk_create" not in c.args[0]
+
+    def test_partial_link_failure_raises_with_epic_ref(self, session, mock_client):
+        """A failed link must not be reported as success (#143 reported false success)."""
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.api.epics.create.return_value = {"id": 7, "ref": 70, "subject": "Big"}
+        mock_client.list_resources.return_value = [{"ref": 12, "id": 120}, {"ref": 13, "id": 130}]
+        mock_client.api.post.side_effect = [None, TaigaException("boom")]
+        with pytest.raises(TaigaException, match=r"Epic #70 .*linked only 1 of 2.*#13: boom"):
+            wf.create_epic("p", "Big", story_refs=[12, 13], session_id=session)
 
     def test_creates_epic_minimal(self, session, mock_client):
         mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}

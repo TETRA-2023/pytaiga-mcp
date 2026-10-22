@@ -2,6 +2,91 @@
 
 <!-- version list -->
 
+## v2.1.12 (2026-10-22)
+
+### Bug Fixes
+
+- Link epic stories one by one instead of creating a junk story (#143)
+  ([#176](https://github.com/TETRA-2023/pytaiga-mcp/pull/176),
+  [`2c1d8ae`](https://github.com/TETRA-2023/pytaiga-mcp/commit/2c1d8ae97548a924f75b363426a823db6f94aa6b))
+
+
+## v2.1.11 (2026-10-19)
+
+### Bug Fixes
+
+- Bump mcp from 1.28.1 to 1.30.0 ([#174](https://github.com/TETRA-2023/pytaiga-mcp/pull/174),
+  [`de16998`](https://github.com/TETRA-2023/pytaiga-mcp/commit/de169982dbb5490ca7965a0739bd7e70d4016b1f))
+
+
+## v2.1.10 (2026-10-19)
+
+### Bug Fixes
+
+- Bump pre-commit from 4.6.2 to 4.7.0 ([#172](https://github.com/TETRA-2023/pytaiga-mcp/pull/172),
+  [`419e58d`](https://github.com/TETRA-2023/pytaiga-mcp/commit/419e58d3d94005ba06e11b581d0847914a66f0a7))
+
+
+## v2.1.9 (2026-10-19)
+
+### Bug Fixes
+
+- Bump pydantic-settings from 2.15.0 to 2.16.0
+  ([#173](https://github.com/TETRA-2023/pytaiga-mcp/pull/173),
+  [`37a03c7`](https://github.com/TETRA-2023/pytaiga-mcp/commit/37a03c79d2dd15ae79ad6fef8abb8894653e7f9c))
+
+
+## v2.1.8 (2026-10-19)
+
+### Bug Fixes
+
+- Bump pydantic from 2.14.0 to 2.14.1 ([#170](https://github.com/TETRA-2023/pytaiga-mcp/pull/170),
+  [`07bf3e0`](https://github.com/TETRA-2023/pytaiga-mcp/commit/07bf3e07dbda4bd9b254e6a628255fa8f6eb8e5f))
+
+
+## v2.1.7 (2026-10-19)
+
+### Bug Fixes
+
+- Bump ruff from 0.16.10 to 0.17.1 ([#171](https://github.com/TETRA-2023/pytaiga-mcp/pull/171),
+  [`a479f88`](https://github.com/TETRA-2023/pytaiga-mcp/commit/a479f88f7eb251cb270f96bb0e54bf03c8689b0c))
+
+
+## v2.1.6 (2026-10-12)
+
+### Bug Fixes
+
+- Bump pydantic from 2.13.5 to 2.14.0 ([#169](https://github.com/TETRA-2023/pytaiga-mcp/pull/169),
+  [`7cba0bd`](https://github.com/TETRA-2023/pytaiga-mcp/commit/7cba0bd444eed950b850b7637a86469aa713b950))
+
+
+## v2.1.5 (2026-10-07)
+
+### Bug Fixes
+
+- **deps**: Pin mcp<2 before a relock pulls the FastMCP-less 2.x
+  ([#167](https://github.com/TETRA-2023/pytaiga-mcp/pull/167),
+  [`33b8e31`](https://github.com/TETRA-2023/pytaiga-mcp/commit/33b8e3192f88af052e8aaa59e6e78d51bd6a3cdc))
+
+### Continuous Integration
+
+- Gate merges and :stable on a container smoke test (initialize + tools/list)
+  ([#168](https://github.com/TETRA-2023/pytaiga-mcp/pull/168),
+  [`dc65bbf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc65bbf0745168820963f4564d04bd4cd19d737b))
+
+- **deps**: Auto-merge with the GH_TOKEN PAT so merges fire main's CI and release
+  ([#166](https://github.com/TETRA-2023/pytaiga-mcp/pull/166),
+  [`fb10d8f`](https://github.com/TETRA-2023/pytaiga-mcp/commit/fb10d8fa24557a94de2dc64640454a6edf31dad2))
+
+- **smoke**: Pipe the script on stdin instead of bind-mounting it
+  ([#168](https://github.com/TETRA-2023/pytaiga-mcp/pull/168),
+  [`dc65bbf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc65bbf0745168820963f4564d04bd4cd19d737b))
+
+- **smoke**: Run the server under test with --network none
+  ([#168](https://github.com/TETRA-2023/pytaiga-mcp/pull/168),
+  [`dc65bbf`](https://github.com/TETRA-2023/pytaiga-mcp/commit/dc65bbf0745168820963f4564d04bd4cd19d737b))
+
+
 ## v2.1.4 (2026-10-06)
 
 ### Bug Fixes

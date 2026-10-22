@@ -4420,10 +4420,23 @@ def bulk_link_user_stories_to_epic(
     taiga_client_wrapper = _get_authenticated_client(actual_session_id)
 
     def do_bulk():
-        taiga_client_wrapper.api.post(
-            f"/epics/{epic_id}/related_userstories/bulk_create",
-            json={"project_id": project_id, "bulk_userstories": user_story_ids},
-        )
+        # One POST per story. Do NOT use /related_userstories/bulk_create: it
+        # creates NEW stories from newline-separated subjects, so a list of ids
+        # became one junk story and nothing was linked (pytaiga-mcp#143).
+        failed = []
+        for us_id in user_story_ids:
+            try:
+                taiga_client_wrapper.api.post(
+                    f"/epics/{epic_id}/related_userstories",
+                    json={"epic": epic_id, "user_story": us_id},
+                )
+            except TaigaException as e:
+                failed.append(f"{us_id}: {e}")
+        if failed:
+            raise TaigaException(
+                f"Linked only {len(user_story_ids) - len(failed)} of {len(user_story_ids)} "
+                f"stories to epic {epic_id}. Failed: {'; '.join(failed)}"
+            )
         return {
             "status": "linked",
             "epic_id": epic_id,

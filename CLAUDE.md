@@ -85,7 +85,7 @@ Pre-commit hooks run ruff (lint + format) and unit tests automatically.
 
 - Pagination disabled globally via `x-disable-pagination: True` header (Taiga default PAGE_SIZE=30 is too low)
 - Comments use raw HTTP (PATCH with version for optimistic concurrency, GET history for listing)
-- `link_user_story_to_epic` uses raw POST to `/epics/{id}/related_userstories`
+- Epic links (`link_user_story_to_epic`, `create_epic(story_refs=)`, `bulk_link_user_stories_to_epic`) use one raw POST per story to `/epics/{id}/related_userstories` with `{epic, user_story}`. Never `/related_userstories/bulk_create`: it creates NEW stories from newline-separated subjects (#143)
 - `_COMMENT_TYPE_MAP` translates user-facing types to API path segments
 
 ## Contributing
