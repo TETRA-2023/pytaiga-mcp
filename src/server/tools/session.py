@@ -4,11 +4,11 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
+from src import taiga_client
 from src.config import settings
 from src.server import app, core
 from src.taiga_client import (
     TaigaAuthenticationError,
-    TaigaClientWrapper,
     TaigaException,
 )
 
@@ -57,7 +57,7 @@ def login(
             "Credentials required. Set TAIGA_USERNAME/TAIGA_PASSWORD or pass parameters."
         )
     try:
-        wrapper = TaigaClientWrapper(host=actual_host)
+        wrapper = taiga_client.TaigaClientWrapper(host=actual_host)
         if wrapper.login(username=actual_username, password=actual_password):
             session_id = str(uuid.uuid4())
             core.active_sessions[session_id] = wrapper
@@ -102,6 +102,7 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
         except TaigaAuthenticationError:
             # Only a rejected token ends the session; a timeout or 5xx is transient.
             core._drop_session(actual_session_id)
+            core._clear_session_cache(actual_session_id)
             return {
                 "status": "inactive",
                 "reason": "token_invalid",

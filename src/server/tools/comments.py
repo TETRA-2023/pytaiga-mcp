@@ -9,13 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 # entity_type -> REST path segment (also the by_ref route prefix).
-_COMMENT_PATH_MAP = {
-    "story": "userstories",
-    "user_story": "userstories",
-    "task": "tasks",
-    "issue": "issues",
-    "epic": "epics",
-}
+_COMMENT_PATH_MAP = resolve._ENTITY_PATH_MAP
 
 
 # ---------------------------------------------------------------------------

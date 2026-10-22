@@ -7,7 +7,7 @@ from unittest.mock import DEFAULT, MagicMock, call
 import pytest
 
 import src.server_workflow as wf
-from src.server.tools import session as session_tools
+from src import taiga_client
 from src.taiga_client import (
     TaigaAPIError,
     TaigaAuthenticationError,
@@ -709,6 +709,17 @@ class TestSessionStatusParity:
         assert result["reason"] == "token_invalid"
         assert result["session_id"] == session
         assert session not in wf.active_sessions
+
+    def test_token_invalid_clears_session_cache(self, session, mock_client):
+        # Like logout(): a dropped session must not leave its lookup cache behind
+        # for the next login() that reuses the same id (e.g. "default").
+        wf._session_cache_for(session)["members_1"] = ["stale"]
+        route(
+            mock_client,
+            get={"/users/me": TaigaAuthenticationError(401, "Token is invalid")},
+        )
+        wf.session_status(session_id=session)
+        assert session not in wf._session_cache
 
     def test_transient_error_keeps_session(self, session, mock_client):
         # A timeout or 5xx says nothing about the token: keep the session.
@@ -2509,8 +2520,8 @@ class TestLogin:
     def test_login_success_creates_session(self, monkeypatch):
         wrapper = MagicMock()
         wrapper.login.return_value = True
-        # login() looks TaigaClientWrapper up in its own module.
-        monkeypatch.setattr(session_tools, "TaigaClientWrapper", lambda host: wrapper)
+        # login() and the lifespan look TaigaClientWrapper up via src.taiga_client.
+        monkeypatch.setattr(taiga_client, "TaigaClientWrapper", lambda host: wrapper)
         result = wf.login(host="https://taiga.example", username="u", password="p")
         assert "session_id" in result
         assert wf.active_sessions[result["session_id"]] is wrapper
@@ -2519,8 +2530,8 @@ class TestLogin:
     def test_login_failure_raises(self, monkeypatch):
         wrapper = MagicMock()
         wrapper.login.return_value = False
-        # login() looks TaigaClientWrapper up in its own module.
-        monkeypatch.setattr(session_tools, "TaigaClientWrapper", lambda host: wrapper)
+        # login() and the lifespan look TaigaClientWrapper up via src.taiga_client.
+        monkeypatch.setattr(taiga_client, "TaigaClientWrapper", lambda host: wrapper)
         # The bare RuntimeError("Login failed.") is re-wrapped by the generic
         # handler into the "unexpected server error" message.
         with pytest.raises(RuntimeError, match="unexpected server error"):

@@ -85,7 +85,7 @@ Pre-commit hooks run gitleaks, ruff (lint + format) and the unit tests automatic
 - Query params are encoded like `requests` did: `None` dropped, booleans as `"True"`/`"False"`.
 - Comments use raw HTTP (PATCH with version for optimistic concurrency, GET history for listing)
 - Epic links (`create_epic(story_refs=)`, `create_story(epic=)`, `update_story(epic=)`) use one raw POST per story to `/epics/{id}/related_userstories` with `{epic, user_story}`. Never `/related_userstories/bulk_create`: it creates NEW stories from newline-separated subjects (#143)
-- `_COMMENT_PATH_MAP` translates user-facing entity types to API path segments
+- `resolve._ENTITY_PATH_MAP` translates user-facing entity types (story, task, issue, epic) to API path segments; add_comment and assign_item share it
 
 ## Contributing
 

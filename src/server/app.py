@@ -8,9 +8,9 @@ from typing import AsyncIterator
 
 from mcp.server.fastmcp import FastMCP
 
+from src import taiga_client
 from src.config import settings
 from src.server import core
-from src.taiga_client import TaigaClientWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
     if settings.has_credentials:
         logger.info("Environment credentials detected. Attempting auto-authentication...")
         try:
-            wrapper = TaigaClientWrapper(host=settings.host)
+            wrapper = taiga_client.TaigaClientWrapper(host=settings.host)
             if wrapper.login(
                 username=settings.get_username_value(),
                 password=settings.get_password_value(),

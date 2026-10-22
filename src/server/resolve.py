@@ -62,6 +62,16 @@ def _resolve_sprint(client: TaigaClientWrapper, project_id: int, sprint: Any) ->
     return matches[0]
 
 
+# entity_type -> REST path segment (also the by_ref route prefix).
+# Shared by add_comment and assign_item.
+_ENTITY_PATH_MAP = {
+    "story": "userstories",
+    "user_story": "userstories",
+    "task": "tasks",
+    "issue": "issues",
+    "epic": "epics",
+}
+
 _STATUS_RESOURCE_MAP = {
     "story": "userstory_statuses",
     "user_story": "userstory_statuses",

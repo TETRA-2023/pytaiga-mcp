@@ -29,13 +29,7 @@ def assign_item(
     client = core._get_authenticated_client(actual_session_id)
 
     # entity_type -> REST path segment (also the by_ref route prefix).
-    type_map = {
-        "story": "userstories",
-        "user_story": "userstories",
-        "task": "tasks",
-        "issue": "issues",
-        "epic": "epics",
-    }
+    type_map = resolve._ENTITY_PATH_MAP
     if entity_type not in type_map:
         raise ValueError(
             f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(type_map)}."
