@@ -114,10 +114,15 @@ def _setting_summary(kind: str, item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _invalidate_lookups(session_id: Optional[str]) -> None:
+def _invalidate_lookups(sid: str) -> None:
     """Drop the session's cached lookup tables (statuses, priorities, ...) after a
-    settings write, so resolvers like set_story_status see the new values."""
-    core._clear_session_cache(core._get_session_id(session_id))
+    settings write, so resolvers like set_story_status see the new values.
+
+    Takes the session id resolved at the start of the tool: resolving it again
+    after the write could raise (default session logged out meanwhile) and
+    report a failure for a write that went through.
+    """
+    core._clear_session_cache(sid)
 
 
 def _list_settings(client, kind: str, project_id: int) -> List[Dict[str, Any]]:
@@ -129,12 +134,15 @@ def _list_settings(client, kind: str, project_id: int) -> List[Dict[str, Any]]:
 
 
 def _find_setting(rows: List[Dict[str, Any]], kind: str, name_or_id: Union[str, int]) -> Dict:
-    """A setting by exact name (case-insensitive), or by id when given an int."""
-    if isinstance(name_or_id, int) and not isinstance(name_or_id, bool):
-        matches = [r for r in rows if r.get("id") == name_or_id]
-    else:
-        wanted = str(name_or_id).strip().lower()
-        matches = [r for r in rows if (r.get("name") or "").strip().lower() == wanted]
+    """A setting by exact name (case-insensitive), else by id (int or digit string).
+
+    Names are tried first: points are named "1", "3", "8"..., so treating an int
+    as an id would pick the wrong entry when the caller means the name.
+    """
+    wanted = str(name_or_id).strip().lower()
+    matches = [r for r in rows if (r.get("name") or "").strip().lower() == wanted]
+    if not matches and not isinstance(name_or_id, bool) and wanted.isdigit():
+        matches = [r for r in rows if r.get("id") == int(wanted)]
     if len(matches) == 1:
         return matches[0]
     names = [r.get("name") for r in rows]
@@ -160,7 +168,8 @@ def list_project_settings(
     session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     _kind(kind)
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_list():
         proj = resolve._resolve_project(client, project)
@@ -204,7 +213,8 @@ def create_project_setting(
         description=description,
         field_type=field_type,
     )
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_create():
         proj = resolve._resolve_project(client, project)
@@ -212,7 +222,7 @@ def create_project_setting(
             created = client.api.post(
                 f"/{endpoint}", json={"project": proj["id"], "name": name, **body}
             )
-        _invalidate_lookups(session_id)
+        _invalidate_lookups(sid)
         return {"status": "created", "kind": kind, **_setting_summary(kind, created)}
 
     return core._execute_taiga_operation(
@@ -255,14 +265,15 @@ def update_project_setting(
         body["name"] = new_name
     if not body:
         raise ValueError("No fields to update were provided.")
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_update():
         proj = resolve._resolve_project(client, project)
         current = _find_setting(_list_settings(client, kind, proj["id"]), kind, name)
         with core._admin_required("update_project_setting", proj["slug"]):
             updated = client.api.patch(f"/{endpoint}/{current['id']}", json=body)
-        _invalidate_lookups(session_id)
+        _invalidate_lookups(sid)
         return {"status": "updated", "kind": kind, **_setting_summary(kind, updated)}
 
     return core._execute_taiga_operation(
@@ -296,7 +307,8 @@ def delete_project_setting(
         )
     if not needs_move and move_to is not None:
         raise ValueError(f"move_to does not apply to {kind}.")
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_delete():
         proj = resolve._resolve_project(client, project)
@@ -311,7 +323,7 @@ def delete_project_setting(
             params = {"moveTo": moved["id"]}
         with core._admin_required("delete_project_setting", proj["slug"]):
             client.api.delete(f"/{endpoint}/{target['id']}", params=params)
-        _invalidate_lookups(session_id)
+        _invalidate_lookups(sid)
         logger.info(f"Deleted {kind} '{target.get('name')}' (id {target['id']}) in {proj['slug']}")
         result = {"status": "deleted", "kind": kind, "id": target["id"], "name": target.get("name")}
         if moved:
@@ -340,7 +352,8 @@ def reorder_project_settings(
     endpoint, bulk_param, _, _ = _kind(kind)
     if not names:
         raise ValueError("names must list the entries in their new order.")
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_reorder():
         proj = resolve._resolve_project(client, project)
@@ -357,6 +370,8 @@ def reorder_project_settings(
                 f"/{endpoint}/bulk_update_order",
                 json={"project": proj["id"], bulk_param: [[i, n] for n, i in enumerate(ids)]},
             )
+        # Cached lists keep the old order, and issue defaults are the first entry.
+        _invalidate_lookups(sid)
         return {"status": "reordered", "kind": kind, "order": [r.get("name") for r in ordered]}
 
     return core._execute_taiga_operation(
@@ -388,12 +403,15 @@ def set_custom_attribute_values(
     if not values:
         raise ValueError("values must name at least one attribute.")
     kind = _ATTRIBUTE_KIND[entity_type]
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_set():
         proj, item, segment = resolve._resolve_item_by_ref(client, project, entity_type, ref)
         attributes = _list_settings(client, kind, proj["id"])
         ids = {name: str(_find_setting(attributes, kind, name)["id"]) for name in values}
+        if len(set(ids.values())) != len(ids):
+            raise ValueError("values names the same attribute twice (names are case-insensitive).")
         current = client.api.get(f"/{segment}/custom-attributes-values/{item['id']}")
         merged = dict(current.get("attributes_values") or {})
         # A cleared value is sent as null, not dropped: Taiga rejects an empty
@@ -420,6 +438,13 @@ def set_custom_attribute_values(
     )
 
 
+def _project_roles(client, project_id: int) -> List[Dict[str, Any]]:
+    return (
+        client.api.get("/roles", params={"project": project_id}, headers=_NO_PAGINATION_HEADERS)
+        or []
+    )
+
+
 def _member_email(m: Dict[str, Any]) -> str:
     # Established members often have a blank `email`; `user_email` is reliable.
     return (m.get("user_email") or m.get("email") or "").strip().lower()
@@ -437,14 +462,13 @@ def list_members(
     project: Union[str, int],
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_list():
         proj = resolve._resolve_project(client, project)
         members = client.list_resources("memberships", project_id=proj["id"])
-        roles = client.api.get(
-            "/roles", params={"project": proj["id"]}, headers=_NO_PAGINATION_HEADERS
-        )
+        roles = _project_roles(client, proj["id"])
         return {
             "members": [
                 {
@@ -458,9 +482,7 @@ def list_members(
                 }
                 for m in members
             ],
-            "roles": [
-                r.get("name") for r in sorted(roles or [], key=lambda r: r.get("order") or 0)
-            ],
+            "roles": [r.get("name") for r in sorted(roles, key=lambda r: r.get("order") or 0)],
         }
 
     return core._execute_taiga_operation("list_members", do_list, str(project))
@@ -471,8 +493,8 @@ def list_members(
     description=(
         "Invite people to a project by email with one role (a role name from list_members). "
         "Taiga SENDS AN INVITATION EMAIL to each address; message is added to it. Addresses "
-        "that are already members are refused before anything is sent. Requires PROJECT "
-        "ADMIN rights. project accepts slug or ID."
+        "that are already members are refused before anything is sent. message: at most 255 "
+        "characters. Requires PROJECT ADMIN rights. project accepts slug or ID."
     ),
 )
 def invite_members(
@@ -490,14 +512,16 @@ def invite_members(
         raise ValueError("emails lists the same address twice.")
     if not (role or "").strip():
         raise ValueError("role must not be empty (see list_members for role names).")
-    client = core._get_authenticated_client(core._get_session_id(session_id))
+    if message and len(message) > 255:
+        # Taiga's MembersBulkValidator caps invitation_extra_text at 255; refuse
+        # rather than send a message cut off mid-sentence.
+        raise ValueError(f"message is {len(message)} characters; Taiga allows at most 255.")
+    sid = core._get_session_id(session_id)
+    client = core._get_authenticated_client(sid)
 
     def do_invite():
         proj = resolve._resolve_project(client, project)
-        roles = (
-            client.api.get("/roles", params={"project": proj["id"]}, headers=_NO_PAGINATION_HEADERS)
-            or []
-        )
+        roles = _project_roles(client, proj["id"])
         match = [r for r in roles if (r.get("name") or "").lower() == role.strip().lower()]
         if not match:
             raise ValueError(f"No role named {role!r}. Roles: {[r.get('name') for r in roles]}")
@@ -517,7 +541,7 @@ def invite_members(
             "bulk_memberships": [{"username": e, "role_id": match[0]["id"]} for e in cleaned],
         }
         if message:
-            payload["invitation_extra_text"] = message[:255]
+            payload["invitation_extra_text"] = message
         with core._admin_required("invite_members", proj["slug"]):
             client.api.post("/memberships/bulk_create", json=payload)
         logger.info(f"Invited {len(cleaned)} address(es) to {proj['slug']} as {match[0]['name']}")

@@ -4087,6 +4087,21 @@ class TestProjectSettings:
             wf.create_project_setting("p", "story_statuses", "QA", session_id=session)
 
 
+class TestFindSetting:
+    POINTS = [{"id": 3, "name": "1/2"}, {"id": 5, "name": "3"}]
+
+    def test_numeric_name_wins_over_id(self):
+        from src.server.tools.admin import _find_setting
+
+        assert _find_setting(self.POINTS, "points", 3)["name"] == "3"
+
+    def test_id_fallback_accepts_int_and_digit_string(self):
+        from src.server.tools.admin import _find_setting
+
+        assert _find_setting(self.POINTS, "points", 5)["name"] == "3"
+        assert _find_setting(self.POINTS, "points", "5")["name"] == "3"
+
+
 class TestCustomAttributeValues:
     def test_maps_names_to_ids_merges_and_clears(self, session, mock_client):
         mock_client.api.get.return_value = PROJECT
@@ -4201,6 +4216,11 @@ class TestMembers:
         with pytest.raises(ValueError, match="No role named 'Boss'.*Dev Team"):
             wf.invite_members("p", ["a@x"], "Boss", session_id=session)
         mock_client.api.post.assert_not_called()
+
+    def test_overlong_message_refused_not_truncated(self, session, mock_client):
+        with pytest.raises(ValueError, match="256 characters; Taiga allows at most 255"):
+            wf.invite_members("p", ["a@x"], "Dev Team", message="m" * 256, session_id=session)
+        mock_client.api.get.assert_not_called()
 
     @pytest.mark.parametrize(
         "emails,role,match",
