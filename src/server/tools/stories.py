@@ -52,7 +52,8 @@ def get_story(
 @app.tool(
     "browse_backlog",
     description=(
-        "List user stories in the backlog (not assigned to any sprint) with optional filters. "
+        "List the backlog: ONLY the user stories assigned to no sprint — not every story "
+        "of the project (use list_items for all stories, sprint-assigned ones included). "
         "Filters: status (name), assignee (email/full name), epic (ref number), tags (comma-separated). "
         "project accepts slug or ID."
     ),

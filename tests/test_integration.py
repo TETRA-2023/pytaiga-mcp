@@ -15,7 +15,7 @@ import uuid
 import pytest
 
 import src.server_workflow as wf
-from src.taiga_client import TaigaBadRequestError
+from src.taiga_client import TaigaBadRequestError, TaigaNotFoundError
 
 TEST_HOST = os.environ.get(
     "TAIGA_TEST_HOST", os.environ.get("TAIGA_API_URL", "http://localhost:9000")
@@ -197,3 +197,131 @@ class TestSandboxWrites:
         )
         assert stories_after == stories_before, "a story was left behind (cf. #143 junk story)"
         assert api.auth_token
+
+    def test_b5_list_update_delete_on_real_taiga(self, session_id):
+        """v3 B5 on real endpoints. Filters must EXCLUDE (Taiga ignores unknown params
+        silently), deletes must have the side effects the tool description states,
+        and cleanup goes through delete_item itself (raw delete as a fallback)."""
+        sess = wf.active_sessions[session_id]
+        project_id = wf.get_project_overview(TEST_PROJECT, session_id=session_id)["project"]["id"]
+        tag = uuid.uuid4().hex[:8]
+        stories_before = len(sess.list_resources("user_stories", project_id=project_id))
+        made = {"userstories": [], "tasks": [], "epics": [], "milestones": [], "wiki": []}
+        me = wf.get_current_user(session_id=session_id)
+        try:
+            sprint = f"[TEST] b5 {tag}"
+            planned = wf.plan_sprint(
+                TEST_PROJECT, sprint, "2026-01-01", "2026-01-14", session_id=session_id
+            )
+            made["milestones"].append(planned["sprint"]["id"])
+            a = wf.create_story(
+                TEST_PROJECT,
+                f"[TEST - CAN DELETE] a {tag}",
+                sprint=sprint,
+                tags=[f"t{tag}"],
+                assignee=me["email"],
+                session_id=session_id,
+            )
+            b = wf.create_story(TEST_PROJECT, f"[TEST - CAN DELETE] b {tag}", session_id=session_id)
+            made["userstories"] += [a["id"], b["id"]]
+            task = wf.create_task(
+                TEST_PROJECT, b["ref"], f"[TEST] task {tag}", session_id=session_id
+            )
+            made["tasks"].append(task["id"])
+            epic = wf.create_epic(
+                TEST_PROJECT,
+                f"[TEST - CAN DELETE] epic {tag}",
+                story_refs=[a["ref"]],
+                session_id=session_id,
+            )
+            made["epics"].append(epic["id"])
+
+            # #144 acceptance: a sprint-assigned story is in list_items, not in browse_backlog.
+            all_refs = {s["ref"] for s in wf.list_items(TEST_PROJECT, session_id=session_id)}
+            backlog = {s["ref"] for s in wf.browse_backlog(TEST_PROJECT, session_id=session_id)}
+            assert a["ref"] in all_refs and a["ref"] not in backlog
+            assert b["ref"] in all_refs and b["ref"] in backlog
+
+            def refs(**kw):
+                return {s["ref"] for s in wf.list_items(TEST_PROJECT, session_id=session_id, **kw)}
+
+            # Story filters really exclude b.
+            assert refs(sprint=sprint) == {a["ref"]}
+            assert refs(epic=epic["ref"]) == {a["ref"]}
+            assert refs(tags=f"t{tag}") == {a["ref"]}
+            assert a["ref"] in refs(assignee=me["email"]) and b["ref"] not in refs(
+                assignee=me["email"]
+            )
+
+            # update_epic: status resolved by name via epic_statuses, then filter by it.
+            statuses = [
+                s["name"] for s in sess.list_resources("epic_statuses", project_id=project_id)
+            ]
+            target = statuses[-1]
+            updated = wf.update_epic(
+                TEST_PROJECT,
+                epic["ref"],
+                subject=f"[TEST - CAN DELETE] epic {tag} v2",
+                status=target,
+                assignee=me["email"],
+                session_id=session_id,
+            )
+            assert updated["subject"].endswith("v2") and updated["status"] == target
+
+            def epic_refs(**kw):
+                return {
+                    e["ref"]
+                    for e in wf.list_items(
+                        TEST_PROJECT, entity_type="epic", session_id=session_id, **kw
+                    )
+                }
+
+            assert epic["ref"] in epic_refs(status=target)
+            if len(statuses) > 1:
+                assert epic["ref"] not in epic_refs(status=statuses[0])
+            assert epic["ref"] in epic_refs(assignee=me["email"])
+
+            # Sprint filter by open/closed.
+            def sprint_names(status):
+                rows = wf.list_items(
+                    TEST_PROJECT, entity_type="sprint", status=status, session_id=session_id
+                )
+                return {s["name"] for s in rows}
+
+            assert sprint in sprint_names("open") and sprint not in sprint_names("closed")
+
+            # Deletes, with the side effects the description states.
+            d = wf.delete_item(TEST_PROJECT, "sprint", sprint, session_id=session_id)
+            assert d["name"] == sprint
+            made["milestones"].clear()
+            assert wf.get_story(TEST_PROJECT, a["ref"], session_id=session_id)["sprint"] is None
+
+            d = wf.delete_item(TEST_PROJECT, "epic", epic["ref"], session_id=session_id)
+            assert d["subject"].endswith("v2")
+            made["epics"].clear()
+            assert wf.get_story(TEST_PROJECT, a["ref"], session_id=session_id)  # story kept
+
+            d = wf.delete_item(TEST_PROJECT, "story", b["ref"], session_id=session_id)
+            assert d["subject"] == f"[TEST - CAN DELETE] b {tag}"
+            made["userstories"].remove(b["id"])
+            with pytest.raises(TaigaNotFoundError):  # by_ref 404: deleted with its story
+                wf.get_task(TEST_PROJECT, task["ref"], session_id=session_id)
+            made["tasks"].clear()
+
+            slug = f"test-can-delete-{tag}"
+            made["wiki"].append(
+                wf.upsert_wiki(TEST_PROJECT, slug, "x", session_id=session_id)["id"]
+            )
+            assert wf.delete_item(TEST_PROJECT, "wiki", slug, session_id=session_id)["slug"] == slug
+            made["wiki"].clear()
+            with pytest.raises(ValueError, match="not found"):
+                wf.delete_item(TEST_PROJECT, "wiki", slug, session_id=session_id)
+
+            wf.delete_item(TEST_PROJECT, "story", a["ref"], session_id=session_id)
+            made["userstories"].remove(a["id"])
+        finally:
+            for resource in ("tasks", "epics", "wiki", "userstories", "milestones"):
+                for item_id in made[resource]:
+                    _delete(session_id, resource, item_id)
+        stories_after = len(sess.list_resources("user_stories", project_id=project_id))
+        assert stories_after == stories_before

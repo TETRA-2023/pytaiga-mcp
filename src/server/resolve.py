@@ -263,6 +263,33 @@ def _is_closed(item: Dict[str, Any]) -> bool:
     return bool(val)
 
 
+def _epic_summary(epic: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract readable fields from a raw epic dict (list rows, update results)."""
+    return {
+        "ref": epic.get("ref"),
+        "subject": epic.get("subject"),
+        "status": (epic.get("status_extra_info") or {}).get("name") or epic.get("status"),
+        "assignee": (epic.get("assigned_to_extra_info") or {}).get("full_name_display"),
+        "color": epic.get("color"),
+        "is_blocked": epic.get("is_blocked", False),
+        "is_closed": _is_closed(epic),
+        "tags": epic.get("tags", []),
+    }
+
+
+def _sprint_summary(milestone: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract readable fields from a raw milestone (sprint) dict."""
+    return {
+        "id": milestone.get("id"),
+        "name": milestone.get("name"),
+        "start": milestone.get("estimated_start"),
+        "end": milestone.get("estimated_finish"),
+        "is_closed": milestone.get("closed", False),
+        "total_points": milestone.get("total_points"),
+        "closed_points": milestone.get("closed_points"),
+    }
+
+
 def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
     """Extract readable fields from a raw user story dict."""
     return {

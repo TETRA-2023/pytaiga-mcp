@@ -4,9 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
-from src.taiga_client import (
-    TaigaException,
-)
+from src.taiga_client import TaigaException
 
 logger = logging.getLogger(__name__)
 
@@ -138,3 +136,64 @@ def create_epic(
         }
 
     return core._execute_taiga_operation("create_epic", do_create, str(project))
+
+
+@app.tool(
+    "update_epic",
+    description=(
+        "Update an epic by its ref number. All fields are optional — only provided fields "
+        "change. status and assignee are resolved by name; color is a hex string "
+        "(e.g. '#A5694F'); tags replaces the epic's tags. Linking stories is not done "
+        "here: use create_epic(story_refs=...) or update_story(epic=...). "
+        "project accepts slug or ID."
+    ),
+)
+def update_epic(
+    project: Union[str, int],
+    ref: int,
+    subject: Optional[str] = None,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    assignee: Optional[str] = None,
+    color: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    blocked: Optional[bool] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    actual_session_id = core._get_session_id(session_id)
+    client = core._get_authenticated_client(actual_session_id)
+
+    def do_update():
+        proj = resolve._resolve_project(client, project)
+        project_id = proj["id"]
+
+        current = client.api.get("/epics/by_ref", params={"ref": ref, "project": project_id})
+        if not current:
+            raise ValueError(f"Epic #{ref} not found in project '{proj['slug']}'.")
+
+        payload: Dict[str, Any] = {"version": current["version"]}
+        if subject is not None:
+            payload["subject"] = subject
+        if description is not None:
+            payload["description"] = description
+        if status is not None:
+            payload["status"] = resolve._resolve_status(
+                client, project_id, "epic", status, actual_session_id
+            )
+        if assignee is not None:
+            payload["assigned_to"] = resolve._resolve_user(
+                client, project_id, assignee, actual_session_id
+            )
+        if color is not None:
+            payload["color"] = color
+        if tags is not None:
+            payload["tags"] = tags
+        if blocked is not None:
+            payload["is_blocked"] = blocked
+        if len(payload) == 1:
+            raise ValueError("No fields to update were provided.")
+
+        result = client.api.patch(f"/epics/{current['id']}", json=payload)
+        return resolve._epic_summary(result)
+
+    return core._execute_taiga_operation("update_epic", do_update, f"epic #{ref} in {project}")

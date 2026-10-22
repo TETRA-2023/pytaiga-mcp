@@ -3158,3 +3158,252 @@ class TestCachedAcrossLogout:
         wf._cached(session, "members_1", factory)
         wf._cached(session, "members_1", factory)
         assert calls == [1]
+
+
+# ---------------------------------------------------------------------------
+# v3 B5: list_items, update_epic, delete_item (GitHub #144)
+# ---------------------------------------------------------------------------
+
+PROJECT = {"id": 1, "slug": "p", "name": "P"}
+
+
+class TestListItems:
+    def test_stories_include_sprint_assigned_and_no_backlog_filter(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = [
+            {"ref": 1, "subject": "in sprint", "milestone_name": "S1"},
+            {"ref": 2, "subject": "backlog"},
+        ]
+        result = wf.list_items("p", session_id=session)
+        assert [s["ref"] for s in result] == [1, 2]
+        # No milestone filter at all: browse_backlog's "milestone": "null" must not leak in.
+        mock_client.list_resources.assert_called_once_with("user_stories", project_id=1)
+
+    def test_story_filters_resolved(self, session, mock_client):
+        route(mock_client, get={"/projects/by_slug": PROJECT, "/epics/by_ref": {"id": 50}})
+
+        def lr(resource, project_id=None, **filters):
+            return {
+                "userstory_statuses": [{"id": 3, "name": "Done"}],
+                "memberships": [{"user": 7, "full_name": "Bob", "email": "bob@x"}],
+                "milestones": [{"id": 9, "name": "S1"}],
+                "user_stories": [],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        wf.list_items(
+            "p",
+            status="Done",
+            sprint="S1",
+            epic=4,
+            tags="a,b",
+            assignee="bob",
+            session_id=session,
+        )
+        last = mock_client.list_resources.call_args
+        assert last.args == ("user_stories",)
+        assert last.kwargs == {
+            "project_id": 1,
+            "status": 3,
+            "assigned_to": 7,
+            "milestone": 9,
+            "epic": 50,
+            "tags": "a,b",
+        }
+
+    def test_epics_with_status_filter(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+
+        def lr(resource, project_id=None, **filters):
+            if resource == "epic_statuses":
+                return [{"id": 2, "name": "In progress"}]
+            assert resource == "epics" and filters == {"status": 2}
+            return [{"ref": 4, "subject": "E", "status_extra_info": {"name": "In progress"}}]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.list_items("p", entity_type="epic", status="In progress", session_id=session)
+        assert result[0]["ref"] == 4 and result[0]["status"] == "In progress"
+
+    @pytest.mark.parametrize("status,closed", [("open", False), ("Closed", True)])
+    def test_sprints_by_open_or_closed(self, session, mock_client, status, closed):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = [{"id": 9, "name": "S1", "closed": closed}]
+        result = wf.list_items("p", entity_type="sprint", status=status, session_id=session)
+        mock_client.list_resources.assert_called_once_with(
+            "milestones", project_id=1, closed=closed
+        )
+        assert result[0]["name"] == "S1" and result[0]["is_closed"] is closed
+
+    def test_bad_sprint_status_raises(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        with pytest.raises(ValueError, match="'open' or 'closed'"):
+            wf.list_items("p", entity_type="sprint", status="done", session_id=session)
+
+    @pytest.mark.parametrize(
+        "entity_type,kwargs",
+        [("epic", {"sprint": "S1"}), ("epic", {"tags": "x"}), ("sprint", {"assignee": "bob"})],
+    )
+    def test_filter_not_supported_by_type_is_rejected_before_any_call(
+        self, session, mock_client, entity_type, kwargs
+    ):
+        # Taiga silently ignores unknown query params: passing one through would
+        # return the UNFILTERED list. Reject it instead.
+        with pytest.raises(ValueError, match="do not apply"):
+            wf.list_items("p", entity_type=entity_type, session_id=session, **kwargs)
+        mock_client.api.get.assert_not_called()
+        mock_client.list_resources.assert_not_called()
+
+    def test_unknown_entity_type(self, session, mock_client):
+        with pytest.raises(ValueError, match="Invalid entity_type"):
+            wf.list_items("p", entity_type="issue", session_id=session)
+
+
+class TestUpdateEpic:
+    def _route(self, mock_client, patched=None):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/epics/by_ref": {"id": 500, "ref": 4, "version": 6}},
+            patch={"/epics/500": patched or {"ref": 4, "subject": "New"}},
+        )
+
+    def test_patches_only_given_fields_with_version(self, session, mock_client):
+        self._route(mock_client)
+
+        def lr(resource, project_id=None, **kw):
+            return {
+                "epic_statuses": [{"id": 2, "name": "Done"}],
+                "memberships": [{"user": 7, "full_name": "Bob", "email": "bob@x"}],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.update_epic(
+            "p",
+            4,
+            subject="New",
+            status="Done",
+            assignee="bob",
+            color="#A5694F",
+            tags=["x"],
+            blocked=False,
+            session_id=session,
+        )
+        assert sent(mock_client, "patch", "/epics/500") == [
+            {
+                "version": 6,
+                "subject": "New",
+                "status": 2,
+                "assigned_to": 7,
+                "color": "#A5694F",
+                "tags": ["x"],
+                "is_blocked": False,
+            }
+        ]
+        assert result["subject"] == "New"
+
+    def test_no_fields_raises_before_any_write(self, session, mock_client):
+        self._route(mock_client)
+        with pytest.raises(ValueError, match="No fields to update"):
+            wf.update_epic("p", 4, session_id=session)
+        mock_client.api.patch.assert_not_called()
+
+    def test_unknown_epic(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/epics/by_ref": None})
+        with pytest.raises(ValueError, match="Epic #4 not found"):
+            wf.update_epic("p", 4, subject="x", session_id=session)
+
+
+class TestDeleteItem:
+    @pytest.mark.parametrize(
+        "entity_type,segment",
+        [("story", "userstories"), ("task", "tasks"), ("issue", "issues"), ("epic", "epics")],
+    )
+    def test_by_ref_resolves_then_deletes_and_reports_subject(
+        self, session, mock_client, entity_type, segment
+    ):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={f"/{segment}/by_ref": {"id": 77, "ref": 5, "subject": "Doomed"}},
+            delete={f"/{segment}/77": None},
+        )
+        result = wf.delete_item("p", entity_type, 5, session_id=session)
+        assert result == {
+            "status": "deleted",
+            "entity_type": entity_type,
+            "id": 77,
+            "ref": 5,
+            "subject": "Doomed",
+        }
+        mock_client.api.delete.assert_called_once_with(f"/{segment}/77")
+
+    def test_sprint_by_name(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = [{"id": 9, "name": "S1"}]
+        route(mock_client, delete={"/milestones/9": None})
+        result = wf.delete_item("p", "sprint", "S1", session_id=session)
+        assert result == {"status": "deleted", "entity_type": "sprint", "id": 9, "name": "S1"}
+
+    def test_wiki_by_slug(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/wiki/by_slug": {"id": 3, "slug": "home"}},
+            delete={"/wiki/3": None},
+        )
+        result = wf.delete_item("p", "wiki", "home", session_id=session)
+        assert result == {"status": "deleted", "entity_type": "wiki", "id": 3, "slug": "home"}
+
+    def test_wiki_404_is_not_found_not_a_crash(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/wiki/by_slug": _api_error(TaigaNotFoundError, 404, "nope")})
+        with pytest.raises(ValueError, match="Wiki page 'gone' not found"):
+            wf.delete_item("p", "wiki", "gone", session_id=session)
+        mock_client.api.delete.assert_not_called()
+
+    def test_real_404_for_unknown_ref_is_a_clear_not_found(self, session, mock_client):
+        # Real Taiga: /userstories/by_ref answers an unknown ref with 404, not an empty body.
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": _api_error(TaigaNotFoundError, 404, "No match")},
+        )
+        with pytest.raises(ValueError, match="Story #5 not found"):
+            wf.delete_item("p", "story", 5, session_id=session)
+        mock_client.api.delete.assert_not_called()
+
+    def test_unknown_ref_deletes_nothing(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/userstories/by_ref": None})
+        with pytest.raises(ValueError, match="Story #5 not found"):
+            wf.delete_item("p", "story", 5, session_id=session)
+        mock_client.api.delete.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["S1", True, "5a"])
+    def test_ref_types_require_a_ref_number(self, session, mock_client, bad):
+        with pytest.raises(ValueError, match="ref number"):
+            wf.delete_item("p", "story", bad, session_id=session)
+        mock_client.api.delete.assert_not_called()
+
+    def test_numeric_string_ref_accepted(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/tasks/by_ref": {"id": 8, "ref": 12, "subject": "T"}},
+            delete={"/tasks/8": None},
+        )
+        assert wf.delete_item("p", "task", "12", session_id=session)["ref"] == 12
+
+    def test_description_states_cascades(self):
+        tool = wf.mcp._tool_manager.get_tool("delete_item")
+        for fact in ("PERMANENTLY", "ALSO DELETES ITS TASKS", "keeps its stories"):
+            assert fact in tool.description
+
+
+class TestBrowseBacklogDescription:
+    def test_says_backlog_only_and_points_to_list_items(self):
+        # #144: the old wording read as "the project's stories" and hid sprint-assigned ones.
+        desc = wf.mcp._tool_manager.get_tool("browse_backlog").description
+        assert "ONLY the user stories assigned to no sprint" in desc
+        assert "list_items" in desc
