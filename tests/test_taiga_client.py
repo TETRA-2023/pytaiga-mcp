@@ -1,92 +1,297 @@
-"""Unit tests for taiga_client.py — the _CompatTaigaClient query_params shim (#87)."""
+"""Unit tests for taiga_client.py: the native HTTP client, errors, wrapper and resolvers."""
 
+import json
+import logging
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from pytaigaclient.exceptions import TaigaException
 
 from src.taiga_client import (
+    TaigaAPIError,
+    TaigaAuthenticationError,
+    TaigaBadRequestError,
     TaigaClientWrapper,
-    _CompatTaigaClient,
+    TaigaException,
+    TaigaHTTP,
+    TaigaNotFoundError,
+    TaigaServerError,
+    _error_detail,
     resolve_user_id,
     safe_lower,
 )
 
-
-def _client():
-    # Constructor does no network I/O — it only builds a session + resource objects.
-    return _CompatTaigaClient(host="https://taiga.example")
+HOST = "https://taiga.example"
 
 
-class TestCompatTaigaClientGet:
-    """Regression guard for #87 — pytaigaclient's Tasks methods call
-    get(endpoint, query_params=...), which the base TaigaClient.get rejects. The
-    shim remaps that stray kwarg onto params= for every resource at one chokepoint."""
-
-    def test_remaps_query_params_to_params(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value={"ok": True}) as req:
-            result = c.get("/tasks/by_ref", query_params={"ref": 7, "project": 1})
-        assert result == {"ok": True}
-        assert req.call_args.kwargs["params"] == {"ref": 7, "project": 1}
-        assert "query_params" not in req.call_args.kwargs
-
-    def test_params_passthrough_unaffected(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value=[]) as req:
-            c.get("/userstories", params={"project": 1})
-        assert req.call_args.kwargs["params"] == {"project": 1}
-        assert "query_params" not in req.call_args.kwargs
-
-    def test_no_params_at_all_passes_none(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value=None) as req:
-            c.get("/tasks")  # mirrors tasks.list() with query_params=None
-        assert req.call_args.kwargs["params"] is None
-
-    def test_explicit_params_win_on_conflict(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value=None) as req:
-            c.get("/x", params={"a": "explicit"}, query_params={"a": "stray", "b": 2})
-        assert req.call_args.kwargs["params"] == {"a": "explicit", "b": 2}
+def _http(handler):
+    """A TaigaHTTP whose requests are answered by `handler(request) -> httpx.Response`."""
+    return TaigaHTTP(HOST, transport=httpx.MockTransport(handler))
 
 
-class TestBuggyTasksMethodsNowWork:
-    """Drive the actual pytaigaclient Tasks methods (the ones that pass
-    query_params=) through the shim and confirm they no longer raise and route
-    params correctly. These are the latent siblings of the get_by_ref bug."""
+def _authed(handler, token="t1", refresh="r1"):
+    api = _http(handler)
+    api.auth_token, api._refresh_token = token, refresh
+    return api
 
-    def test_get_by_ref(self):
-        c = _client()
-        with patch.object(
-            _CompatTaigaClient, "_request", return_value={"id": 200, "ref": 7}
-        ) as req:
-            result = c.tasks.get_by_ref(ref=7, project=1)
-        assert result == {"id": 200, "ref": 7}
-        assert req.call_args.args == ("GET", "/tasks/by_ref")
-        assert req.call_args.kwargs["params"] == {"ref": 7, "project": 1}
-        assert "query_params" not in req.call_args.kwargs
 
-    def test_list(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value=[]) as req:
-            c.tasks.list(query_params={"project": 1, "user_story": 50})
-        assert req.call_args.kwargs["params"] == {"project": 1, "user_story": 50}
-        assert "query_params" not in req.call_args.kwargs
+class TestTaigaHTTPRequests:
+    def test_builds_api_v1_url_and_bearer_header(self):
+        seen = {}
 
-    def test_filters_data(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value={}) as req:
-            c.tasks.filters_data(project_id=1)
-        assert "query_params" not in req.call_args.kwargs
-        assert req.call_args.kwargs["params"] == {"project": 1}
+        def handler(request):
+            seen["url"] = str(request.url)
+            seen["auth"] = request.headers.get("authorization")
+            return httpx.Response(200, json={"id": 1})
 
-    def test_list_attachments(self):
-        c = _client()
-        with patch.object(_CompatTaigaClient, "_request", return_value=[]) as req:
-            c.tasks.list_attachments(project=1, object_id=200)
-        assert "query_params" not in req.call_args.kwargs
-        assert req.call_args.kwargs["params"] == {"project": 1, "object_id": 200}
+        assert _authed(handler).get("/userstories/by_ref", params={"ref": 7}) == {"id": 1}
+        assert seen["url"] == f"{HOST}/api/v1/userstories/by_ref?ref=7"
+        assert seen["auth"] == "Bearer t1"
+
+    def test_json_body_and_custom_headers_sent(self):
+        seen = {}
+
+        def handler(request):
+            seen["body"] = json.loads(request.content)
+            seen["pagination"] = request.headers.get("x-disable-pagination")
+            return httpx.Response(201, json={"ok": True})
+
+        api = _authed(handler)
+        api.post("/tasks", json={"subject": "s"}, headers={"x-disable-pagination": "True"})
+        assert seen == {"body": {"subject": "s"}, "pagination": "True"}
+
+    def test_params_encoded_like_requests(self):
+        # requests (pytaigaclient) dropped None and sent booleans as "True"/"False".
+        seen = {}
+
+        def handler(request):
+            seen["query"] = dict(request.url.params)
+            return httpx.Response(200, json=[])
+
+        _authed(handler).get("/issues", params={"project": 1, "is_closed": False, "tag": None})
+        assert seen["query"] == {"project": "1", "is_closed": "False"}
+
+    def test_empty_body_returns_none(self):
+        api = _authed(lambda request: httpx.Response(204))
+        assert api.delete("/userstories/5") is None
+
+    def test_non_json_success_returns_text(self):
+        api = _authed(lambda request: httpx.Response(200, text="plain"))
+        assert api.get("/x") == "plain"
+
+    def test_follows_redirects(self):
+        def handler(request):
+            if request.url.path == "/api/v1/old":
+                return httpx.Response(301, headers={"location": f"{HOST}/api/v1/new"})
+            return httpx.Response(200, json={"moved": True})
+
+        assert _authed(handler).get("/old") == {"moved": True}
+
+    def test_transport_error_becomes_taiga_exception(self):
+        def handler(request):
+            raise httpx.ConnectError("refused", request=request)
+
+        with pytest.raises(TaigaException, match="Request failed: ConnectError"):
+            _authed(handler).get("/projects")
+
+
+class TestTaigaHTTPErrors:
+    @pytest.mark.parametrize(
+        "code,cls",
+        [
+            (400, TaigaBadRequestError),
+            (401, TaigaAuthenticationError),
+            (403, TaigaAuthenticationError),
+            (404, TaigaNotFoundError),
+            (500, TaigaServerError),
+        ],
+    )
+    def test_status_maps_to_error_class(self, code, cls):
+        api = _http(lambda request: httpx.Response(code, json={"_error_message": "nope"}))
+        with pytest.raises(cls) as ei:
+            api.get("/x")
+        assert ei.value.status_code == code
+        assert isinstance(ei.value, TaigaAPIError)
+
+    def test_field_errors_are_kept(self):
+        # The real 400 body shape from taiga.tetra-ai.fr (POST /userstories without
+        # a subject). pytaigaclient reported "No error message provided by API.".
+        api = _http(
+            lambda request: httpx.Response(400, json={"subject": ["This field is required."]})
+        )
+        with pytest.raises(TaigaBadRequestError) as ei:
+            api.post("/userstories", json={"project": 13})
+        assert ei.value.error_detail == "subject: This field is required."
+        assert str(ei.value) == "API Error 400: subject: This field is required."
+        assert ei.value.body == {"subject": ["This field is required."]}
+
+    def test_login_failure_detail_kept(self):
+        api = _http(
+            lambda request: httpx.Response(
+                401,
+                json={
+                    "detail": "No active account found with the given credentials",
+                    "code": "invalid_credentials",
+                },
+            )
+        )
+        with pytest.raises(TaigaAuthenticationError, match="No active account found"):
+            api.login("u", "p")
+
+
+class TestErrorDetail:
+    """The DRF-body formatting formerly done by server_workflow._repair_taiga_api_error."""
+
+    def test_error_message_wins(self):
+        assert _error_detail({"_error_message": "boom", "x": ["y"]}, "", 400) == "boom"
+
+    def test_detail_string(self):
+        assert _error_detail({"detail": "bad", "meta": {"k": "v"}}, "", 422) == "bad"
+
+    def test_field_errors_joined(self):
+        detail = _error_detail(
+            {"user_story": ["This field is required."], "epic": ["This field is required."]},
+            "",
+            400,
+        )
+        assert "user_story: This field is required." in detail
+        assert "epic: This field is required." in detail
+
+    def test_scalar_and_nested_values(self):
+        detail = _error_detail({"count": 3, "meta": {"k": "v"}}, "", 400)
+        assert "count: 3" in detail
+        assert 'meta: {"k": "v"}' in detail
+
+    def test_list_body(self):
+        assert _error_detail(["a", "b"], "", 400) == "a; b"
+
+    def test_non_json_falls_back_to_text_then_status(self):
+        assert _error_detail(None, "Bad Gateway", 502) == "Bad Gateway"
+        assert _error_detail(None, "", 502) == "HTTP 502 with an empty body"
+        assert _error_detail({}, "", 400) == "HTTP 400 with an empty body"
+
+
+class TestTaigaHTTPAuth:
+    def test_login_stores_tokens_and_sends_no_bearer(self):
+        seen = {}
+
+        def handler(request):
+            seen["auth"] = request.headers.get("authorization")
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"auth_token": "a1", "refresh": "r1", "id": 6})
+
+        api = _http(handler)
+        api.login("rva", "pw")
+        assert api.auth_token == "a1" and api._refresh_token == "r1"
+        assert seen == {
+            "auth": None,
+            "body": {"type": "normal", "username": "rva", "password": "pw"},
+        }
+
+    def test_login_without_token_raises(self):
+        api = _http(lambda request: httpx.Response(200, json={"id": 6}))
+        with pytest.raises(TaigaException, match="no auth_token"):
+            api.login("u", "p")
+
+    def test_401_refreshes_once_and_retries(self):
+        calls = []
+
+        def handler(request):
+            calls.append((request.url.path, request.headers.get("authorization")))
+            if request.url.path == "/api/v1/auth/refresh":
+                assert json.loads(request.content) == {"refresh": "r1"}
+                return httpx.Response(200, json={"auth_token": "t2", "refresh": "r2"})
+            if request.headers.get("authorization") == "Bearer t1":
+                return httpx.Response(401, json={"detail": "Token is invalid or expired"})
+            return httpx.Response(200, json={"ok": True})
+
+        api = _authed(handler)
+        assert api.get("/users/me") == {"ok": True}
+        assert calls == [
+            ("/api/v1/users/me", "Bearer t1"),
+            ("/api/v1/auth/refresh", None),
+            ("/api/v1/users/me", "Bearer t2"),
+        ]
+        # Taiga rotates refresh tokens: the new one must replace the spent one.
+        assert (api.auth_token, api._refresh_token) == ("t2", "r2")
+
+    def test_failed_refresh_surfaces_original_401(self):
+        def handler(request):
+            if request.url.path == "/api/v1/auth/refresh":
+                return httpx.Response(401, json={"detail": "Token is invalid or expired"})
+            return httpx.Response(401, json={"detail": "Given token not valid"})
+
+        with pytest.raises(TaigaAuthenticationError, match="Given token not valid"):
+            _authed(handler).get("/users/me")
+
+    def test_no_refresh_token_means_no_retry(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            return httpx.Response(401, json={"detail": "expired"})
+
+        api = _authed(handler, refresh=None)
+        with pytest.raises(TaigaAuthenticationError):
+            api.get("/users/me")
+        assert calls == ["/api/v1/users/me"]
+
+    def test_concurrent_401s_spend_the_refresh_token_once(self):
+        """Refresh tokens rotate (reusing one is a 401 on taiga.tetra-ai.fr), so two
+        threads hitting 401 together must not both refresh, or the session dies."""
+        refreshes = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(2)
+
+        def handler(request):
+            if request.url.path == "/api/v1/auth/refresh":
+                with lock:
+                    refreshes.append(json.loads(request.content)["refresh"])
+                    spent = len(refreshes) > 1
+                time.sleep(0.05)  # widen the race window
+                if spent:
+                    return httpx.Response(401, json={"detail": "Token is invalid or expired"})
+                return httpx.Response(200, json={"auth_token": "t2", "refresh": "r2"})
+            if request.headers.get("authorization") == "Bearer t1":
+                barrier.wait(timeout=5)  # both requests fail with the old token together
+                return httpx.Response(401, json={"detail": "expired"})
+            return httpx.Response(200, json={"ok": True})
+
+        api = _authed(handler)
+        results, errors = [], []
+
+        def call():
+            try:
+                results.append(api.get("/users/me"))
+            except Exception as e:  # pragma: no cover - surfaced by the assert below
+                errors.append(e)
+
+        threads = [threading.Thread(target=call) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert errors == []
+        assert results == [{"ok": True}, {"ok": True}]
+        assert refreshes == ["r1"]
+
+    def test_never_logs_bodies_or_credentials(self, caplog):
+        def handler(request):
+            if request.url.path == "/api/v1/auth":
+                return httpx.Response(200, json={"auth_token": "secret-token", "refresh": "r"})
+            return httpx.Response(400, json={"subject": ["This field is required."]})
+
+        api = _http(handler)
+        with caplog.at_level(logging.DEBUG):
+            api.login("rva", "hunter2")
+            with pytest.raises(TaigaBadRequestError):
+                api.post("/userstories", json={"description": "private text"})
+        logged = caplog.text
+        for secret in ("hunter2", "secret-token", "private text", "Bearer"):
+            assert secret not in logged
+        assert "POST userstories -> 400" in logged or "POST /userstories -> 400" in logged
 
 
 class TestTaigaClientWrapperLogin:
@@ -97,31 +302,37 @@ class TestTaigaClientWrapperLogin:
             TaigaClientWrapper(host="")
 
     def test_login_success_sets_api(self):
-        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        wrapper = TaigaClientWrapper(host=HOST)
         fake_api = MagicMock()
-        with patch("src.taiga_client._CompatTaigaClient", return_value=fake_api):
+        with patch("src.taiga_client.TaigaHTTP", return_value=fake_api):
             ok = wrapper.login(username="u", password="p")
         assert ok is True
         assert wrapper.api is fake_api
-        fake_api.auth.login.assert_called_once_with(username="u", password="p")
+        fake_api.login.assert_called_once_with(username="u", password="p")
 
     def test_login_taiga_exception_propagates_and_clears_api(self):
-        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        wrapper = TaigaClientWrapper(host=HOST)
         fake_api = MagicMock()
-        fake_api.auth.login.side_effect = TaigaException("bad creds")
-        with patch("src.taiga_client._CompatTaigaClient", return_value=fake_api):
+        fake_api.login.side_effect = TaigaException("bad creds")
+        with patch("src.taiga_client.TaigaHTTP", return_value=fake_api):
             with pytest.raises(TaigaException, match="bad creds"):
                 wrapper.login(username="u", password="p")
         assert wrapper.api is None
 
     def test_login_unexpected_error_wrapped(self):
-        wrapper = TaigaClientWrapper(host="https://taiga.example")
+        wrapper = TaigaClientWrapper(host=HOST)
         fake_api = MagicMock()
-        fake_api.auth.login.side_effect = RuntimeError("boom")
-        with patch("src.taiga_client._CompatTaigaClient", return_value=fake_api):
+        fake_api.login.side_effect = RuntimeError("boom")
+        with patch("src.taiga_client.TaigaHTTP", return_value=fake_api):
             with pytest.raises(TaigaException, match="Unexpected login error"):
                 wrapper.login(username="u", password="p")
         assert wrapper.api is None
+
+    def test_is_authenticated_tracks_token(self):
+        wrapper = TaigaClientWrapper(host=HOST)
+        assert wrapper.is_authenticated is False
+        wrapper.api = _authed(lambda request: httpx.Response(200, json={}))
+        assert wrapper.is_authenticated is True
 
 
 class TestSafeLower:

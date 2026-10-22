@@ -15,6 +15,7 @@ import uuid
 import pytest
 
 import src.server_workflow as wf
+from src.taiga_client import TaigaBadRequestError
 
 TEST_HOST = os.environ.get(
     "TAIGA_TEST_HOST", os.environ.get("TAIGA_API_URL", "http://localhost:9000")
@@ -58,6 +59,20 @@ class TestReadOnly:
         status = wf.session_status(session_id=session_id)
         assert status["status"] == "active"
 
+    def test_expired_access_token_is_refreshed(self, session_id):
+        """A rejected access token triggers one real POST /auth/refresh, then a retry.
+
+        Simulates the 24 h access-token expiry by corrupting the token in place.
+        The refresh token must also rotate: Taiga rejects a spent one.
+        """
+        api = wf.active_sessions[session_id].api
+        old_refresh = api._refresh_token
+        api.auth_token = "expired-or-garbage"
+        me = api.get("/users/me")
+        assert me["username"]
+        assert api.auth_token != "expired-or-garbage"
+        assert api._refresh_token and api._refresh_token != old_refresh
+
 
 @pytest.mark.integration
 @needs_sandbox
@@ -95,3 +110,12 @@ class TestSandboxWrites:
             if task_id is not None:
                 _delete(session_id, "tasks", task_id)
             _delete(session_id, "userstories", story["id"])
+
+    def test_validation_error_keeps_drf_body(self, session_id):
+        """A real 400 surfaces Taiga's field errors (pre-v3: "No error message")."""
+        project_id = wf.get_project_overview(TEST_PROJECT, session_id=session_id)["project"]["id"]
+        with pytest.raises(TaigaBadRequestError) as ei:
+            # No subject: rejected by validation, nothing is created.
+            wf.active_sessions[session_id].api.post("/userstories", json={"project": project_id})
+        assert "subject" in ei.value.error_detail
+        assert "No error message provided" not in str(ei.value)

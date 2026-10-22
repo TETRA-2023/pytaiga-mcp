@@ -812,13 +812,13 @@ cli = [
 
 [[package]]
 name = "mcp-taiga-bridge"
-version = "2.1.10"
+version = "2.1.12"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pytaigaclient" },
     { name = "python-dotenv" },
 ]
 
@@ -839,12 +839,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.28.1,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.1" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
-    { name = "pytaigaclient", git = "https://github.com/talhaorak/pyTaigaClient.git" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
@@ -1155,14 +1155,6 @@ wheels = [
 [package.optional-dependencies]
 crypto = [
     { name = "cryptography" },
-]
-
-[[package]]
-name = "pytaigaclient"
-version = "0.1.0"
-source = { git = "https://github.com/talhaorak/pyTaigaClient.git#30368f9cf35c42c3ce28d8cf17791f29bb5eb81a" }
-dependencies = [
-    { name = "requests" },
 ]
 
 [[package]]

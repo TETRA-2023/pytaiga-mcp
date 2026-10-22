@@ -10,7 +10,6 @@ Single server since v3: the former `full` CRUD mode and TAIGA_SERVER_MODE
 are gone. Start with `mcp-taiga [--sse | --streamable-http]`.
 """
 
-import json
 import logging
 import os
 import sys
@@ -20,10 +19,16 @@ from datetime import date
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
-from pytaigaclient.exceptions import TaigaAPIError, TaigaException, TaigaNotFoundError
 
 from src.config import settings
-from src.taiga_client import TaigaClientWrapper, resolve_user_id, safe_lower
+from src.taiga_client import (
+    TaigaAPIError,
+    TaigaClientWrapper,
+    TaigaException,
+    TaigaNotFoundError,
+    resolve_user_id,
+    safe_lower,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -35,7 +40,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
-logging.getLogger("pytaigaclient").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Session store
@@ -85,43 +89,12 @@ def _get_authenticated_client(session_id: str) -> TaigaClientWrapper:
 # Error handling
 # ---------------------------------------------------------------------------
 
-_TAIGA_API_ERROR_PLACEHOLDER = "No error message provided by API."
-
-
-def _repair_taiga_api_error(e: TaigaAPIError) -> None:
-    """Rewrite a TaigaAPIError message in-place when pytaigaclient dropped a DRF body."""
-    if getattr(e, "error_detail", None) != _TAIGA_API_ERROR_PLACEHOLDER:
-        return
-    response = getattr(e, "response", None)
-    if response is None:
-        return
-    try:
-        body = response.json()
-    except (ValueError, AttributeError, TypeError):
-        return
-    if not isinstance(body, dict) or not body:
-        return
-    parts = []
-    for k, v in body.items():
-        if isinstance(v, list):
-            parts.append(f"{k}: {'; '.join(map(str, v))}")
-        elif isinstance(v, (str, int, float, bool)) or v is None:
-            parts.append(f"{k}: {v}")
-        else:
-            parts.append(f"{k}: {json.dumps(v)}")
-    new_detail = " | ".join(parts)
-    if not new_detail:
-        return
-    e.error_detail = new_detail
-    e.args = (f"API Error {e.status_code}: {new_detail}",)
-
 
 def _execute_taiga_operation(operation_name: str, operation_callable, error_context: str = ""):
     context_str = f" for {error_context}" if error_context else ""
     try:
         return operation_callable()
     except TaigaAPIError as e:
-        _repair_taiga_api_error(e)
         logger.error(f"Taiga API error in {operation_name}{context_str}: {e}", exc_info=False)
         raise
     except TaigaException as e:
@@ -155,7 +128,7 @@ def _cached(session_id: str, key: str, factory):
 def _resolve_project(client: TaigaClientWrapper, project: Any) -> Dict[str, Any]:
     """Resolve a project slug (str) or ID (int) to the full project dict."""
     if isinstance(project, int) or (isinstance(project, str) and project.isdigit()):
-        result = client.api.projects.get(int(project))
+        result = client.api.get(f"/projects/{int(project)}")
     else:
         result = client.api.get("/projects/by_slug", params={"slug": project})
     if not result:
@@ -548,7 +521,7 @@ except ValueError:
 
 mcp = FastMCP(
     "Taiga Workflow",
-    dependencies=["pytaigaclient"],
+    dependencies=["httpx"],
     lifespan=server_lifespan,
     host=os.environ.get("MCP_HOST", "127.0.0.1"),
     port=_mcp_port,
@@ -633,7 +606,7 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
     client = active_sessions.get(actual_session_id)
     if client and client.is_authenticated:
         try:
-            me = client.api.users.get_me()
+            me = client.api.get("/users/me")
             return {
                 "status": "active",
                 "session_id": actual_session_id,
@@ -669,7 +642,7 @@ def get_current_user(session_id: Optional[str] = None) -> Dict[str, Any]:
     client = _get_authenticated_client(actual_session_id)
 
     def do_get_me():
-        me = client.api.users.get_me()
+        me = client.api.get("/users/me")
         return {
             "id": me.get("id"),
             "username": me.get("username"),
@@ -869,7 +842,7 @@ def get_story(
 
     def do_get():
         proj = _resolve_project(client, project)
-        story = client.api.user_stories.get_by_ref(ref=ref, project=proj["id"])
+        story = client.api.get("/userstories/by_ref", params={"ref": ref, "project": proj["id"]})
         if not story:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
         # Single-item read: include the full description. The shared _story_summary
@@ -900,8 +873,6 @@ def get_task(
 
     def do_get():
         proj = _resolve_project(client, project)
-        # pytaigaclient tasks.get_by_ref passes query_params= but TaigaClient.get()
-        # expects params= (issue #87). Bypass via direct API call, as set_task_status does.
         task = client.api.get("/tasks/by_ref", params={"ref": ref, "project": proj["id"]})
         if not task:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
@@ -931,7 +902,7 @@ def get_issue(
 
     def do_get():
         proj = _resolve_project(client, project)
-        issue = client.api.issues.get_by_ref(ref=ref, project=proj["id"])
+        issue = client.api.get("/issues/by_ref", params={"ref": ref, "project": proj["id"]})
         if not issue:
             raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
         # Single-item read: include the full description. Kept off the shared
@@ -1038,7 +1009,7 @@ def create_story(
             milestone = _resolve_sprint(client, project_id, sprint)
             payload["milestone"] = milestone["id"]
 
-        result = client.api.user_stories.create(**payload)
+        result = client.api.post("/userstories", json=payload)
 
         # Link to the already-validated epic.
         if epic_data is not None and result:
@@ -1089,7 +1060,7 @@ def update_story(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.user_stories.get_by_ref(ref=ref, project=project_id)
+        current = client.api.get("/userstories/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
 
@@ -1144,7 +1115,7 @@ def update_story(
 
         result = current
         if len(payload) > 1:
-            result = client.api.user_stories.edit(current["id"], **payload)
+            result = client.api.patch(f"/userstories/{current['id']}", json=payload)
 
         summary = _story_summary(result)
         if epic_changed:
@@ -1189,7 +1160,9 @@ def create_task(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        story = client.api.user_stories.get_by_ref(ref=story_ref, project=project_id)
+        story = client.api.get(
+            "/userstories/by_ref", params={"ref": story_ref, "project": project_id}
+        )
         if not story:
             raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
 
@@ -1224,7 +1197,7 @@ def create_task(
         if assignee:
             data["assigned_to"] = _resolve_user(client, project_id, assignee, actual_session_id)
 
-        result = client.api.tasks.create(project=project_id, subject=subject, data=data)
+        result = client.api.post("/tasks", json={"project": project_id, "subject": subject, **data})
         return {
             "status": "created",
             "ref": result.get("ref"),
@@ -1265,8 +1238,6 @@ def update_task(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        # Workaround: pytaigaclient tasks.get_by_ref passes query_params= but
-        # TaigaClient.get() expects params=. Bypass via direct API call.
         current = client.api.get("/tasks/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
@@ -1286,7 +1257,9 @@ def update_task(
             milestone = _resolve_sprint(client, project_id, sprint)
             payload["milestone"] = milestone["id"]
         if story_ref is not None:
-            new_story = client.api.user_stories.get_by_ref(ref=story_ref, project=project_id)
+            new_story = client.api.get(
+                "/userstories/by_ref", params={"ref": story_ref, "project": project_id}
+            )
             if not new_story:
                 raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
             payload["user_story"] = new_story["id"]
@@ -1300,7 +1273,7 @@ def update_task(
 
         version = payload["version"]
         data = {k: v for k, v in payload.items() if k != "version"}
-        result = client.api.tasks.edit(current["id"], version=version, data=data)
+        result = client.api.patch(f"/tasks/{current['id']}", json={"version": version, **data})
         return _task_summary(result)
 
     return _execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
@@ -1335,7 +1308,9 @@ def break_down_story(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        story = client.api.user_stories.get_by_ref(ref=story_ref, project=project_id)
+        story = client.api.get(
+            "/userstories/by_ref", params={"ref": story_ref, "project": project_id}
+        )
         if not story:
             raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
 
@@ -1405,8 +1380,8 @@ def break_down_story(
                     data["assigned_to"] = _resolve_user(
                         client, project_id, entry["assignee"], actual_session_id
                     )
-                task = client.api.tasks.create(
-                    project=project_id, subject=entry["subject"], data=data
+                task = client.api.post(
+                    "/tasks", json={"project": project_id, "subject": entry["subject"], **data}
                 )
                 created.append(task)
 
@@ -1485,10 +1460,8 @@ def create_issue(
             payload["status"] = statuses[0]["id"]
 
         data = {k: v for k, v in payload.items() if k not in ("project", "subject")}
-        result = client.api.issues.create(
-            project=project_id,
-            subject=subject,
-            data=data if data else None,
+        result = client.api.post(
+            "/issues", json={"project": project_id, "subject": subject, **data}
         )
         return {
             "status": "created",
@@ -1543,7 +1516,7 @@ def update_issue(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.issues.get_by_ref(ref=ref, project=project_id)
+        current = client.api.get("/issues/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"Issue #{ref} not found in project '{proj['slug']}'.")
 
@@ -1580,7 +1553,7 @@ def update_issue(
 
         version = payload["version"]
         data = {k: v for k, v in payload.items() if k != "version"}
-        result = client.api.issues.edit(current["id"], version=version, data=data)
+        result = client.api.patch(f"/issues/{current['id']}", json={"version": version, **data})
         return {
             "ref": result.get("ref"),
             "subject": result.get("subject"),
@@ -1709,11 +1682,14 @@ def plan_sprint(
         proj = _resolve_project(client, project)
         project_id = proj["id"]
 
-        milestone = client.api.milestones.create(
-            project=project_id,
-            name=name,
-            estimated_start=start_date,
-            estimated_finish=end_date,
+        milestone = client.api.post(
+            "/milestones",
+            json={
+                "project": project_id,
+                "name": name,
+                "estimated_start": start_date,
+                "estimated_finish": end_date,
+            },
         )
         milestone_id = milestone["id"]
 
@@ -1809,12 +1785,13 @@ def set_story_status(
         project_id = proj["id"]
         status_id = _resolve_status(client, project_id, "story", status, actual_session_id)
 
-        current = client.api.user_stories.get_by_ref(ref=ref, project=project_id)
+        current = client.api.get("/userstories/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.user_stories.edit(
-            current["id"], status=status_id, version=current["version"]
+        result = client.api.patch(
+            f"/userstories/{current['id']}",
+            json={"status": status_id, "version": current["version"]},
         )
         return {
             "ref": ref,
@@ -1846,14 +1823,12 @@ def set_task_status(
         project_id = proj["id"]
         status_id = _resolve_status(client, project_id, "task", status, actual_session_id)
 
-        # Workaround: pytaigaclient tasks.get_by_ref passes query_params= but
-        # TaigaClient.get() expects params=. Bypass via direct API call.
         current = client.api.get("/tasks/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.tasks.edit(
-            current["id"], version=current["version"], data={"status": status_id}
+        result = client.api.patch(
+            f"/tasks/{current['id']}", json={"version": current["version"], "status": status_id}
         )
         return {
             "ref": ref,
@@ -1885,8 +1860,9 @@ def close_sprint(
         project_id = proj["id"]
         milestone = _resolve_sprint(client, project_id, sprint)
 
-        result = client.api.milestones.edit(
-            milestone["id"], closed=True, version=milestone.get("version", 1)
+        result = client.api.patch(
+            f"/milestones/{milestone['id']}",
+            json={"closed": True, "version": milestone.get("version", 1)},
         )
         return {
             "status": "closed",
@@ -1988,7 +1964,7 @@ def create_epic(
         if assignee:
             payload["assigned_to"] = _resolve_user(client, project_id, assignee, actual_session_id)
 
-        epic = client.api.epics.create(**payload)
+        epic = client.api.post("/epics", json=payload)
         epic_id = epic["id"]
 
         linked = 0
@@ -2107,12 +2083,13 @@ def assign_item(
     actual_session_id = _get_session_id(session_id)
     client = _get_authenticated_client(actual_session_id)
 
+    # entity_type -> REST path segment (also the by_ref route prefix).
     type_map = {
-        "story": ("user_stories", "user_story"),
-        "user_story": ("user_stories", "user_story"),
-        "task": ("tasks", "task"),
-        "issue": ("issues", "issue"),
-        "epic": ("epics", "epic"),
+        "story": "userstories",
+        "user_story": "userstories",
+        "task": "tasks",
+        "issue": "issues",
+        "epic": "epics",
     }
     if entity_type not in type_map:
         raise ValueError(
@@ -2124,21 +2101,15 @@ def assign_item(
         project_id = proj["id"]
         user_id = _resolve_user(client, project_id, username, actual_session_id)
 
-        collection_name, _ = type_map[entity_type]
-        collection = getattr(client.api, collection_name)
-        current = collection.get_by_ref(ref=ref, project=project_id)
+        segment = type_map[entity_type]
+        current = client.api.get(f"/{segment}/by_ref", params={"ref": ref, "project": project_id})
         if not current:
             raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
 
-        # pytaigaclient's edit() signatures diverge: Tasks/Issues take a
-        # data={...} dict, while UserStories/Epics take **kwargs. Route
-        # accordingly — matching the update_* tools (pytaiga-mcp#123).
-        if collection_name in ("tasks", "issues"):
-            result = collection.edit(
-                current["id"], version=current["version"], data={"assigned_to": user_id}
-            )
-        else:
-            result = collection.edit(current["id"], version=current["version"], assigned_to=user_id)
+        result = client.api.patch(
+            f"/{segment}/{current['id']}",
+            json={"version": current["version"], "assigned_to": user_id},
+        )
         return {
             "ref": ref,
             "entity_type": entity_type,
@@ -2215,12 +2186,15 @@ def upsert_wiki(
         except TaigaNotFoundError:
             existing = None
         if existing:
-            result = client.api.wiki.edit(
-                existing["id"], version=existing["version"], data={"slug": slug, "content": content}
+            result = client.api.patch(
+                f"/wiki/{existing['id']}",
+                json={"version": existing["version"], "slug": slug, "content": content},
             )
             return {"status": "updated", "slug": result.get("slug"), "id": result.get("id")}
         else:
-            result = client.api.wiki.create(project=project_id, slug=slug, content=content)
+            result = client.api.post(
+                "/wiki", json={"project": project_id, "slug": slug, "content": content}
+            )
             return {"status": "created", "slug": result.get("slug"), "id": result.get("id")}
 
     return _execute_taiga_operation("upsert_wiki", do_upsert, str(project))
@@ -2418,14 +2392,8 @@ def add_comment(
         project_id = proj["id"]
         path_segment = _COMMENT_PATH_MAP[entity_type]
 
-        # Resolve ref → ID via the by_ref endpoint directly. We bypass the
-        # pytaigaclient <resource>.get_by_ref() helpers because tasks.get_by_ref
-        # forwards a `query_params=` kwarg that TaigaClient._request() rejects
-        # ("unexpected keyword argument 'query_params'"), killing the task
-        # comment path — see issue #87 (regression of #79). Hitting the endpoint
-        # directly is version-independent and matches the update_task workaround.
         # path_segment ("userstories"/"tasks"/"issues"/"epics") doubles as the
-        # by_ref route prefix; project_id is always an int so no slug-param quirks.
+        # by_ref route prefix.
         current = client.api.get(
             f"/{path_segment}/by_ref", params={"ref": ref, "project": project_id}
         )
