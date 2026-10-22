@@ -12,6 +12,7 @@ reaches every caller.
 
 from src.server import app, core, resolve
 from src.server.tools import (
+    admin,
     attachments,
     comments,
     epics,
@@ -45,6 +46,7 @@ for _module in (
     wiki,
     attachments,
     tags,
+    admin,
 ):
     globals().update({k: v for k, v in vars(_module).items() if not k.startswith("__")})
 del _module

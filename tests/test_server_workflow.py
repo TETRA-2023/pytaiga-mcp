@@ -3909,3 +3909,304 @@ class TestB7ReviewFixes:
         route(mock_client, post={"/projects/1/mix_tags": TaigaAuthenticationError(403, "no", {})})
         with pytest.raises(TaigaAuthenticationError, match="or you are not a member"):
             wf.merge_tags("p", ["a"], "c", session_id=session)
+
+
+# ---------------------------------------------------------------------------
+# v3 B8: project admin tools. Shapes and rules from real Taiga / taiga-back.
+# ---------------------------------------------------------------------------
+
+STATUSES = [
+    {"id": 105, "name": "New", "order": 0, "color": "#999", "is_closed": False},
+    {"id": 112, "name": "Done", "order": 7, "color": "#0f0", "is_closed": True},
+    {"id": 106, "name": "Review", "order": 1, "color": "#00f", "is_closed": False},
+]
+
+
+def _admin_route(mock_client, **extra):
+    route(
+        mock_client,
+        get={
+            "/projects/by_slug": PROJECT,
+            "/userstory-statuses": STATUSES,
+            **extra.pop("get", {}),
+        },
+        **extra,
+    )
+
+
+class TestProjectSettings:
+    def test_list_sorted_by_order_unpaginated(self, session, mock_client):
+        _admin_route(mock_client)
+        result = wf.list_project_settings("p", "story_statuses", session_id=session)
+        assert [r["name"] for r in result] == ["New", "Review", "Done"]
+        assert result[2] == {
+            "id": 112,
+            "name": "Done",
+            "order": 7,
+            "color": "#0f0",
+            "is_closed": True,
+        }
+        mock_client.api.get.assert_any_call(
+            "/userstory-statuses", params={"project": 1}, headers={"x-disable-pagination": "True"}
+        )
+
+    def test_create_status_and_cache_cleared(self, session, mock_client):
+        wf._session_cache[session] = {"statuses_story_1": ["stale"]}
+        _admin_route(
+            mock_client, post={"/userstory-statuses": {"id": 120, "name": "QA", "order": 9}}
+        )
+        result = wf.create_project_setting(
+            "p", "story_statuses", "QA", color="#123456", is_closed=False, session_id=session
+        )
+        assert result["status"] == "created" and result["id"] == 120
+        assert sent(mock_client, "post", "/userstory-statuses") == [
+            {"project": 1, "name": "QA", "color": "#123456", "is_closed": False}
+        ]
+        assert session not in wf._session_cache  # set_story_status("QA") will see it
+
+    def test_custom_attribute_field_type_maps_to_type(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, post={"/task-custom-attributes": {"id": 3, "name": "Env"}})
+        wf.create_project_setting(
+            "p",
+            "task_custom_attributes",
+            "Env",
+            description="d",
+            field_type="dropdown",
+            session_id=session,
+        )
+        assert sent(mock_client, "post", "/task-custom-attributes") == [
+            {"project": 1, "name": "Env", "description": "d", "type": "dropdown"}
+        ]
+
+    @pytest.mark.parametrize(
+        "kind,kwargs",
+        [
+            ("priorities", {"is_closed": True}),
+            ("points", {"color": "#fff"}),
+            ("story_statuses", {"value": 3}),
+            ("story_custom_attributes", {"color": "#fff"}),
+        ],
+    )
+    def test_field_not_for_kind_rejected_before_any_call(self, session, mock_client, kind, kwargs):
+        with pytest.raises(ValueError, match="do not apply"):
+            wf.create_project_setting("p", kind, "X", session_id=session, **kwargs)
+        mock_client.api.get.assert_not_called()
+
+    def test_bad_kind_and_field_type(self, session, mock_client):
+        with pytest.raises(ValueError, match="Invalid kind"):
+            wf.list_project_settings("p", "swimlanes", session_id=session)
+        with pytest.raises(ValueError, match="field_type must be one of"):
+            wf.create_project_setting(
+                "p", "epic_custom_attributes", "X", field_type="blob", session_id=session
+            )
+
+    def test_update_by_name_case_insensitive(self, session, mock_client):
+        _admin_route(
+            mock_client, patch={"/userstory-statuses/106": {"id": 106, "name": "Peer review"}}
+        )
+        wf.update_project_setting(
+            "p",
+            "story_statuses",
+            "review",
+            new_name="Peer review",
+            color="#abc",
+            session_id=session,
+        )
+        assert sent(mock_client, "patch", "/userstory-statuses/106") == [
+            {"color": "#abc", "name": "Peer review"}
+        ]
+
+    def test_update_unknown_name_lists_existing(self, session, mock_client):
+        _admin_route(mock_client)
+        with pytest.raises(ValueError, match=r"No story_statuses entry named 'QA'.*New"):
+            wf.update_project_setting("p", "story_statuses", "QA", color="#fff", session_id=session)
+
+    def test_delete_status_requires_move_to_before_any_call(self, session, mock_client):
+        with pytest.raises(ValueError, match="needs move_to"):
+            wf.delete_project_setting("p", "story_statuses", "Review", session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    def test_delete_status_with_move_to(self, session, mock_client):
+        _admin_route(mock_client, delete={"/userstory-statuses/106": None})
+        result = wf.delete_project_setting(
+            "p", "story_statuses", "Review", move_to="New", session_id=session
+        )
+        assert result == {
+            "status": "deleted",
+            "kind": "story_statuses",
+            "id": 106,
+            "name": "Review",
+            "moved_to": "New",
+        }
+        mock_client.api.delete.assert_called_once_with(
+            "/userstory-statuses/106", params={"moveTo": 105}
+        )
+
+    def test_delete_move_to_itself_rejected(self, session, mock_client):
+        _admin_route(mock_client)
+        with pytest.raises(ValueError, match="different entry"):
+            wf.delete_project_setting(
+                "p", "story_statuses", "New", move_to="new", session_id=session
+            )
+        mock_client.api.delete.assert_not_called()
+
+    def test_custom_attribute_delete_has_no_move_to(self, session, mock_client):
+        with pytest.raises(ValueError, match="move_to does not apply"):
+            wf.delete_project_setting(
+                "p", "story_custom_attributes", "Env", move_to="x", session_id=session
+            )
+
+    def test_reorder_uses_kind_specific_bulk_param(self, session, mock_client):
+        # taiga-back bulk_update_param per viewset (the pre-v3 tool sent `bulk_orders`).
+        _admin_route(mock_client, post={"/userstory-statuses/bulk_update_order": None})
+        result = wf.reorder_project_settings(
+            "p", "story_statuses", ["Done", "New", "Review"], session_id=session
+        )
+        assert result["order"] == ["Done", "New", "Review"]
+        assert sent(mock_client, "post", "/userstory-statuses/bulk_update_order") == [
+            {"project": 1, "bulk_userstory_statuses": [[112, 0], [105, 1], [106, 2]]}
+        ]
+
+    def test_reorder_must_list_every_entry(self, session, mock_client):
+        _admin_route(mock_client)
+        with pytest.raises(ValueError, match=r"missing: \['Review'\]"):
+            wf.reorder_project_settings("p", "story_statuses", ["Done", "New"], session_id=session)
+        mock_client.api.post.assert_not_called()
+
+    def test_403_names_project_admin(self, session, mock_client):
+        from src.taiga_client import TaigaAuthenticationError
+
+        _admin_route(
+            mock_client,
+            post={"/userstory-statuses": TaigaAuthenticationError(403, "no", {})},
+        )
+        with pytest.raises(
+            TaigaAuthenticationError, match="create_project_setting requires project admin"
+        ):
+            wf.create_project_setting("p", "story_statuses", "QA", session_id=session)
+
+
+class TestCustomAttributeValues:
+    def test_maps_names_to_ids_merges_and_clears(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": STORY,
+                "/userstory-custom-attributes": [
+                    {"id": 1, "name": "Env", "order": 0},
+                    {"id": 2, "name": "Owner", "order": 1},
+                    {"id": 3, "name": "Old", "order": 2},
+                ],
+                "/userstories/custom-attributes-values/50": {
+                    "attributes_values": {"2": "kept", "3": "gone"},
+                    "version": 4,
+                },
+            },
+            patch={
+                "/userstories/custom-attributes-values/50": {
+                    "attributes_values": {"1": "prod", "2": "kept"},
+                    "version": 5,
+                }
+            },
+        )
+        result = wf.set_custom_attribute_values(
+            "p", 3, {"env": "prod", "Old": None}, session_id=session
+        )
+        assert sent(mock_client, "patch", "/userstories/custom-attributes-values/50") == [
+            {"attributes_values": {"2": "kept", "3": None, "1": "prod"}, "version": 4}
+        ]
+        assert result["values"] == {"Env": "prod", "Owner": "kept"}
+
+    def test_unknown_attribute_name(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": STORY,
+                "/userstory-custom-attributes": [{"id": 1, "name": "Env"}],
+            },
+        )
+        with pytest.raises(ValueError, match="No story_custom_attributes entry named 'Nope'"):
+            wf.set_custom_attribute_values("p", 3, {"Nope": 1}, session_id=session)
+        mock_client.api.patch.assert_not_called()
+
+
+MEMBERS = [
+    {
+        "user": 6,
+        "full_name": "Romain",
+        "user_email": "rva@x",
+        "email": "",
+        "role_name": "PO",
+        "is_admin": True,
+        "is_owner": False,
+    },
+    {
+        "user": None,
+        "full_name": None,
+        "user_email": None,
+        "email": "new@x",
+        "role_name": "Dev",
+        "is_admin": False,
+        "is_owner": False,
+    },
+]
+ROLES = [
+    {"id": 57, "name": "Dev Team", "order": 10},
+    {"id": 58, "name": "Product Owner", "order": 20},
+]
+
+
+class TestMembers:
+    def _route(self, mock_client, **extra):
+        mock_client.list_resources.return_value = MEMBERS
+        route(mock_client, get={"/projects/by_slug": PROJECT, "/roles": ROLES}, **extra)
+
+    def test_list_members_and_roles(self, session, mock_client):
+        self._route(mock_client)
+        result = wf.list_members("p", session_id=session)
+        assert result["roles"] == ["Dev Team", "Product Owner"]
+        assert result["members"][0]["email"] == "rva@x"  # user_email, not the blank email
+        assert result["members"][1]["pending"] is True
+
+    def test_invite_payload_uses_username_and_role_id(self, session, mock_client):
+        # taiga-back _MemberBulkValidator: username + role_id (pre-v3 sent `email`).
+        self._route(mock_client, post={"/memberships/bulk_create": []})
+        result = wf.invite_members(
+            "p", ["a@x", " b@x "], "dev team", message="Welcome", session_id=session
+        )
+        assert result == {"status": "invited", "emails": ["a@x", "b@x"], "role": "Dev Team"}
+        assert sent(mock_client, "post", "/memberships/bulk_create") == [
+            {
+                "project_id": 1,
+                "bulk_memberships": [
+                    {"username": "a@x", "role_id": 57},
+                    {"username": "b@x", "role_id": 57},
+                ],
+                "invitation_extra_text": "Welcome",
+            }
+        ]
+
+    def test_existing_member_refused_before_any_invite(self, session, mock_client):
+        # Real Taiga answers a 500 for this; refuse with a clear message instead.
+        self._route(mock_client)
+        with pytest.raises(ValueError, match=r"Already members of 'p': \['RVA@x'\]"):
+            wf.invite_members("p", ["RVA@x"], "Dev Team", session_id=session)
+        mock_client.api.post.assert_not_called()
+
+    def test_unknown_role_lists_roles(self, session, mock_client):
+        self._route(mock_client)
+        with pytest.raises(ValueError, match="No role named 'Boss'.*Dev Team"):
+            wf.invite_members("p", ["a@x"], "Boss", session_id=session)
+        mock_client.api.post.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "emails,role,match",
+        [([], "Dev", "at least one"), (["a@x", "A@x"], "Dev", "twice"), (["a@x"], " ", "role")],
+    )
+    def test_invite_input_validation(self, session, mock_client, emails, role, match):
+        with pytest.raises(ValueError, match=match):
+            wf.invite_members("p", emails, role, session_id=session)
+        mock_client.api.get.assert_not_called()

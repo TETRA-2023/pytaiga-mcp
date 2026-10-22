@@ -458,3 +458,135 @@ class TestSandboxWrites:
                     _delete(session_id, "userstories", story["id"])
             for t in [t for t in api.get(f"/projects/{project_id}/tags_colors") if tag in t]:
                 api.post(f"/projects/{project_id}/delete_tag", json={"tag": t})
+
+    def test_b8_project_admin_on_real_taiga(self, session_id):
+        """v3 B8 as project admin (rva on the smartagile sandbox). Sends NO invitation:
+        invite_members is exercised on its refusal paths only."""
+        tag = uuid.uuid4().hex[:6]
+        api = wf.active_sessions[session_id].api
+        project_id = wf.get_project_overview(TEST_PROJECT, session_id=session_id)["project"]["id"]
+        original = [
+            s["name"]
+            for s in wf.list_project_settings(TEST_PROJECT, "story_statuses", session_id=session_id)
+        ]
+        first = original[0]
+        status_name, point_name, attr_name = f"TEST st {tag}", f"T{tag}", f"TEST attr {tag}"
+        story = wf.create_story(
+            TEST_PROJECT, f"[TEST - CAN DELETE] b8 {tag}", session_id=session_id
+        )
+        made = []  # (endpoint, id) for the raw fallback cleanup
+        try:
+            members = wf.list_members(TEST_PROJECT, session_id=session_id)
+            me = wf.get_current_user(session_id=session_id)["email"]
+            assert any(m["email"] == me for m in members["members"]) and members["roles"]
+            with pytest.raises(ValueError, match="Already members"):
+                wf.invite_members(
+                    TEST_PROJECT, [me.upper()], members["roles"][0], session_id=session_id
+                )
+            with pytest.raises(ValueError, match="No role named"):
+                wf.invite_members(
+                    TEST_PROJECT, [f"nobody-{tag}@example.invalid"], "Nope", session_id=session_id
+                )
+
+            created = wf.create_project_setting(
+                TEST_PROJECT, "story_statuses", status_name, color="#123456", session_id=session_id
+            )
+            made.append(("userstory-statuses", created["id"]))
+            # Cache invalidation: the new status resolves by name in the same session.
+            moved = wf.set_story_status(
+                TEST_PROJECT, story["ref"], status_name, session_id=session_id
+            )
+            assert moved["status"] == status_name
+            wf.update_project_setting(
+                TEST_PROJECT,
+                "story_statuses",
+                status_name,
+                new_name=f"{status_name} v2",
+                color="#654321",
+                session_id=session_id,
+            )
+            status_name = f"{status_name} v2"
+
+            wf.reorder_project_settings(
+                TEST_PROJECT, "story_statuses", [status_name, *original], session_id=session_id
+            )
+            names = [
+                s["name"]
+                for s in wf.list_project_settings(
+                    TEST_PROJECT, "story_statuses", session_id=session_id
+                )
+            ]
+            assert names[0] == status_name
+            wf.reorder_project_settings(
+                TEST_PROJECT, "story_statuses", [*original, status_name], session_id=session_id
+            )
+
+            with pytest.raises(ValueError, match="needs move_to"):
+                wf.delete_project_setting(
+                    TEST_PROJECT, "story_statuses", status_name, session_id=session_id
+                )
+            deleted = wf.delete_project_setting(
+                TEST_PROJECT, "story_statuses", status_name, move_to=first, session_id=session_id
+            )
+            made.remove(("userstory-statuses", created["id"]))
+            assert deleted["moved_to"] == first
+            assert (
+                wf.get_story(TEST_PROJECT, story["ref"], session_id=session_id)["status"] == first
+            )
+
+            point = wf.create_project_setting(
+                TEST_PROJECT, "points", point_name, value=21.5, session_id=session_id
+            )
+            made.append(("points", point["id"]))
+            assert point["value"] == 21.5
+            wf.delete_project_setting(
+                TEST_PROJECT, "points", point_name, move_to="?", session_id=session_id
+            )
+            made.remove(("points", point["id"]))
+
+            attr = wf.create_project_setting(
+                TEST_PROJECT,
+                "story_custom_attributes",
+                attr_name,
+                description="b8",
+                field_type="text",
+                session_id=session_id,
+            )
+            made.append(("userstory-custom-attributes", attr["id"]))
+            assert attr["field_type"] == "text"
+            result = wf.set_custom_attribute_values(
+                TEST_PROJECT, story["ref"], {attr_name: "hello"}, session_id=session_id
+            )
+            assert result["values"] == {attr_name: "hello"}
+            cleared = wf.set_custom_attribute_values(
+                TEST_PROJECT, story["ref"], {attr_name: None}, session_id=session_id
+            )
+            assert cleared["values"][attr_name] is None  # cleared, and Taiga accepted it
+            wf.delete_project_setting(
+                TEST_PROJECT, "story_custom_attributes", attr_name, session_id=session_id
+            )
+            made.remove(("userstory-custom-attributes", attr["id"]))
+        finally:
+            for endpoint, item_id in made:
+                params = None
+                if endpoint != "userstory-custom-attributes":
+                    rows = api.get(
+                        f"/{endpoint}",
+                        params={"project": project_id},
+                        headers={"x-disable-pagination": "True"},
+                    )
+                    keep = next(r for r in rows if r["id"] != item_id)
+                    params = {"moveTo": keep["id"]}
+                try:
+                    api.delete(f"/{endpoint}/{item_id}", params=params)
+                except Exception as e:
+                    print(f"cleanup: {endpoint}/{item_id}: {e}")
+            try:
+                wf.delete_item(TEST_PROJECT, "story", story["ref"], session_id=session_id)
+            except Exception:
+                _delete(session_id, "userstories", story["id"])
+        after = [
+            s["name"]
+            for s in wf.list_project_settings(TEST_PROJECT, "story_statuses", session_id=session_id)
+        ]
+        assert after == original, "the sandbox's status order was not restored"
