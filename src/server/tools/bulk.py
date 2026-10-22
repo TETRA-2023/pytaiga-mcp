@@ -124,7 +124,8 @@ def reorder_stories(
         stories = {
             s["ref"]: s for s in client.list_resources("user_stories", project_id=project_id)
         }
-        missing = [r for r in refs + ([anchor] if anchor is not None else []) if r not in stories]
+        checked = refs + ([anchor] if anchor is not None else [])
+        missing = [r for r in checked if r not in stories]
         if missing:
             raise ValueError(f"User stories not found: {missing}")
 
@@ -142,11 +143,7 @@ def reorder_stories(
 
         # The ordering endpoints also SET the column on every moved story (and
         # its tasks' sprint): a story from elsewhere would be silently moved.
-        outside = [
-            r
-            for r in refs + ([anchor] if anchor is not None else [])
-            if _column_of(stories[r], view) != column
-        ]
+        outside = [r for r in checked if _column_of(stories[r], view) != column]
         if outside:
             where = {
                 "backlog": "the backlog",

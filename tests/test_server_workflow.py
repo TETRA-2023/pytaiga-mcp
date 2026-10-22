@@ -4314,6 +4314,18 @@ class TestLinkToEpic:
         with pytest.raises(TaigaException, match=r"Linked \[1, 3\] to epic #9; failed: #2: boom"):
             wf.link_to_epic("p", 9, [1, 2, 3], session_id=session)
 
+    def test_linked_meanwhile_counts_as_already_linked(self, session, mock_client):
+        # Another client links #2 between our read and our POST: Taiga answers 400.
+        from src.taiga_client import TaigaBadRequestError
+
+        self._route(mock_client, [])
+        dup = TaigaBadRequestError(
+            400, "__all__: Related user story with this User story and Epic already exists.", {}
+        )
+        route(mock_client, post={"/epics/500/related_userstories": Seq({}, dup, {})})
+        result = wf.link_to_epic("p", 9, [1, 2, 3], session_id=session)
+        assert result["linked"] == [1, 3] and result["already_linked"] == [2]
+
     def test_unknown_epic_real_404(self, session, mock_client):
         mock_client.api.get.return_value = PROJECT
         route(mock_client, get={"/epics/by_ref": _api_error(TaigaNotFoundError, 404)})

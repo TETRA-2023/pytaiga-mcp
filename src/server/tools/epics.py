@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
-from src.taiga_client import _NO_PAGINATION_HEADERS, TaigaException
+from src.taiga_client import _NO_PAGINATION_HEADERS, TaigaBadRequestError, TaigaException
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 def _link_stories(client, epic_id: int, refs_and_ids: List[tuple]) -> tuple:
-    """Link stories to an epic, one POST per story: (linked refs, failure messages).
+    """Link stories to an epic, one POST per story.
 
-    Never /related_userstories/bulk_create: it creates NEW stories from
+    Returns (linked refs, already-linked refs, failure messages). Never
+    /related_userstories/bulk_create: it creates NEW stories from
     newline-separated subjects, so a list of ids became one junk story and
     nothing was linked (pytaiga-mcp#143).
     """
-    linked, failed = [], []
+    linked, already, failed = [], [], []
     for ref, us_id in refs_and_ids:
         try:
             client.api.post(
@@ -29,9 +30,16 @@ def _link_stories(client, epic_id: int, refs_and_ids: List[tuple]) -> tuple:
                 json={"epic": epic_id, "user_story": us_id},
             )
             linked.append(ref)
+        except TaigaBadRequestError as e:
+            # Linked meanwhile by someone else (Taiga: "Related user story with
+            # this User story and Epic already exists."): not a failure.
+            if "already exists" in e.error_detail:
+                already.append(ref)
+            else:
+                failed.append(f"#{ref}: {e}")
         except TaigaException as e:
             failed.append(f"#{ref}: {e}")
-    return linked, failed
+    return linked, already, failed
 
 
 @app.tool(
@@ -121,8 +129,8 @@ def create_epic(
         linked = 0
         if story_refs:
             us_ids = resolve._resolve_story_refs(client, project_id, story_refs)
-            done, failed = _link_stories(client, epic_id, list(zip(story_refs, us_ids)))
-            linked = len(done)
+            done, already, failed = _link_stories(client, epic_id, list(zip(story_refs, us_ids)))
+            linked = len(done) + len(already)
             if failed:
                 raise TaigaException(
                     f"Epic #{epic.get('ref')} (id {epic_id}) was created, but linked only "
@@ -220,14 +228,10 @@ def link_to_epic(
     refs = list(dict.fromkeys(story_refs or []))  # dedupe, keep order
     if not refs:
         raise ValueError("story_refs must contain at least one story ref.")
-    actual_session_id = core._get_session_id(session_id)
-    client = core._get_authenticated_client(actual_session_id)
+    client = core._get_authenticated_client(core._get_session_id(session_id))
 
     def do_link():
-        proj = resolve._resolve_project(client, project)
-        epic = resolve._get_by_ref(client, "epics", epic_ref, proj["id"])
-        if not epic:
-            raise ValueError(f"Epic #{epic_ref} not found in project '{proj['slug']}'.")
+        proj, epic, _ = resolve._resolve_item_by_ref(client, project, "epic", epic_ref)
         us_ids = resolve._resolve_story_refs(client, proj["id"], refs)
         existing = {
             r.get("user_story")
@@ -238,10 +242,13 @@ def link_to_epic(
         }
         todo = [(ref, us_id) for ref, us_id in zip(refs, us_ids) if us_id not in existing]
         already = [ref for ref, us_id in zip(refs, us_ids) if us_id in existing]
-        linked, failed = _link_stories(client, epic["id"], todo)
+        linked, raced, failed = _link_stories(client, epic["id"], todo)
+        already += raced
         if failed:
+            already_note = f"; already linked: {already}" if already else ""
             raise TaigaException(
                 f"Linked {linked or 'none'} to epic #{epic_ref}; failed: {'; '.join(failed)}"
+                f"{already_note}"
             )
         return {
             "status": "linked",
