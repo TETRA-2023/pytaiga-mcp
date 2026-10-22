@@ -142,7 +142,7 @@ class TestTaigaHTTPErrors:
 
 
 class TestErrorDetail:
-    """The DRF-body formatting formerly done by server_workflow._repair_taiga_api_error."""
+    """The DRF-body formatting formerly done by the pre-v3 _repair_taiga_api_error."""
 
     def test_error_message_wins(self):
         assert _error_detail({"_error_message": "boom", "x": ["y"]}, "", 400) == "boom"

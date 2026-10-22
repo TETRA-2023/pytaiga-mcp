@@ -79,7 +79,7 @@ except ValueError:
     _mcp_port = 8000
 
 mcp = FastMCP(
-    "Taiga Workflow",
+    "Taiga",
     dependencies=["httpx"],
     lifespan=server_lifespan,
     host=os.environ.get("MCP_HOST", "127.0.0.1"),

@@ -28,9 +28,11 @@ from src.server.tools import (
     wiki,
 )
 
-# Flat namespace: `import src.server as wf; wf.<any helper or tool>` keeps working
-# for tests and for the pre-v3 `src.server_workflow` shim. Shared objects
-# (active_sessions, _session_cache, mcp) are the same objects, not copies.
+# Flat namespace for tests and interactive use: `import src.server as wf;
+# wf.<any helper or tool>`. It is a COPY of the names: shared objects
+# (active_sessions, _session_cache, mcp) are the same objects, but
+# monkeypatch.setattr(wf, ...) reaches nothing — patch the defining module
+# (core, resolve, tools.<group>) instead.
 for _module in (
     core,
     resolve,

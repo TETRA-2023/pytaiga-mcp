@@ -1,4 +1,4 @@
-"""Unit tests for server_workflow.py — name resolution helpers and tool smoke tests."""
+"""Unit tests for the MCP server (src/server/): name resolution, tools, offload."""
 
 import asyncio
 import uuid
@@ -6,7 +6,7 @@ from unittest.mock import DEFAULT, MagicMock, call
 
 import pytest
 
-import src.server_workflow as wf
+import src.server as wf
 from src import taiga_client
 from src.taiga_client import (
     TaigaAPIError,
@@ -4537,3 +4537,18 @@ def test_unknown_project_real_404(session, mock_client, project, path):
     route(mock_client, get=_not_found(path))
     with pytest.raises(ValueError, match="not found"):
         wf.get_story(project, 5, session_id=session)
+
+
+def test_readme_tool_table_matches_registered_tools():
+    """README's Tools table lists exactly the registered tools (it once said ~34/107)."""
+    import re
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    table = readme.split("## Tools", 1)[1].split("\n\n", 2)[1]
+    documented = set(re.findall(r"`([a-z_]+)`", table))
+    registered = {t.name for t in wf.mcp._tool_manager.list_tools()}
+    assert documented == registered, {
+        "missing_from_readme": sorted(registered - documented),
+        "not_a_tool": sorted(documented - registered),
+    }

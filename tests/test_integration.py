@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 
-import src.server_workflow as wf
+import src.server as wf
 from src.taiga_client import TaigaBadRequestError
 
 TEST_HOST = os.environ.get(

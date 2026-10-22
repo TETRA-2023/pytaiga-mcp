@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 3.x     | :white_check_mark: |
+| < 3.0   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -20,4 +21,6 @@ We will acknowledge receipt within 48 hours and aim to provide a fix within 7 da
 
 - **Credentials**: Never commit `.env` files or credentials to version control
 - **Session IDs**: Session IDs are bearer tokens - treat them like passwords
-- **API Access**: This bridge has full access to your Taiga instance based on the authenticated user's permissions
+- **API Access**: This bridge acts with the authenticated user's Taiga permissions — run it with an account that has only the rights the assistant needs
+- **Attachment URLs**: `list_attachments` returns Taiga download links that work without login; treat them as secrets
+- **Logs**: credentials, tokens, request bodies and headers are never logged

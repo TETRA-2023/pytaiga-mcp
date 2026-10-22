@@ -1,6 +1,6 @@
 """Tests for transport resolution logic."""
 
-from src.server_workflow import _resolve_transport
+from src.server.app import _resolve_transport
 
 
 class TestResolveTransport:
