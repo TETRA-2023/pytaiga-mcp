@@ -3605,6 +3605,34 @@ class TestGetHistory:
             {"date": "2026-10-01T00:00:00Z", "author": "Romain", "comment": "original"}
         ]
 
+    def test_history_requested_unpaginated(self, session, mock_client):
+        # /history pages at 30 entries; a long history must not lose its oldest comments.
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/userstories/by_ref": STORY, "/history/userstory/50": HISTORY})
+        wf.get_history("p", 3, session_id=session)
+        wf.list_comments("p", 3, session_id=session)
+        hist_calls = [
+            c for c in mock_client.api.get.call_args_list if c.args[0] == "/history/userstory/50"
+        ]
+        assert len(hist_calls) == 2
+        assert all(c.kwargs["headers"] == {"x-disable-pagination": "True"} for c in hist_calls)
+
+    def test_forbidden_comment_versions_do_not_abort_history(self, session, mock_client):
+        # Versions are visible only to the comment author and project admins.
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": STORY,
+                "/history/userstory/50": HISTORY,
+                "/history/userstory/50/comment_versions": TaigaAuthenticationError(403, "no"),
+            },
+        )
+        result = wf.get_history("p", 3, include_comment_versions=True, session_id=session)
+        assert [e["id"] for e in result] == ["c3", "h2", "c1"]
+        assert result[2]["comment_versions"] is None
+        assert "forbidden" in result[2]["comment_versions_error"]
+
 
 class TestActivityComments:
     def _event(self, comment):

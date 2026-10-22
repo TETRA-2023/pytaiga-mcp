@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
-from src.taiga_client import TaigaNotFoundError
+from src.taiga_client import _NO_PAGINATION_HEADERS, TaigaAuthenticationError, TaigaNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +45,9 @@ def add_comment(
     text = text.replace("\\n", "\n").replace("\\t", "\t")
 
     def do_comment():
-        proj = resolve._resolve_project(client, project)
-        project_id = proj["id"]
-        path_segment = _COMMENT_PATH_MAP[entity_type]
-
-        # path_segment ("userstories"/"tasks"/"issues"/"epics") doubles as the
-        # by_ref route prefix.
-        current = client.api.get(
-            f"/{path_segment}/by_ref", params={"ref": ref, "project": project_id}
-        )
-        if not current:
-            raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
-
+        _, current, _ = _resolve_item(client, project, entity_type, ref)
         client.api.patch(
-            f"/{path_segment}/{current['id']}",
+            f"/{_COMMENT_PATH_MAP[entity_type]}/{current['id']}",
             json={"comment": text, "version": current["version"]},
         )
         return {"status": "comment_added", "entity_type": entity_type, "ref": ref}
@@ -134,6 +123,38 @@ def _comment_action(
         raise ValueError(f"Comment {comment_id} not found on {label} (see list_comments).")
 
 
+def _fetch_history(client, hist: str, item_id: int) -> List[Dict[str, Any]]:
+    """Full history of an item. /history is paginated (30 per page) like any list
+    endpoint, so without the header an item with a long history loses its oldest
+    entries, comments included."""
+    return client.api.get(f"/history/{hist}/{item_id}", headers=_NO_PAGINATION_HEADERS) or []
+
+
+def _run_comment_action(
+    tool: str,
+    action: str,
+    status: str,
+    project: Union[str, int],
+    ref: int,
+    comment_id: str,
+    entity_type: str,
+    session_id: Optional[str],
+    json: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Shared body of edit_comment / delete_comment / restore_comment."""
+    comment_id = _comment_id(comment_id)
+    client = core._get_authenticated_client(core._get_session_id(session_id))
+
+    def do_action():
+        _, item, hist = _resolve_item(client, project, entity_type, ref)
+        _comment_action(client, hist, item["id"], action, comment_id, f"{entity_type} #{ref}", json)
+        return {"status": status, "entity_type": entity_type, "ref": ref, "comment_id": comment_id}
+
+    return core._execute_taiga_operation(
+        tool, do_action, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    )
+
+
 @app.tool(
     "list_comments",
     description=(
@@ -156,7 +177,7 @@ def list_comments(
 
     def do_list():
         _, item, hist = _resolve_item(client, project, entity_type, ref)
-        history = client.api.get(f"/history/{hist}/{item['id']}") or []
+        history = _fetch_history(client, hist, item["id"])
         comments = [
             _comment_summary(e)
             for e in history
@@ -188,28 +209,19 @@ def edit_comment(
     entity_type: str = "story",
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    comment_id = _comment_id(comment_id)
     if not text or not text.strip():
         raise ValueError("Comment text must not be empty.")
     text = text.replace("\\n", "\n").replace("\\t", "\t")
-    actual_session_id = core._get_session_id(session_id)
-    client = core._get_authenticated_client(actual_session_id)
-
-    def do_edit():
-        _, item, hist = _resolve_item(client, project, entity_type, ref)
-        label = f"{entity_type} #{ref}"
-        _comment_action(
-            client, hist, item["id"], "edit_comment", comment_id, label, {"comment": text}
-        )
-        return {
-            "status": "comment_edited",
-            "entity_type": entity_type,
-            "ref": ref,
-            "comment_id": comment_id,
-        }
-
-    return core._execute_taiga_operation(
-        "edit_comment", do_edit, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    return _run_comment_action(
+        "edit_comment",
+        "edit_comment",
+        "comment_edited",
+        project,
+        ref,
+        comment_id,
+        entity_type,
+        session_id,
+        {"comment": text},
     )
 
 
@@ -228,24 +240,15 @@ def delete_comment(
     entity_type: str = "story",
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    comment_id = _comment_id(comment_id)
-    actual_session_id = core._get_session_id(session_id)
-    client = core._get_authenticated_client(actual_session_id)
-
-    def do_delete():
-        _, item, hist = _resolve_item(client, project, entity_type, ref)
-        _comment_action(
-            client, hist, item["id"], "delete_comment", comment_id, f"{entity_type} #{ref}"
-        )
-        return {
-            "status": "comment_deleted",
-            "entity_type": entity_type,
-            "ref": ref,
-            "comment_id": comment_id,
-        }
-
-    return core._execute_taiga_operation(
-        "delete_comment", do_delete, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    return _run_comment_action(
+        "delete_comment",
+        "delete_comment",
+        "comment_deleted",
+        project,
+        ref,
+        comment_id,
+        entity_type,
+        session_id,
     )
 
 
@@ -264,24 +267,15 @@ def restore_comment(
     entity_type: str = "story",
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    comment_id = _comment_id(comment_id)
-    actual_session_id = core._get_session_id(session_id)
-    client = core._get_authenticated_client(actual_session_id)
-
-    def do_restore():
-        _, item, hist = _resolve_item(client, project, entity_type, ref)
-        _comment_action(
-            client, hist, item["id"], "undelete_comment", comment_id, f"{entity_type} #{ref}"
-        )
-        return {
-            "status": "comment_restored",
-            "entity_type": entity_type,
-            "ref": ref,
-            "comment_id": comment_id,
-        }
-
-    return core._execute_taiga_operation(
-        "restore_comment", do_restore, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    return _run_comment_action(
+        "restore_comment",
+        "undelete_comment",
+        "comment_restored",
+        project,
+        ref,
+        comment_id,
+        entity_type,
+        session_id,
     )
 
 
@@ -308,7 +302,7 @@ def get_history(
 
     def do_history():
         _, item, hist = _resolve_item(client, project, entity_type, ref)
-        history = client.api.get(f"/history/{hist}/{item['id']}") or []
+        history = _fetch_history(client, hist, item["id"])
         entries = []
         for e in history:
             entry: Dict[str, Any] = {
@@ -325,21 +319,31 @@ def get_history(
                 entry["comment_edited_at"] = e.get("edit_comment_date")
                 entry["comment_deleted_at"] = e.get("delete_comment_date")
                 if include_comment_versions and e.get("edit_comment_date"):
-                    versions = (
-                        client.api.get(
-                            f"/history/{hist}/{item['id']}/comment_versions", params={"id": e["id"]}
+                    try:
+                        versions = (
+                            client.api.get(
+                                f"/history/{hist}/{item['id']}/comment_versions",
+                                params={"id": e["id"]},
+                            )
+                            or []
                         )
-                        or []
-                    )
-                    entry["comment_versions"] = [
-                        {
-                            "date": v.get("date"),
-                            "author": (v.get("user") or {}).get("full_name_display")
-                            or (v.get("user") or {}).get("username"),
-                            "comment": v.get("comment"),
-                        }
-                        for v in versions
-                    ]
+                    except TaigaAuthenticationError as err:
+                        # Taiga shows versions only to the comment's author and
+                        # project admins; one forbidden comment must not hide
+                        # the rest of the history.
+                        if err.status_code != 403:
+                            raise
+                        entry["comment_versions"] = None
+                        entry["comment_versions_error"] = "forbidden (author or admin only)"
+                    else:
+                        entry["comment_versions"] = [
+                            {
+                                "date": v.get("date"),
+                                "author": _author(v),
+                                "comment": v.get("comment"),
+                            }
+                            for v in versions
+                        ]
             entries.append(entry)
         return entries
 

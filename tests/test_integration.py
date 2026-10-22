@@ -375,3 +375,23 @@ class TestSandboxWrites:
                 wf.delete_item(TEST_PROJECT, "story", story["ref"], session_id=session_id)
             except Exception:
                 _delete(session_id, "userstories", story["id"])
+
+    def test_b6_long_history_is_not_paginated(self, session_id):
+        """Taiga pages /history at 30 entries: without x-disable-pagination an item
+        with a long history silently lost its OLDEST comments (verified: 30 of 35)."""
+        tag = uuid.uuid4().hex[:8]
+        story = wf.create_story(
+            TEST_PROJECT, f"[TEST - CAN DELETE] long {tag}", session_id=session_id
+        )
+        try:
+            for i in range(35):
+                wf.add_comment(TEST_PROJECT, story["ref"], f"c{i} {tag}", session_id=session_id)
+            comments = wf.list_comments(TEST_PROJECT, story["ref"], session_id=session_id)
+            assert len(comments) == 35
+            assert comments[0]["comment"] == f"c0 {tag}"  # the oldest one survives
+            assert len(wf.get_history(TEST_PROJECT, story["ref"], session_id=session_id)) >= 35
+        finally:
+            try:
+                wf.delete_item(TEST_PROJECT, "story", story["ref"], session_id=session_id)
+            except Exception:
+                _delete(session_id, "userstories", story["id"])
