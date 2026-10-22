@@ -1,0 +1,109 @@
+# Keep auto-merged Dependabot PRs moving under strict branch protection.
+#
+# main requires PRs to be up to date (strict), GitHub auto-merge never updates
+# a branch, and Dependabot only rebases on its own when a PR CONFLICTS. So any
+# push to main that doesn't touch a Dependabot PR's files (a ci/docs change,
+# every semantic-release version commit) leaves every open Dependabot PR BEHIND
+# forever, green checks and all (pytaiga-mcp #177/#178, 2026-10-22; Taiga
+# tetra #2638).
+#
+# Asks Dependabot to rebase the OLDEST stuck PR with auto-merge on, via an
+# `@dependabot rebase` comment. Why a comment and not the update-branch API:
+#  - Dependabot pushes the rebase itself, so it keeps owning the PR. A commit
+#    from anyone else on its branch makes it stop rebasing that PR for good.
+#  - The push is Dependabot's own, so CI and auto-merge behave exactly as on a
+#    fresh Dependabot PR, and this token never has to push workflow files.
+#  - The same comment also fixes a DIRTY (conflicted) PR.
+#
+# One PR at a time on purpose: its merge pushes to main and re-triggers this
+# workflow for the next one, instead of N parallel CI runs that all go stale
+# after the first merge. Expect TWO rebases per merge in repos with a release
+# job: the merge commit triggers one, and the semantic-release commit ~2 min
+# later strands it and triggers another. That's expected, not a bug.
+#
+# PRs without auto-merge (majors, held by policy) are skipped. The schedule is
+# a backstop in case nothing pushes to main. A candidate stuck for more than
+# 24h fails the run, so a stall shows up as a red run instead of silence.
+name: Dependabot rebase
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print the PR that would be asked to rebase"
+        type: boolean
+        default: true
+
+concurrency:
+  group: dependabot-rebase
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  rebase:
+    # GitHub-hosted like dependabot-auto-merge.yml: `gh` is there, and a job
+    # holding the PAT has no business on a self-hosted runner.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask Dependabot to rebase the oldest stuck auto-merge PR
+        env:
+          # NOT GITHUB_TOKEN: Dependabot ignores commands from bot accounts.
+          # Same PAT as the auto-merge job (a real account with write access).
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          # mergeStateStatus is computed lazily and can read UNKNOWN right after
+          # a push: retry a few times before concluding there is nothing to do.
+          for _ in 1 2 3 4 5; do
+            prs=$(gh pr list --repo "$REPO" --author app/dependabot --state open \
+              --json number,createdAt,mergeStateStatus,autoMergeRequest)
+            unknown=$(jq '[.[] | select(.autoMergeRequest != null)
+                               | select(.mergeStateStatus == "UNKNOWN")] | length' <<<"$prs")
+            [ "$unknown" -eq 0 ] && break
+            sleep 15
+          done
+          pick=$(jq -c '[.[] | select(.autoMergeRequest != null)
+                             | select(.mergeStateStatus == "BEHIND" or .mergeStateStatus == "DIRTY")]
+                        | sort_by(.createdAt) | first // empty' <<<"$prs")
+          if [ -z "$pick" ]; then
+            echo "No stuck Dependabot PR with auto-merge on."
+            exit 0
+          fi
+          n=$(jq -r .number <<<"$pick")
+          state=$(jq -r .mergeStateStatus <<<"$pick")
+          created=$(jq -r .createdAt <<<"$pick")
+          echo "Oldest stuck PR: #$n ($state, opened $created)"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry_run: not commenting."
+            exit 0
+          fi
+
+          # Don't pile up commands while Dependabot is still working on the
+          # last one: skip if we already asked within the past 30 minutes.
+          me=$(gh api user --jq .login)
+          since=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          recent=$(gh api "repos/$REPO/issues/$n/comments?since=$since" \
+            --jq "[.[] | select(.user.login == \"$me\")
+                       | select(.body | startswith(\"@dependabot rebase\"))] | length")
+          if [ "$recent" -eq 0 ]; then
+            gh pr comment "$n" --repo "$REPO" --body "@dependabot rebase"
+            echo "Asked Dependabot to rebase #$n."
+          else
+            echo "Already asked on #$n within 30 min; waiting for Dependabot."
+          fi
+
+          # Stall alarm: a PR stuck this long means its CI is red or Dependabot
+          # isn't responding. Fail so someone looks.
+          age_h=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 3600 ))
+          if [ "$age_h" -ge 24 ]; then
+            echo "::error::Dependabot PR #$n has been stuck ($state) for ${age_h}h; check its CI."
+            exit 1
+          fi
