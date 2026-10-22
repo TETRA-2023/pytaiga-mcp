@@ -438,9 +438,10 @@ class TestSandboxWrites:
 
             tags = {t["tag"] for t in wf.list_tags(TEST_PROJECT, session_id=session_id)}
             assert {f"x{tag}", f"y{tag}"} <= tags
-            wf.rename_tag(
+            renamed = wf.rename_tag(
                 TEST_PROJECT, f"x{tag}", new_name=f"z{tag}", color="#A5694F", session_id=session_id
             )
+            assert renamed["color"] == "#A5694F"
             colors = {
                 t["tag"]: t["color"] for t in wf.list_tags(TEST_PROJECT, session_id=session_id)
             }

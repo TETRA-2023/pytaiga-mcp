@@ -18,21 +18,6 @@ logger = logging.getLogger(__name__)
 _MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 
-def _resolve_item(client, project, entity_type: str, ref: int):
-    """(project dict, item dict, REST segment) for an item by ref, or ValueError."""
-    if entity_type not in resolve._ENTITY_PATH_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. "
-            f"Must be one of: {', '.join(resolve._ENTITY_PATH_MAP)}."
-        )
-    proj = resolve._resolve_project(client, project)
-    segment = resolve._ENTITY_PATH_MAP[entity_type]
-    item = resolve._get_by_ref(client, segment, ref, proj["id"])
-    if not item:
-        raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
-    return proj, item, segment
-
-
 def _attachment_summary(a: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": a.get("id"),
@@ -65,7 +50,7 @@ def list_attachments(
     client = core._get_authenticated_client(actual_session_id)
 
     def do_list():
-        proj, item, segment = _resolve_item(client, project, entity_type, ref)
+        proj, item, segment = resolve._resolve_item_by_ref(client, project, entity_type, ref)
         rows = client.api.get(
             f"/{segment}/attachments",
             params={"object_id": item["id"], "project": proj["id"]},
@@ -96,11 +81,17 @@ def add_attachment(
     entity_type: str = "story",
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    name = os.path.basename((filename or "").strip())
+    # Normalise Windows separators too: os.path.basename only splits on "/" here.
+    name = os.path.basename((filename or "").strip().replace("\\", "/"))
     if not name:
         raise ValueError("filename must not be empty.")
+    # Line-wrapped base64 (`base64` CLI wraps at 76 columns) is still valid input.
+    encoded = "".join((content_base64 or "").split())
+    # Reject oversize input before decoding it: base64 is ~4/3 of the decoded size.
+    if len(encoded) > (_MAX_ATTACHMENT_BYTES + 2) // 3 * 4:
+        raise ValueError(f"File exceeds the limit of {_MAX_ATTACHMENT_BYTES} bytes (10 MB).")
     try:
-        content = base64.b64decode(content_base64 or "", validate=True)
+        content = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError):
         raise ValueError("content_base64 is not valid base64.")
     if not content:
@@ -114,7 +105,7 @@ def add_attachment(
     client = core._get_authenticated_client(actual_session_id)
 
     def do_add():
-        proj, item, segment = _resolve_item(client, project, entity_type, ref)
+        proj, item, segment = resolve._resolve_item_by_ref(client, project, entity_type, ref)
         form = {"project": str(proj["id"]), "object_id": str(item["id"])}
         if description:
             form["description"] = description
@@ -155,7 +146,7 @@ def delete_attachment(
     client = core._get_authenticated_client(actual_session_id)
 
     def do_delete():
-        proj, item, segment = _resolve_item(client, project, entity_type, ref)
+        proj, item, segment = resolve._resolve_item_by_ref(client, project, entity_type, ref)
         try:
             attachment = client.api.get(f"/{segment}/attachments/{attachment_id}")
         except TaigaNotFoundError:

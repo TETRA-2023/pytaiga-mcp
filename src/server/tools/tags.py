@@ -47,7 +47,7 @@ def rename_tag(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     tag = (tag or "").strip()
-    new_name = new_name.strip() if new_name else None
+    new_name = (new_name or "").strip() or None
     if not tag:
         raise ValueError("tag must not be empty.")
     if new_name is None and color is None:
@@ -64,7 +64,11 @@ def rename_tag(
             payload["color"] = color
         with core._admin_required("rename_tag", proj["slug"]):
             client.api.post(f"/projects/{proj['id']}/edit_tag", json=payload)
-        return {"status": "tag_updated", "tag": tag, "new_name": new_name or tag, "color": color}
+        final = new_name or tag
+        # Read the color back: an omitted color is kept by Taiga, and returning
+        # None here would read as "uncolored" (list_tags uses null for that).
+        colors = client.api.get(f"/projects/{proj['id']}/tags_colors") or {}
+        return {"status": "tag_updated", "tag": tag, "new_name": final, "color": colors.get(final)}
 
     return core._execute_taiga_operation("rename_tag", do_rename, f"'{tag}' in {project}")
 

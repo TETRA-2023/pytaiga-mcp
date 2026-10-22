@@ -73,15 +73,7 @@ _HISTORY_SEGMENT = {
 
 def _resolve_item(client, project, entity_type: str, ref: int):
     """(project dict, item dict, history segment) for an item by ref, or ValueError."""
-    if entity_type not in _COMMENT_PATH_MAP:
-        raise ValueError(
-            f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_COMMENT_PATH_MAP)}."
-        )
-    proj = resolve._resolve_project(client, project)
-    segment = _COMMENT_PATH_MAP[entity_type]
-    item = resolve._get_by_ref(client, segment, ref, proj["id"])
-    if not item:
-        raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
+    proj, item, segment = resolve._resolve_item_by_ref(client, project, entity_type, ref)
     return proj, item, _HISTORY_SEGMENT[segment]
 
 

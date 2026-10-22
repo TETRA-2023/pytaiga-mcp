@@ -129,9 +129,10 @@ def _cached(session_id: str, key: str, factory):
 def _admin_required(action: str, project_slug: str):
     """Re-raise Taiga's bare 403 on an admin-only endpoint as an explicit message.
 
-    Taiga answers "You do not have permission to perform this action." The
-    operator account (rva) is write-tier everywhere, so on these endpoints a
-    403 almost always means "this needs project admin" — say so.
+    Taiga answers "You do not have permission to perform this action." On these
+    endpoints that usually means "this needs project admin" (the operator
+    account, rva, is write-tier), but it is also what a non-member gets, so the
+    message names both causes.
     """
     try:
         yield
@@ -140,6 +141,7 @@ def _admin_required(action: str, project_slug: str):
             raise
         raise TaigaAuthenticationError(
             403,
-            f"{action} requires project admin rights on '{project_slug}' (Taiga: {e.error_detail})",
+            f"{action} requires project admin rights on '{project_slug}' — or you are not a "
+            f"member of it (Taiga: {e.error_detail})",
             e.body,
         ) from e

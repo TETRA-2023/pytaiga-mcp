@@ -3851,3 +3851,61 @@ class TestTags:
             TaigaAuthenticationError, match=f"{tool} requires project admin rights on 'p'"
         ):
             getattr(wf, tool)(*args, session_id=session)
+
+
+class TestB7ReviewFixes:
+    def _route_upload(self, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY},
+            post={"/userstories/attachments": ATTACHMENT},
+        )
+
+    def test_line_wrapped_base64_accepted(self, session, mock_client):
+        # `base64` CLI / base64.encodebytes wrap at 76 columns.
+        self._route_upload(mock_client)
+        data = b"x" * 200
+        wf.add_attachment("p", 3, "a.bin", _b64.encodebytes(data).decode(), session_id=session)
+        assert mock_client.api.post.call_args.kwargs["files"]["attached_file"][1] == data
+
+    def test_windows_path_reduced_to_file_name(self, session, mock_client):
+        self._route_upload(mock_client)
+        wf.add_attachment(
+            "p", 3, "C:\\Users\\me\\spec.pdf", _b64.b64encode(b"%PDF").decode(), session_id=session
+        )
+        name, _, mime = mock_client.api.post.call_args.kwargs["files"]["attached_file"]
+        assert name == "spec.pdf" and mime == "application/pdf"
+
+    def test_oversize_rejected_before_decoding(self, session, mock_client, monkeypatch):
+        from src.server.tools import attachments as att
+
+        monkeypatch.setattr(att, "_MAX_ATTACHMENT_BYTES", 3)
+        decoded = []
+        monkeypatch.setattr(att.base64, "b64decode", lambda *a, **k: decoded.append(1) or b"")
+        with pytest.raises(ValueError, match="limit"):
+            wf.add_attachment("p", 3, "a", _b64.b64encode(b"x" * 30).decode(), session_id=session)
+        assert decoded == []  # never decoded the oversize payload
+
+    def test_whitespace_new_name_is_no_change(self, session, mock_client):
+        with pytest.raises(ValueError, match="new_name, color, or both"):
+            wf.rename_tag("p", "x", new_name="   ", session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    def test_rename_returns_the_tags_actual_color(self, session, mock_client):
+        # No color given: Taiga keeps the old one; the result must not say null.
+        route(
+            mock_client,
+            get={"/projects/by_slug": PROJECT, "/projects/1/tags_colors": {"y": "#123456"}},
+            post={"/projects/1/edit_tag": None},
+        )
+        result = wf.rename_tag("p", "x", new_name="y", session_id=session)
+        assert result == {"status": "tag_updated", "tag": "x", "new_name": "y", "color": "#123456"}
+
+    def test_admin_message_names_both_causes(self, session, mock_client):
+        from src.taiga_client import TaigaAuthenticationError
+
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, post={"/projects/1/mix_tags": TaigaAuthenticationError(403, "no", {})})
+        with pytest.raises(TaigaAuthenticationError, match="or you are not a member"):
+            wf.merge_tags("p", ["a"], "c", session_id=session)

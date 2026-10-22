@@ -254,6 +254,20 @@ def _get_by_ref(
         return None
 
 
+def _resolve_item_by_ref(client: TaigaClientWrapper, project: Any, entity_type: str, ref: int):
+    """(project dict, item dict, REST segment) for an item by ref, or ValueError."""
+    if entity_type not in _ENTITY_PATH_MAP:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_ENTITY_PATH_MAP)}."
+        )
+    proj = _resolve_project(client, project)
+    segment = _ENTITY_PATH_MAP[entity_type]
+    item = _get_by_ref(client, segment, ref, proj["id"])
+    if not item:
+        raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
+    return proj, item, segment
+
+
 def _story_filters(
     client: TaigaClientWrapper,
     proj: Dict[str, Any],
