@@ -15,7 +15,7 @@ import uuid
 import pytest
 
 import src.server_workflow as wf
-from src.taiga_client import TaigaBadRequestError, TaigaNotFoundError
+from src.taiga_client import TaigaBadRequestError
 
 TEST_HOST = os.environ.get(
     "TAIGA_TEST_HOST", os.environ.get("TAIGA_API_URL", "http://localhost:9000")
@@ -304,7 +304,9 @@ class TestSandboxWrites:
             d = wf.delete_item(TEST_PROJECT, "story", b["ref"], session_id=session_id)
             assert d["subject"] == f"[TEST - CAN DELETE] b {tag}"
             made["userstories"].remove(b["id"])
-            with pytest.raises(TaigaNotFoundError):  # by_ref 404: deleted with its story
+            # Deleted with its story. Since tetra #2658 the by_ref 404 is a clear
+            # "not found" ValueError, not a raw TaigaNotFoundError.
+            with pytest.raises(ValueError, match="not found"):
                 wf.get_task(TEST_PROJECT, task["ref"], session_id=session_id)
             made["tasks"].clear()
 
