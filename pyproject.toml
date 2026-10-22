@@ -38,8 +38,11 @@ mcp-taiga-workflow = "src.server_workflow:main"
 file = "README.md"
 content-type = "text/markdown"
 
-[tool.setuptools]
-packages = ["src"]
+[tool.setuptools.packages.find]
+# Discover src and its subpackages (src.server, src.server.tools). The old
+# `packages = ["src"]` shipped only top-level modules: a non-editable install
+# (the Docker image) then lacked src.server and the entry point crashed at import.
+include = ["src*"]
 
 [tool.ruff]
 line-length = 100
