@@ -116,7 +116,7 @@ class TestTaigaHTTPErrors:
         assert isinstance(ei.value, TaigaAPIError)
 
     def test_field_errors_are_kept(self):
-        # The real 400 body shape from taiga.tetra-ai.fr (POST /userstories without
+        # The real 400 body shape from a live Taiga (POST /userstories without
         # a subject). pytaigaclient reported "No error message provided by API.".
         api = _http(
             lambda request: httpx.Response(400, json={"subject": ["This field is required."]})
@@ -183,11 +183,11 @@ class TestTaigaHTTPAuth:
             return httpx.Response(200, json={"auth_token": "a1", "refresh": "r1", "id": 6})
 
         api = _http(handler)
-        api.login("rva", "pw")
+        api.login("jdoe", "pw")
         assert api.auth_token == "a1" and api._refresh_token == "r1"
         assert seen == {
             "auth": None,
-            "body": {"type": "normal", "username": "rva", "password": "pw"},
+            "body": {"type": "normal", "username": "jdoe", "password": "pw"},
         }
 
     def test_login_without_token_raises(self):
@@ -256,7 +256,7 @@ class TestTaigaHTTPAuth:
         assert calls == ["/api/v1/users/me"]
 
     def test_concurrent_401s_spend_the_refresh_token_once(self):
-        """Refresh tokens rotate (reusing one is a 401 on taiga.tetra-ai.fr), so two
+        """Refresh tokens rotate (reusing one is a 401 on a live Taiga), so two
         threads hitting 401 together must not both refresh, or the session dies."""
         refreshes = []
         lock = threading.Lock()
@@ -302,7 +302,7 @@ class TestTaigaHTTPAuth:
 
         api = _http(handler)
         with caplog.at_level(logging.DEBUG):
-            api.login("rva", "hunter2")
+            api.login("jdoe", "hunter2")
             with pytest.raises(TaigaBadRequestError):
                 api.post("/userstories", json={"description": "private text"})
         logged = caplog.text

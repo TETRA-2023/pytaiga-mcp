@@ -58,7 +58,7 @@ uv run pytest tests/test_integration.py -v -m integration  # Integration tests a
 ```
 
 - **Unit tests mock HTTP by path.** In `tests/test_server.py`, `route(mock_client, get=/post=/patch={path: value})` answers `client.api.<verb>` by exact path, and `sent(mock_client, verb, path)` returns the JSON payloads sent. Assert the endpoint and payload, not a mock attribute: a routed write verb fails on any unrouted path. `TaigaHTTP` itself is tested on `httpx.MockTransport` (`tests/test_taiga_client.py`).
-- **Integration tests**: read tests run on any account; write tests need `TAIGA_TEST_PROJECT=smartagile` (the sandbox Taiga project, ID 13) and delete what they create. Load credentials literally (as `docker --env-file` does): sourcing `~/.claude/taiga.env` in bash mangles the password and Taiga answers 401.
+- **Integration tests**: read tests run on any account; write tests need `TAIGA_TEST_PROJECT=<sandbox-slug>` (a THROWAWAY project the test account administers) and delete what they create. Load credentials from an env file literally (as `docker --env-file` does): `source`-ing it in bash mangles a password containing shell metacharacters and Taiga answers 401.
 
 Pre-commit hooks run gitleaks, ruff (lint + format) and the unit tests automatically.
 
@@ -79,7 +79,7 @@ Pre-commit hooks run gitleaks, ruff (lint + format) and the unit tests automatic
 ## Key Design Decisions
 
 - Pagination disabled for lists via the `x-disable-pagination: True` header (Taiga default PAGE_SIZE=30 is too low)
-- Auth: `POST /auth` returns an access token (24 h) and a refresh token (8 days). On a 401, `TaigaHTTP` refreshes once (`POST /auth/refresh`) and retries. Refresh tokens ROTATE (a spent one is rejected), so refresh runs under a lock and a waiter re-checks the token. After the refresh token expires the session needs a new login (stateless API-token auth: Taiga tetra issue #687).
+- Auth: `POST /auth` returns an access token (24 h) and a refresh token (8 days). On a 401, `TaigaHTTP` refreshes once (`POST /auth/refresh`) and retries. Refresh tokens ROTATE (a spent one is rejected), so refresh runs under a lock and a waiter re-checks the token. After the refresh token expires the session needs a new login (stateless API-token auth would remove that limit).
 - Errors: `TaigaAPIError` (and `TaigaBadRequestError`, `TaigaNotFoundError`, … by status) keep the decoded body; `error_detail` is `_error_message`, DRF `detail`, or the joined field errors of a 400.
 - Query params are encoded like `requests` did: `None` dropped, booleans as `"True"`/`"False"`.
 - Comments use raw HTTP (PATCH with version for optimistic concurrency, GET history for listing)

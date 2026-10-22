@@ -143,7 +143,7 @@ def list_items(
 
 
 # entity_type -> (REST segment, how the item is identified). Behaviour on delete,
-# measured on taiga.tetra-ai.fr (2026-10-22), is stated in the tool description.
+# measured on a live Taiga 6 (2026-10-22), is stated in the tool description.
 _DELETE_TYPES = {
     **{t: (segment, "ref") for t, segment in resolve._ENTITY_PATH_MAP.items()},
     "sprint": ("milestones", "name"),

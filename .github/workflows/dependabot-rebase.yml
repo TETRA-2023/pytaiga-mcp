@@ -4,8 +4,7 @@
 # a branch, and Dependabot only rebases on its own when a PR CONFLICTS. So any
 # push to main that doesn't touch a Dependabot PR's files (a ci/docs change,
 # every semantic-release version commit) leaves every open Dependabot PR BEHIND
-# forever, green checks and all (pytaiga-mcp #177/#178, 2026-10-22; Taiga
-# tetra #2638).
+# forever, green checks and all (#177/#178, 2026-10-22).
 #
 # Asks Dependabot to rebase the OLDEST stuck PR with auto-merge on, via an
 # `@dependabot rebase` comment. Why a comment and not the update-branch API:

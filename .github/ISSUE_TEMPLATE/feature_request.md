@@ -1,20 +1,22 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: A Taiga capability the server should offer
 title: ''
-labels: ''
+labels: enhancement
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**What you want to do in Taiga**
+The task, in user terms (e.g. "move every story of a sprint to the next one").
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**Why the current tools fall short**
+Which tools you tried, and what is missing or takes too many calls.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**Suggested shape (optional)**
+v3 tools are intent-oriented: they take a project slug, item refs and names, and one
+tool covers several item types through `entity_type`. A sketch of the call helps,
+e.g. `carry_over_sprint(project, sprint, to_sprint)`.
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+**Taiga API endpoint (optional)**
+If you know which taiga-back endpoint does it.

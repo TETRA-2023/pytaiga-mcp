@@ -1,7 +1,7 @@
 # taiga_client.py
 """Native Taiga REST client: a thin httpx wrapper, no SDK.
 
-Replaced pytaigaclient in v3 (Taiga tetra #2621). Tools call endpoints
+Replaced pytaigaclient in v3. Tools call endpoints
 directly (`api.get("/userstories/by_ref", params=...)`), so all this layer
 does is the HTTP plumbing: auth with token refresh, Taiga error bodies kept
 in the exception, and no logging of request bodies or headers.
@@ -219,7 +219,7 @@ class TaigaHTTP:
     raw text for a non-JSON success. Errors raise ``TaigaAPIError``
     subclasses; transport failures raise ``TaigaException``.
 
-    Access tokens live 24 h and refresh tokens 8 days on taiga.tetra-ai.fr,
+    Access tokens live 24 h and refresh tokens 8 days on a default Taiga,
     and refresh tokens ROTATE: once used, the old one is rejected. On a 401
     the request is retried once after a refresh. The refresh runs under a
     lock, and a caller that waited re-checks whether another thread already

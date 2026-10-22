@@ -304,7 +304,7 @@ class TestSandboxWrites:
             d = wf.delete_item(TEST_PROJECT, "story", b["ref"], session_id=session_id)
             assert d["subject"] == f"[TEST - CAN DELETE] b {tag}"
             made["userstories"].remove(b["id"])
-            # Deleted with its story. Since tetra #2658 the by_ref 404 is a clear
+            # Deleted with its story. Since v3 the by_ref 404 is a clear
             # "not found" ValueError, not a raw TaigaNotFoundError.
             with pytest.raises(ValueError, match="not found"):
                 wf.get_task(TEST_PROJECT, task["ref"], session_id=session_id)
@@ -402,7 +402,7 @@ class TestSandboxWrites:
 
     def test_b7_attachments_and_tags_on_real_taiga(self, session_id):
         """v3 B7: multipart upload round trip (bytes compared), ownership guard on delete,
-        and tag rename/merge (rva is project admin on the smartagile sandbox)."""
+        and tag rename/merge (the test account must be project admin on the sandbox)."""
         import base64
 
         import httpx
@@ -462,7 +462,7 @@ class TestSandboxWrites:
                 api.post(f"/projects/{project_id}/delete_tag", json={"tag": t})
 
     def test_b8_project_admin_on_real_taiga(self, session_id):
-        """v3 B8 as project admin (rva on the smartagile sandbox). Sends NO invitation:
+        """v3 B8 as project admin of the sandbox. Sends NO invitation:
         invite_members is exercised on its refusal paths only."""
         tag = uuid.uuid4().hex[:6]
         api = wf.active_sessions[session_id].api

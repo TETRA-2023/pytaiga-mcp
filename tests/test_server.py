@@ -1752,21 +1752,21 @@ class TestGetCurrentUser:
     def _me(self):
         return {
             "id": 42,
-            "username": "rva",
-            "full_name_display": "Romain V",
-            "full_name": "Romain Valtier",
-            "email": "rva@tetra-ai.com",
+            "username": "jdoe",
+            "full_name_display": "Jane D",
+            "full_name": "Jane Q. Doe",
+            "email": "jdoe@example.com",
             "bio": "Platform lead",
-            "photo": "https://cdn.example.com/rva.jpg",
+            "photo": "https://cdn.example.com/jdoe.jpg",
         }
 
     def test_returns_identity_fields(self, session, mock_client):
         route(mock_client, get={"/users/me": self._me()})
         result = wf.get_current_user(session_id=session)
         assert result["id"] == 42
-        assert result["username"] == "rva"
-        assert result["full_name"] == "Romain V"
-        assert result["email"] == "rva@tetra-ai.com"
+        assert result["username"] == "jdoe"
+        assert result["full_name"] == "Jane D"
+        assert result["email"] == "jdoe@example.com"
 
     def test_prefers_full_name_display(self, session, mock_client):
         me = self._me()
@@ -1781,7 +1781,7 @@ class TestGetCurrentUser:
         me["full_name_display"] = None
         route(mock_client, get={"/users/me": me})
         result = wf.get_current_user(session_id=session)
-        assert result["full_name"] == "Romain Valtier"
+        assert result["full_name"] == "Jane Q. Doe"
 
     def test_optional_fields_none_when_missing(self, session, mock_client):
         route(mock_client, get={"/users/me": {"id": 1, "username": "x", "email": "x@example.com"}})
@@ -3094,7 +3094,7 @@ class TestThreadOffload:
 
         def slow_me(path, **kwargs):
             _time.sleep(0.5)  # a slow Taiga round trip
-            return {"id": 1, "username": "rva", "email": "rva@x"}
+            return {"id": 1, "username": "jdoe", "email": "jdoe@x"}
 
         mock_client.api.get.side_effect = slow_me
 
@@ -3446,7 +3446,7 @@ class TestBrowseBacklogDescription:
 # ---------------------------------------------------------------------------
 
 
-def _hist(id_, created, comment="", diff=None, edited=None, deleted=None, name="Romain"):
+def _hist(id_, created, comment="", diff=None, edited=None, deleted=None, name="Jane"):
     return {
         "id": id_,
         "created_at": created,
@@ -3454,7 +3454,7 @@ def _hist(id_, created, comment="", diff=None, edited=None, deleted=None, name="
         "diff": diff or {},
         "edit_comment_date": edited,
         "delete_comment_date": deleted,
-        "user": {"pk": 6, "username": "rva", "name": name},
+        "user": {"pk": 6, "username": "jdoe", "name": name},
     }
 
 
@@ -3480,7 +3480,7 @@ class TestListComments:
         result = wf.list_comments("p", 3, session_id=session)
         assert [c["id"] for c in result] == ["c1"]
         assert result[0]["comment"] == "first\n" + "x" * 400  # never truncated (#154)
-        assert result[0]["author"] == "Romain"
+        assert result[0]["author"] == "Jane"
         assert result[0]["edited_at"] == "2026-10-05T00:00:00Z"
 
     def test_include_deleted(self, session, mock_client):
@@ -3589,7 +3589,7 @@ class TestGetHistory:
                 "/history/userstory/50/comment_versions": [
                     {
                         "date": "2026-10-01T00:00:00Z",
-                        "user": {"username": "rva", "full_name_display": "Romain"},
+                        "user": {"username": "jdoe", "full_name_display": "Jane"},
                         "comment": "original",
                     }
                 ],
@@ -3602,7 +3602,7 @@ class TestGetHistory:
         assert len(versions_calls) == 1  # only c1 was edited
         assert versions_calls[0].kwargs["params"] == {"id": "c1"}
         assert result[2]["comment_versions"] == [
-            {"date": "2026-10-01T00:00:00Z", "author": "Romain", "comment": "original"}
+            {"date": "2026-10-01T00:00:00Z", "author": "Jane", "comment": "original"}
         ]
 
     def test_history_requested_unpaginated(self, session, mock_client):
@@ -4151,8 +4151,8 @@ class TestCustomAttributeValues:
 MEMBERS = [
     {
         "user": 6,
-        "full_name": "Romain",
-        "user_email": "rva@x",
+        "full_name": "Jane",
+        "user_email": "jdoe@x",
         "email": "",
         "role_name": "PO",
         "is_admin": True,
@@ -4183,7 +4183,7 @@ class TestMembers:
         self._route(mock_client)
         result = wf.list_members("p", session_id=session)
         assert result["roles"] == ["Dev Team", "Product Owner"]
-        assert result["members"][0]["email"] == "rva@x"  # user_email, not the blank email
+        assert result["members"][0]["email"] == "jdoe@x"  # user_email, not the blank email
         assert result["members"][1]["pending"] is True
 
     def test_invite_payload_uses_username_and_role_id(self, session, mock_client):
@@ -4207,8 +4207,8 @@ class TestMembers:
     def test_existing_member_refused_before_any_invite(self, session, mock_client):
         # Real Taiga answers a 500 for this; refuse with a clear message instead.
         self._route(mock_client)
-        with pytest.raises(ValueError, match=r"Already members of 'p': \['RVA@x'\]"):
-            wf.invite_members("p", ["RVA@x"], "Dev Team", session_id=session)
+        with pytest.raises(ValueError, match=r"Already members of 'p': \['JDOE@x'\]"):
+            wf.invite_members("p", ["JDOE@x"], "Dev Team", session_id=session)
         mock_client.api.post.assert_not_called()
 
     def test_unknown_role_lists_roles(self, session, mock_client):
@@ -4413,7 +4413,7 @@ class TestReorderStories:
 
 
 # ---------------------------------------------------------------------------
-# Taiga tetra #2658: every by_ref lookup turns real Taiga's 404 into a clear
+# Every by_ref lookup turns real Taiga's 404 into a clear
 # "not found" (the old `if not item` guards never fired: by_ref never returns
 # an empty body).
 # ---------------------------------------------------------------------------

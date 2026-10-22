@@ -1,38 +1,27 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: A tool returns a wrong result, an unclear error, or changes the wrong thing
 title: ''
-labels: ''
+labels: bug
 assignees: ''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+**Tool and arguments**
+The tool you called and its arguments, e.g. `get_story(project="my-project", ref=42)`.
+Leave out credentials and anything private.
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+**What happened**
+The result or error text the tool returned (`Error executing tool …`).
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+**What you expected**
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Environment**
+- pytaiga-mcp version or image tag (e.g. `:3.0.0`, `:latest`):
+- Run with: Docker / from source
+- Transport: stdio / sse / streamable-http
+- Taiga version (self-hosted or taiga.io):
+- MCP client (Claude Code, Claude Desktop, Cursor, …):
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
-
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
-
-**Additional context**
-Add any other context about the problem here.
+**Anything else**
+Is the item visible in the Taiga UI? Does it happen for every item or one?
