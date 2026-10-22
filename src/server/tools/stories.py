@@ -72,23 +72,10 @@ def browse_backlog(
     def do_browse():
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
-        filters: Dict[str, Any] = {"milestone": "null"}  # backlog = no sprint
-
-        if status:
-            status_id = resolve._resolve_status(
-                client, project_id, "story", status, actual_session_id
-            )
-            filters["status"] = status_id
-        if assignee:
-            user_id = resolve._resolve_user(client, project_id, assignee, actual_session_id)
-            filters["assigned_to"] = user_id
-        if epic is not None:
-            epic_data = client.api.get("/epics/by_ref", params={"ref": epic, "project": project_id})
-            if not epic_data:
-                raise ValueError(f"Epic #{epic} not found in project {proj['slug']}.")
-            filters["epic"] = epic_data["id"]
-        if tags:
-            filters["tags"] = tags
+        filters = resolve._story_filters(
+            client, proj, actual_session_id, status=status, assignee=assignee, epic=epic, tags=tags
+        )
+        filters["milestone"] = "null"  # backlog = no sprint
 
         stories = client.list_resources("user_stories", project_id=project_id, **filters)
         return [resolve._story_summary(s) for s in stories]

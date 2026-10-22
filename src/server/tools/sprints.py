@@ -69,13 +69,7 @@ def get_sprint_board(
         total_tasks = sum(len(v) for v in tasks_by_story.values()) if with_tasks else None
 
         return {
-            "sprint": {
-                "id": milestone["id"],
-                "name": milestone["name"],
-                "start": milestone.get("estimated_start"),
-                "end": milestone.get("estimated_finish"),
-                "is_closed": milestone.get("closed", False),
-            },
+            "sprint": resolve._sprint_summary(milestone),
             "summary": {
                 "total_stories": len(stories),
                 "stories_by_status": by_status,

@@ -50,14 +50,7 @@ def get_epic_overview(
             by_status[sname] = by_status.get(sname, 0) + 1
 
         return {
-            "epic": {
-                "ref": epic.get("ref"),
-                "subject": epic.get("subject"),
-                "status": (epic.get("status_extra_info") or {}).get("name"),
-                "assignee": (epic.get("assigned_to_extra_info") or {}).get("full_name_display"),
-                "color": epic.get("color"),
-                "description": epic.get("description"),
-            },
+            "epic": {**resolve._epic_summary(epic), "description": epic.get("description")},
             "summary": {
                 "total_stories": len(stories),
                 "stories_by_status": by_status,
@@ -160,6 +153,9 @@ def update_epic(
     blocked: Optional[bool] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    fields = (subject, description, status, assignee, color, tags, blocked)
+    if all(v is None for v in fields):
+        raise ValueError("No fields to update were provided.")
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -167,7 +163,7 @@ def update_epic(
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
 
-        current = client.api.get("/epics/by_ref", params={"ref": ref, "project": project_id})
+        current = resolve._get_by_ref(client, "epics", ref, project_id)
         if not current:
             raise ValueError(f"Epic #{ref} not found in project '{proj['slug']}'.")
 
@@ -190,8 +186,6 @@ def update_epic(
             payload["tags"] = tags
         if blocked is not None:
             payload["is_blocked"] = blocked
-        if len(payload) == 1:
-            raise ValueError("No fields to update were provided.")
 
         result = client.api.patch(f"/epics/{current['id']}", json=payload)
         return resolve._epic_summary(result)

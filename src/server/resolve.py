@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from src.server import core
 from src.taiga_client import (
     TaigaClientWrapper,
+    TaigaNotFoundError,
     resolve_user_id,
     safe_lower,
 )
@@ -52,10 +53,17 @@ def _resolve_sprint(client: TaigaClientWrapper, project_id: int, sprint: Any) ->
             )
         names = [m["name"] for m in current]
         raise ValueError(f"Multiple active sprints found: {names}. Specify one explicitly.")
-    if isinstance(sprint, int) or (isinstance(sprint, str) and sprint.isdigit()):
-        matches = [m for m in milestones if m["id"] == int(sprint)]
+    if isinstance(sprint, bool):
+        raise ValueError(f"Sprint must be a name or an ID, got {sprint!r}.")
+    # An int is an ID. A string is a name first: a sprint named "42" must not
+    # resolve to the (different) sprint whose id is 42 — delete_item acts on the
+    # result. A digit string that names no sprint falls back to an ID.
+    if isinstance(sprint, int):
+        matches = [m for m in milestones if m["id"] == sprint]
     else:
         matches = [m for m in milestones if m["name"] == sprint]
+        if not matches and isinstance(sprint, str) and sprint.isdigit():
+            matches = [m for m in milestones if m["id"] == int(sprint)]
     if not matches:
         available = [m["name"] for m in milestones]
         raise ValueError(f"Sprint '{sprint}' not found. Available: {available}")
@@ -229,6 +237,51 @@ def _name_for_issue_attribute(
         lambda: client.list_resources(resource, project_id=project_id),
     )
     return next((i.get("name") for i in items if i.get("id") == attr_id), None)
+
+
+def _get_by_ref(
+    client: TaigaClientWrapper, segment: str, ref: int, project_id: int
+) -> Optional[Dict[str, Any]]:
+    """Fetch an item by ref via ``/{segment}/by_ref``; None when it does not exist.
+
+    Real Taiga answers an unknown ref with a 404 (it never returns an empty body),
+    so a bare ``if not item`` after ``api.get`` is dead code. Only the 404 is
+    translated: a 500 or an auth failure still surfaces.
+    """
+    try:
+        return client.api.get(f"/{segment}/by_ref", params={"ref": ref, "project": project_id})
+    except TaigaNotFoundError:
+        return None
+
+
+def _story_filters(
+    client: TaigaClientWrapper,
+    proj: Dict[str, Any],
+    session_id: str,
+    status: Optional[str] = None,
+    assignee: Optional[str] = None,
+    epic: Optional[int] = None,
+    tags: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build /userstories list query params from name-based filters.
+
+    Shared by browse_backlog and list_items. Falsy status/assignee/tags are
+    ignored (as browse_backlog always did); epic is used whenever not None.
+    """
+    project_id = proj["id"]
+    filters: Dict[str, Any] = {}
+    if status:
+        filters["status"] = _resolve_status(client, project_id, "story", status, session_id)
+    if assignee:
+        filters["assigned_to"] = _resolve_user(client, project_id, assignee, session_id)
+    if epic is not None:
+        epic_data = _get_by_ref(client, "epics", epic, project_id)
+        if not epic_data:
+            raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
+        filters["epic"] = epic_data["id"]
+    if tags:
+        filters["tags"] = tags
+    return filters
 
 
 def _resolve_story_refs(client: TaigaClientWrapper, project_id: int, refs: List[int]) -> List[int]:

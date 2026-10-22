@@ -132,28 +132,23 @@ def list_items(
             sprints = client.list_resources("milestones", project_id=project_id, **filters)
             return [resolve._sprint_summary(m) for m in sprints]
 
-        if status is not None:
-            filters["status"] = resolve._resolve_status(
-                client, project_id, entity_type, status, actual_session_id
-            )
-        if assignee is not None:
-            filters["assigned_to"] = resolve._resolve_user(
-                client, project_id, assignee, actual_session_id
-            )
-
         if entity_type == "epic":
+            if status is not None:
+                filters["status"] = resolve._resolve_status(
+                    client, project_id, "epic", status, actual_session_id
+                )
+            if assignee is not None:
+                filters["assigned_to"] = resolve._resolve_user(
+                    client, project_id, assignee, actual_session_id
+                )
             epics = client.list_resources("epics", project_id=project_id, **filters)
             return [resolve._epic_summary(e) for e in epics]
 
+        filters = resolve._story_filters(
+            client, proj, actual_session_id, status=status, assignee=assignee, epic=epic, tags=tags
+        )
         if sprint is not None:
             filters["milestone"] = resolve._resolve_sprint(client, project_id, sprint)["id"]
-        if epic is not None:
-            epic_data = client.api.get("/epics/by_ref", params={"ref": epic, "project": project_id})
-            if not epic_data:
-                raise ValueError(f"Epic #{epic} not found in project '{proj['slug']}'.")
-            filters["epic"] = epic_data["id"]
-        if tags is not None:
-            filters["tags"] = tags
         stories = client.list_resources("user_stories", project_id=project_id, **filters)
         return [resolve._story_summary(s) for s in stories]
 
@@ -163,14 +158,17 @@ def list_items(
 # entity_type -> (REST segment, how the item is identified). Behaviour on delete,
 # measured on taiga.tetra-ai.fr (2026-10-22), is stated in the tool description.
 _DELETE_TYPES = {
-    "story": ("userstories", "ref"),
-    "user_story": ("userstories", "ref"),
-    "task": ("tasks", "ref"),
-    "issue": ("issues", "ref"),
-    "epic": ("epics", "ref"),
+    **{t: (segment, "ref") for t, segment in resolve._ENTITY_PATH_MAP.items()},
     "sprint": ("milestones", "name"),
     "wiki": ("wiki", "slug"),
 }
+
+
+def _is_ref(value: Any) -> bool:
+    """A ref number: a non-bool int, or a string of digits."""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, str) and value.isdigit())
 
 
 @app.tool(
@@ -196,11 +194,7 @@ def delete_item(
             f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_DELETE_TYPES)}."
         )
     segment, key = _DELETE_TYPES[entity_type]
-    if key == "ref" and not (
-        isinstance(ref_or_name, int)
-        and not isinstance(ref_or_name, bool)
-        or (isinstance(ref_or_name, str) and ref_or_name.isdigit())
-    ):
+    if key == "ref" and not _is_ref(ref_or_name):
         raise ValueError(f"A {entity_type} is identified by its ref number, got {ref_or_name!r}.")
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
@@ -211,13 +205,7 @@ def delete_item(
 
         if key == "ref":
             ref = int(ref_or_name)
-            try:
-                # Real Taiga answers an unknown ref with 404 ("No ... matches the given query").
-                item = client.api.get(
-                    f"/{segment}/by_ref", params={"ref": ref, "project": project_id}
-                )
-            except TaigaNotFoundError:
-                item = None
+            item = resolve._get_by_ref(client, segment, ref, project_id)
             if not item:
                 raise ValueError(
                     f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'."

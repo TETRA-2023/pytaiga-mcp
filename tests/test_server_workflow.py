@@ -263,6 +263,20 @@ class TestResolveSprint:
         result = wf._resolve_sprint(client, 99, 5)
         assert result["id"] == 5
 
+    def test_digit_name_wins_over_id(self):
+        # A sprint named "42" must not resolve to the other sprint whose id is 42.
+        client = self._make_client(
+            [{"id": 42, "name": "Sprint 3", "closed": False}, {"id": 7, "name": "42"}]
+        )
+        assert wf._resolve_sprint(client, 99, "42")["id"] == 7
+        assert wf._resolve_sprint(client, 99, "Sprint 3")["id"] == 42
+        assert wf._resolve_sprint(client, 99, 42)["id"] == 42
+
+    def test_bool_rejected(self):
+        client = self._make_client([{"id": 1, "name": "Sprint 1", "closed": False}])
+        with pytest.raises(ValueError, match="name or an ID"):
+            wf._resolve_sprint(client, 99, True)
+
     def test_raises_when_sprint_not_found(self):
         client = self._make_client([{"id": 1, "name": "Sprint 1", "closed": False}])
         with pytest.raises(ValueError, match="not found"):
@@ -3168,6 +3182,17 @@ PROJECT = {"id": 1, "slug": "p", "name": "P"}
 
 
 class TestListItems:
+    def test_unknown_epic_filter_is_value_error(self, session, mock_client):
+        route(
+            mock_client,
+            get={
+                "/projects/by_slug": PROJECT,
+                "/epics/by_ref": _api_error(TaigaNotFoundError, 404, "No Epic matches"),
+            },
+        )
+        with pytest.raises(ValueError, match="Epic #4 not found"):
+            wf.list_items("p", epic=4, session_id=session)
+
     def test_stories_include_sprint_assigned_and_no_backlog_filter(self, session, mock_client):
         mock_client.api.get.return_value = PROJECT
         mock_client.list_resources.return_value = [
@@ -3301,15 +3326,22 @@ class TestUpdateEpic:
         ]
         assert result["subject"] == "New"
 
-    def test_no_fields_raises_before_any_write(self, session, mock_client):
+    def test_no_fields_raises_before_any_call(self, session, mock_client):
         self._route(mock_client)
         with pytest.raises(ValueError, match="No fields to update"):
             wf.update_epic("p", 4, session_id=session)
+        mock_client.api.get.assert_not_called()
         mock_client.api.patch.assert_not_called()
 
     def test_unknown_epic(self, session, mock_client):
-        mock_client.api.get.return_value = PROJECT
-        route(mock_client, get={"/epics/by_ref": None})
+        # Real Taiga answers an unknown ref with a 404, never an empty body.
+        route(
+            mock_client,
+            get={
+                "/projects/by_slug": PROJECT,
+                "/epics/by_ref": _api_error(TaigaNotFoundError, 404, "No Epic matches"),
+            },
+        )
         with pytest.raises(ValueError, match="Epic #4 not found"):
             wf.update_epic("p", 4, subject="x", session_id=session)
 
