@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_story",
     description=(
         "Read a single user story by its ref number. Returns resolved human fields "
@@ -49,7 +49,7 @@ def get_story(
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "browse_backlog",
     description=(
         "List user stories in the backlog (not assigned to any sprint) with optional filters. "
@@ -95,7 +95,7 @@ def browse_backlog(
     return core._execute_taiga_operation("browse_backlog", do_browse, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "create_story",
     description=(
         "Create a user story in the backlog with optional epic link, sprint assignment, and assignee. "
@@ -164,7 +164,7 @@ def create_story(
     return core._execute_taiga_operation("create_story", do_create, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "update_story",
     description=(
         "Update a user story by its ref number. All fields are optional — only provided fields are changed. "
@@ -260,7 +260,7 @@ def update_story(
     return core._execute_taiga_operation("update_story", do_update, f"#{ref} in {project}")
 
 
-@app.mcp.tool(
+@app.tool(
     "set_story_status",
     description=(
         "Change the status of a user story by its ref number using the status name "

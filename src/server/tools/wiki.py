@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_wiki",
     description=(
         "Get a wiki page by slug, or list all wiki pages when slug is omitted. "
@@ -47,7 +47,7 @@ def get_wiki(
     return core._execute_taiga_operation("get_wiki", do_get, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "upsert_wiki",
     description=(
         "Create or update a wiki page. If a page with the given slug already exists it is updated; "

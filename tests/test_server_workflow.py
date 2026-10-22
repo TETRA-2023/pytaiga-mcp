@@ -3047,3 +3047,83 @@ class TestLegacyServerMode:
         with caplog.at_level("WARNING", logger="src.server.app"):
             wf._warn_legacy_server_mode(env)
         assert "TAIGA_SERVER_MODE" not in caplog.text
+
+
+class TestThreadOffload:
+    """v3 B4: tools run in worker threads so one slow Taiga call can't stall the loop."""
+
+    def test_registered_tools_async_module_functions_sync(self):
+        import inspect
+
+        tools = wf.mcp._tool_manager.list_tools()
+        assert len(tools) == 34
+        for t in tools:
+            assert t.is_async and inspect.iscoroutinefunction(t.fn), t.name
+            # The module attribute stays the original sync function (tests call it).
+            assert not inspect.iscoroutinefunction(getattr(wf, t.fn.__name__)), t.name
+
+    def test_schemas_match_plain_registration(self):
+        """functools.wraps must keep every schema exactly as FastMCP derives it from
+        the original sync function."""
+        from mcp.server.fastmcp import FastMCP
+
+        plain = FastMCP("plain")
+        for t in wf.mcp._tool_manager.list_tools():
+            original = t.fn.__wrapped__
+            plain.add_tool(original, name=t.name, description=t.description)
+            ref = plain._tool_manager.get_tool(t.name)
+            assert t.parameters == ref.parameters, t.name
+            assert t.output_schema == ref.output_schema, t.name
+
+    def test_two_slow_calls_overlap(self, session, mock_client):
+        import time as _time
+
+        def slow_me(path, **kwargs):
+            _time.sleep(0.3)  # a slow Taiga round trip
+            return {"id": 1, "username": "rva", "email": "rva@x"}
+
+        mock_client.api.get.side_effect = slow_me
+
+        async def scenario():
+            ticks = 0
+
+            async def heartbeat():
+                nonlocal ticks
+                while True:
+                    await asyncio.sleep(0.02)
+                    ticks += 1
+
+            hb = asyncio.create_task(heartbeat())
+            start = _time.perf_counter()
+            await asyncio.gather(
+                wf.mcp.call_tool("get_current_user", {"session_id": session}),
+                wf.mcp.call_tool("get_current_user", {"session_id": session}),
+            )
+            elapsed = _time.perf_counter() - start
+            hb.cancel()
+            return elapsed, ticks
+
+        elapsed, ticks = asyncio.run(scenario())
+        assert elapsed < 0.55, f"calls ran serially ({elapsed:.2f}s)"
+        # The event loop kept running while both calls slept (≈15 ticks expected).
+        assert ticks >= 5, f"event loop was blocked (only {ticks} heartbeats)"
+
+    def test_control_plain_sync_tool_blocks_the_loop(self):
+        """The problem B4 fixes: FastMCP runs a plain sync tool on the event loop."""
+        import time as _time
+
+        from mcp.server.fastmcp import FastMCP
+
+        plain = FastMCP("plain")
+
+        @plain.tool("slow")
+        def slow() -> str:
+            _time.sleep(0.3)
+            return "ok"
+
+        async def scenario():
+            start = _time.perf_counter()
+            await asyncio.gather(plain.call_tool("slow", {}), plain.call_tool("slow", {}))
+            return _time.perf_counter() - start
+
+        assert asyncio.run(scenario()) >= 0.55

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_default_session",
     description="Returns the default session ID if auto-authentication from environment variables was successful.",
 )
@@ -38,7 +38,7 @@ def get_default_session() -> Dict[str, Any]:
     }
 
 
-@app.mcp.tool(
+@app.tool(
     "login",
     description="Log into a Taiga instance. Env vars TAIGA_API_URL, TAIGA_USERNAME, TAIGA_PASSWORD are used as defaults.",
 )
@@ -73,7 +73,7 @@ def login(
         raise RuntimeError("An unexpected server error occurred during login.")
 
 
-@app.mcp.tool(
+@app.tool(
     "logout",
     description="Invalidate the current session. Uses the default session if session_id is not provided.",
 )
@@ -84,7 +84,7 @@ def logout(session_id: Optional[str] = None) -> Dict[str, Any]:
     return {"status": "logged_out", "session_id": actual_session_id}
 
 
-@app.mcp.tool(
+@app.tool(
     "session_status",
     description="Check whether the current session is active and which user it belongs to.",
 )
@@ -118,7 +118,7 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
     return {"status": "inactive", "reason": "not_found", "session_id": actual_session_id}
 
 
-@app.mcp.tool(
+@app.tool(
     "get_current_user",
     description=(
         "Return the identity of the authenticated user for this session. "

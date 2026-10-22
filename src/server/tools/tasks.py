@@ -21,7 +21,7 @@ _TASK_OVERRIDE_KEYS = {
 }
 
 
-@app.mcp.tool(
+@app.tool(
     "get_task",
     description=(
         "Read a single task by its ref number. Returns resolved human fields "
@@ -55,7 +55,7 @@ def get_task(
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "create_task",
     description=(
         "Add a single task under an existing user story. story_ref is the parent US ref number. "
@@ -140,7 +140,7 @@ def create_task(
     )
 
 
-@app.mcp.tool(
+@app.tool(
     "update_task",
     description=(
         "Update a task by its ref number. All fields are optional — only provided fields change. "
@@ -212,7 +212,7 @@ def update_task(
     return core._execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
 
 
-@app.mcp.tool(
+@app.tool(
     "break_down_story",
     description=(
         "Decompose a user story into multiple tasks in one call. tasks accepts a list of "
@@ -330,7 +330,7 @@ def break_down_story(
     )
 
 
-@app.mcp.tool(
+@app.tool(
     "set_task_status",
     description=(
         "Change the status of a task by its ref number using the status name "

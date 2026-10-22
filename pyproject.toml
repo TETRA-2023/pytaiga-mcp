@@ -17,6 +17,8 @@ dependencies = [
     # Taiga HTTP client (src/taiga_client.py). Already pulled in by mcp; declared
     # because we import it directly.
     "httpx>=0.28.1",
+    # Runs sync tools in worker threads (src/server/app.py:tool). Also pulled in by mcp.
+    "anyio>=4.14.2",
 ]
 
 [project.optional-dependencies]

@@ -8,7 +8,7 @@ from src.server import app, core, resolve
 logger = logging.getLogger(__name__)
 
 
-@app.mcp.tool(
+@app.tool(
     "get_issue",
     description=(
         "Read a single issue by its ref number. Returns resolved human fields "
@@ -39,7 +39,7 @@ def get_issue(
     return core._execute_taiga_operation("get_issue", do_get, f"#{ref} in {project}")
 
 
-@app.mcp.tool(
+@app.tool(
     "create_issue",
     description=(
         "Create a new issue. type, priority, and severity default to the project's first configured value "
@@ -131,7 +131,7 @@ def create_issue(
     return core._execute_taiga_operation("create_issue", do_create, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "update_issue",
     description=(
         "Update an issue by ref number. All fields optional. "

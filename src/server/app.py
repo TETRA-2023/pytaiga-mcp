@@ -1,11 +1,13 @@
 """The FastMCP instance, its lifespan (env auto-auth), transport selection and main()."""
 
+import functools
 import logging
 import os
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from src import taiga_client
@@ -82,6 +84,37 @@ mcp = FastMCP(
     host=os.environ.get("MCP_HOST", "127.0.0.1"),
     port=_mcp_port,
 )
+
+
+def tool(*args, **kwargs):
+    """Register a sync tool on `mcp`, run off the event loop in a worker thread.
+
+    FastMCP calls a sync tool directly on its event loop
+    (mcp/server/fastmcp/utilities/func_metadata.py), so one slow Taiga call
+    (an unpaginated list, a 30 s timeout) would block every other client of a
+    shared HTTP server. Registering an async wrapper that hands the body to
+    `anyio.to_thread.run_sync` keeps the loop free.
+
+    - Same tool surface: `functools.wraps` sets `__wrapped__`, and FastMCP
+      builds the schema with `inspect.signature`, which follows it.
+    - Returns the ORIGINAL sync function, so modules and tests keep calling
+      tools synchronously.
+    - Thread safety: `httpx.Client` is thread-safe, token refresh is locked
+      (TaigaHTTP.refresh), and the shared dicts (active_sessions,
+      _session_cache) only see single-key get/set/pop. Two concurrent misses
+      on the same cache key may both fetch it; the reads are idempotent.
+    """
+    register = mcp.tool(*args, **kwargs)
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def run_in_worker_thread(*call_args, **call_kwargs):
+            return await anyio.to_thread.run_sync(functools.partial(fn, *call_args, **call_kwargs))
+
+        register(run_in_worker_thread)
+        return fn
+
+    return decorator
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "list_projects",
     description="List all Taiga projects accessible to the authenticated user.",
 )
@@ -38,7 +38,7 @@ def list_projects(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     return core._execute_taiga_operation("list_projects", do_list)
 
 
-@app.mcp.tool(
+@app.tool(
     "get_project_overview",
     description=(
         "Return a full snapshot of a project: description, team, active sprint, "
@@ -117,7 +117,7 @@ def get_project_overview(
     return core._execute_taiga_operation("get_project_overview", do_overview, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "search",
     description=(
         "Full-text search within a project across user stories, tasks, issues, epics, and wiki pages. "
@@ -178,7 +178,7 @@ def search(
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_team_workload",
     description=(
         "Show per-member story and task counts for a sprint or the full project backlog. "
@@ -241,7 +241,7 @@ def get_team_workload(
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_project_health",
     description=(
         "Return a metrics snapshot for a project: story point completion, computed velocity speed "
@@ -354,7 +354,7 @@ def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
-@app.mcp.tool(
+@app.tool(
     "get_project_activity",
     description=(
         "Return recent activity on a project — who did what to which entity and when. "

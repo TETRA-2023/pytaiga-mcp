@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_sprint_board",
     description=(
         "Return a full sprint board: sprint metadata, all user stories with their tasks, "
@@ -88,7 +88,7 @@ def get_sprint_board(
     return core._execute_taiga_operation("get_sprint_board", do_board, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "plan_sprint",
     description=(
         "Create a new sprint and optionally assign user stories to it in one step. "
@@ -150,7 +150,7 @@ def plan_sprint(
     return core._execute_taiga_operation("plan_sprint", do_plan, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "move_to_sprint",
     description=(
         "Move one or more user stories (by ref number) into a sprint. "
@@ -193,7 +193,7 @@ def move_to_sprint(
     return core._execute_taiga_operation("move_to_sprint", do_move, str(project))
 
 
-@app.mcp.tool(
+@app.tool(
     "close_sprint",
     description=(
         "Mark a sprint as closed. sprint accepts a name or ID; "

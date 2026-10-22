@@ -8,7 +8,7 @@ from src.server import app, core, resolve
 logger = logging.getLogger(__name__)
 
 
-@app.mcp.tool(
+@app.tool(
     "assign_item",
     description=(
         "Assign a user story, task, issue, or epic to a team member by email or full name. "

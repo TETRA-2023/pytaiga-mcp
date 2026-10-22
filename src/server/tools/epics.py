@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "get_epic_overview",
     description=(
         "Return an epic (including its full description) and all user stories linked "
@@ -70,7 +70,7 @@ def get_epic_overview(
     return core._execute_taiga_operation("get_epic_overview", do_overview, f"#{ref} in {project}")
 
 
-@app.mcp.tool(
+@app.tool(
     "create_epic",
     description=(
         "Create a new epic and optionally link existing user stories to it by ref number. "

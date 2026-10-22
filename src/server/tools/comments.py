@@ -17,7 +17,7 @@ _COMMENT_PATH_MAP = resolve._ENTITY_PATH_MAP
 # ---------------------------------------------------------------------------
 
 
-@app.mcp.tool(
+@app.tool(
     "add_comment",
     description=(
         "Add a comment to a user story, task, issue, or epic identified by ref number. "
