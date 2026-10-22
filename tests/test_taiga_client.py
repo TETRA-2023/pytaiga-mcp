@@ -226,6 +226,23 @@ class TestTaigaHTTPAuth:
         with pytest.raises(TaigaAuthenticationError, match="Given token not valid"):
             _authed(handler).get("/users/me")
 
+    def test_rejected_refresh_token_is_not_retried(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if request.url.path == "/api/v1/auth/refresh":
+                return httpx.Response(401, json={"detail": "Token is invalid or expired"})
+            return httpx.Response(401, json={"detail": "Given token not valid"})
+
+        api = _authed(handler)
+        for _ in range(2):
+            with pytest.raises(TaigaAuthenticationError):
+                api.get("/users/me")
+        # The dead refresh token is spent once, not once per call.
+        assert calls == ["/api/v1/users/me", "/api/v1/auth/refresh", "/api/v1/users/me"]
+        assert api._refresh_token is None
+
     def test_no_refresh_token_means_no_retry(self):
         calls = []
 

@@ -9,6 +9,7 @@ import pytest
 import src.server_workflow as wf
 from src.taiga_client import (
     TaigaAPIError,
+    TaigaAuthenticationError,
     TaigaException,
     TaigaNotFoundError,
     TaigaServerError,
@@ -698,11 +699,30 @@ class TestUpdateIssue:
 
 class TestSessionStatusParity:
     def test_returns_session_id_when_token_invalid(self, session, mock_client):
-        route(mock_client, get={"/users/me": TaigaException("token expired")})
+        route(
+            mock_client,
+            get={"/users/me": TaigaAuthenticationError(401, "Token is invalid")},
+        )
         result = wf.session_status(session_id=session)
         assert result["status"] == "inactive"
         assert result["reason"] == "token_invalid"
         assert result["session_id"] == session
+        assert session not in wf.active_sessions
+
+    def test_transient_error_keeps_session(self, session, mock_client):
+        # A timeout or 5xx says nothing about the token: keep the session.
+        route(mock_client, get={"/users/me": TaigaException("Request failed: ReadTimeout")})
+        with pytest.raises(TaigaException):
+            wf.session_status(session_id=session)
+        assert wf.active_sessions[session] is mock_client
+
+    def test_logout_closes_only_unaliased_wrappers(self, session, mock_client):
+        # login() stores one wrapper under its UUID and "default": logging out
+        # the UUID must not close the pool the default alias still uses.
+        wf.logout(session_id=session)
+        mock_client.close.assert_not_called()
+        wf.logout(session_id=wf.DEFAULT_SESSION_ID)
+        mock_client.close.assert_called_once()
 
     def test_returns_not_authenticated_when_client_unauthed(self):
         client = MagicMock()

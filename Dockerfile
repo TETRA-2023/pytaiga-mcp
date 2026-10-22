@@ -1,9 +1,5 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# git is required for pytaigaclient (git source dependency)
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
-
 # Create non-root user
 RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
 

@@ -244,8 +244,10 @@ class TaigaHTTP:
         self._http = httpx.Client(
             base_url=self.host + self.API_PATH,
             timeout=timeout,
-            # httpx doesn't follow redirects by default (requests did); an
-            # http->https or trailing-slash redirect would surface as a 301.
+            # httpx doesn't follow redirects by default (requests did). Reads
+            # survive an http->https or trailing-slash redirect, but a 301/302
+            # turns POST into a body-less GET: configure TAIGA_API_URL with
+            # the final https URL.
             follow_redirects=True,
             headers={"Accept": "application/json", "Accept-Language": "en"},
             transport=transport,
@@ -285,6 +287,13 @@ class TaigaHTTP:
                     json={"refresh": self._refresh_token},
                     authenticate=False,
                 )
+            except (TaigaAuthenticationError, TaigaBadRequestError) as e:
+                # Taiga rejected the refresh token (expired or already rotated):
+                # it will never work again, so stop re-trying it on every call.
+                # A 5xx/429/transport failure falls through and keeps it.
+                logger.warning(f"Taiga token refresh rejected: {e}")
+                self._refresh_token = None
+                return False
             except TaigaException as e:
                 logger.warning(f"Taiga token refresh failed: {e}")
                 return False
@@ -385,7 +394,11 @@ class TaigaClientWrapper:
             # SECURITY: Don't log username to avoid credential exposure
             logger.info(f"Attempting login on {self.host}")
             api_instance = TaigaHTTP(host=self.host)
-            api_instance.login(username=username, password=password)
+            try:
+                api_instance.login(username=username, password=password)
+            except BaseException:
+                api_instance.close()
+                raise
             self.api = api_instance
             logger.info("Login successful. Auth token acquired.")
             return True
@@ -399,6 +412,12 @@ class TaigaClientWrapper:
             logger.error(f"An unexpected error occurred during login: {e}", exc_info=True)
             self.api = None
             raise TaigaException(f"Unexpected login error: {e}")
+
+    def close(self) -> None:
+        """Release the HTTP connection pool. The wrapper is unauthenticated after."""
+        if self.api is not None:
+            self.api.close()
+            self.api = None
 
     @property
     def is_authenticated(self) -> bool:

@@ -23,6 +23,7 @@ from mcp.server.fastmcp import FastMCP
 from src.config import settings
 from src.taiga_client import (
     TaigaAPIError,
+    TaigaAuthenticationError,
     TaigaClientWrapper,
     TaigaException,
     TaigaNotFoundError,
@@ -60,6 +61,17 @@ def _session_cache_for(session_id: str) -> Dict[str, Any]:
 
 def _clear_session_cache(session_id: str) -> None:
     _session_cache.pop(session_id, None)
+
+
+def _drop_session(session_id: str) -> None:
+    """Forget a session; close its HTTP pool unless another key still aliases it.
+
+    login() stores the same wrapper under its UUID and, when free, under
+    "default", so closing on every pop would break the surviving alias.
+    """
+    wrapper = active_sessions.pop(session_id, None)
+    if wrapper is not None and not any(w is wrapper for w in active_sessions.values()):
+        wrapper.close()
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +520,8 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("Server shutting down — clearing sessions.")
+        for wrapper in {id(w): w for w in active_sessions.values()}.values():
+            wrapper.close()
         active_sessions.clear()
         _session_cache.clear()
 
@@ -592,7 +606,7 @@ def login(
 )
 def logout(session_id: Optional[str] = None) -> Dict[str, Any]:
     actual_session_id = _get_session_id(session_id)
-    active_sessions.pop(actual_session_id, None)
+    _drop_session(actual_session_id)
     _clear_session_cache(actual_session_id)
     return {"status": "logged_out", "session_id": actual_session_id}
 
@@ -612,8 +626,9 @@ def session_status(session_id: Optional[str] = None) -> Dict[str, Any]:
                 "session_id": actual_session_id,
                 "username": me.get("username"),
             }
-        except TaigaException:
-            active_sessions.pop(actual_session_id, None)
+        except TaigaAuthenticationError:
+            # Only a rejected token ends the session; a timeout or 5xx is transient.
+            _drop_session(actual_session_id)
             return {
                 "status": "inactive",
                 "reason": "token_invalid",
