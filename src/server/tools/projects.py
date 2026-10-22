@@ -324,7 +324,11 @@ _TIMELINE_ENTITY_MAP = {
 }
 
 
-def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
+# Activity comments longer than this are shortened unless full_comments=True.
+_ACTIVITY_COMMENT_CHARS = 200
+
+
+def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False) -> Dict[str, Any]:
     """Distil a raw Taiga timeline event into a readable summary dict."""
     event_type = event.get("event_type", "")
     parts = event_type.split(".")
@@ -350,7 +354,13 @@ def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if changed_fields:
         summary["changed_fields"] = changed_fields
     if comment:
-        summary["comment"] = comment[:200]  # truncate long comments
+        if full_comments or len(comment) <= _ACTIVITY_COMMENT_CHARS:
+            summary["comment"] = comment
+        else:
+            # Shortened to keep a 100-event feed compact, but visibly (#154:
+            # the silent cut hid decisions); list_comments returns the full text.
+            summary["comment"] = comment[:_ACTIVITY_COMMENT_CHARS]
+            summary["comment_truncated"] = True
     return summary
 
 
@@ -360,12 +370,16 @@ def _summarize_timeline_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "Return recent activity on a project — who did what to which entity and when. "
         "Answers 'what changed today/this week?' for a PO-level audit. "
         "limit controls how many events to return (default 20, max 100). "
+        "Comments longer than 200 characters are shortened and flagged "
+        "comment_truncated=true unless full_comments=True; list_comments returns an "
+        "item's comments in full. "
         "project accepts a slug (e.g. 'my-project') or numeric ID."
     ),
 )
 def get_project_activity(
     project: Union[str, int],
     limit: int = 20,
+    full_comments: bool = False,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
@@ -386,7 +400,7 @@ def get_project_activity(
         return {
             "project": {"id": proj["id"], "name": proj["name"], "slug": proj["slug"]},
             "count": len(events),
-            "events": [_summarize_timeline_event(e) for e in events],
+            "events": [_summarize_timeline_event(e, full_comments) for e in events],
         }
 
     return core._execute_taiga_operation("get_project_activity", do_activity, str(project))

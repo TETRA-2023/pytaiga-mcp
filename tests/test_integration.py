@@ -325,3 +325,53 @@ class TestSandboxWrites:
                     _delete(session_id, resource, item_id)
         stories_after = len(sess.list_resources("user_stories", project_id=project_id))
         assert stories_after == stories_before
+
+    def test_b6_comments_and_history_on_real_taiga(self, session_id):
+        """v3 B6 (#154): read comments in full, edit (with versions), delete, restore."""
+        tag = uuid.uuid4().hex[:8]
+        story = wf.create_story(
+            TEST_PROJECT, f"[TEST - CAN DELETE] b6 {tag}", session_id=session_id
+        )
+        try:
+            long_text = f"decision {tag}\n" + "x" * 400
+            wf.add_comment(TEST_PROJECT, story["ref"], long_text, session_id=session_id)
+            wf.update_story(TEST_PROJECT, story["ref"], description="edited", session_id=session_id)
+
+            comments = wf.list_comments(TEST_PROJECT, story["ref"], session_id=session_id)
+            assert len(comments) == 1 and comments[0]["comment"] == long_text  # full text
+            cid = comments[0]["id"]
+
+            wf.edit_comment(
+                TEST_PROJECT, story["ref"], cid, f"amended {tag}", session_id=session_id
+            )
+            history = wf.get_history(
+                TEST_PROJECT, story["ref"], include_comment_versions=True, session_id=session_id
+            )
+            assert any("description" in e["changed_fields"] for e in history)
+            entry = next(e for e in history if e["id"] == cid)
+            assert entry["comment"] == f"amended {tag}" and entry["comment_edited_at"]
+            assert [v["comment"] for v in entry["comment_versions"]] == [long_text]
+
+            wf.delete_comment(TEST_PROJECT, story["ref"], cid, session_id=session_id)
+            assert wf.list_comments(TEST_PROJECT, story["ref"], session_id=session_id) == []
+            hidden = wf.list_comments(
+                TEST_PROJECT, story["ref"], include_deleted=True, session_id=session_id
+            )
+            assert [c["id"] for c in hidden] == [cid] and hidden[0]["deleted_at"]
+
+            wf.restore_comment(TEST_PROJECT, story["ref"], cid, session_id=session_id)
+            restored = wf.list_comments(TEST_PROJECT, story["ref"], session_id=session_id)
+            assert [c["comment"] for c in restored] == [f"amended {tag}"]
+
+            with pytest.raises(ValueError, match="not found"):
+                wf.delete_comment(
+                    TEST_PROJECT,
+                    story["ref"],
+                    "00000000-0000-0000-0000-000000000000",
+                    session_id=session_id,
+                )
+        finally:
+            try:
+                wf.delete_item(TEST_PROJECT, "story", story["ref"], session_id=session_id)
+            except Exception:
+                _delete(session_id, "userstories", story["id"])

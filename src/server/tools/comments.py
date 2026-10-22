@@ -1,9 +1,10 @@
 """Comment tools."""
 
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
+from src.taiga_client import TaigaNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -64,4 +65,284 @@ def add_comment(
 
     return core._execute_taiga_operation(
         "add_comment", do_comment, f"{entity_type} #{ref} in {project}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reading, editing and history (v3 B6, GitHub #154)
+# ---------------------------------------------------------------------------
+
+# REST segment -> /history/<segment> name. Taiga's history routes use the
+# singular model name, not the REST collection name.
+_HISTORY_SEGMENT = {
+    "userstories": "userstory",
+    "tasks": "task",
+    "issues": "issue",
+    "epics": "epic",
+}
+
+
+def _resolve_item(client, project, entity_type: str, ref: int):
+    """(project dict, item dict, history segment) for an item by ref, or ValueError."""
+    if entity_type not in _COMMENT_PATH_MAP:
+        raise ValueError(
+            f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_COMMENT_PATH_MAP)}."
+        )
+    proj = resolve._resolve_project(client, project)
+    segment = _COMMENT_PATH_MAP[entity_type]
+    item = resolve._get_by_ref(client, segment, ref, proj["id"])
+    if not item:
+        raise ValueError(f"{entity_type.capitalize()} #{ref} not found in '{proj['slug']}'.")
+    return proj, item, _HISTORY_SEGMENT[segment]
+
+
+def _author(entry: Dict[str, Any]) -> Optional[str]:
+    user = entry.get("user") or {}
+    return user.get("name") or user.get("full_name_display") or user.get("username")
+
+
+def _comment_summary(entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": entry.get("id"),
+        "author": _author(entry),
+        "created_at": entry.get("created_at"),
+        "comment": entry.get("comment"),
+        "edited_at": entry.get("edit_comment_date"),
+        "deleted_at": entry.get("delete_comment_date"),
+    }
+
+
+def _comment_id(comment_id: str) -> str:
+    if not comment_id or not str(comment_id).strip():
+        raise ValueError("comment_id must not be empty (take it from list_comments).")
+    return str(comment_id).strip()
+
+
+def _comment_action(
+    client,
+    hist: str,
+    item_id: int,
+    action: str,
+    comment_id: str,
+    label: str,
+    json: Optional[Dict[str, Any]] = None,
+) -> None:
+    """POST /history/<hist>/<id>/<action>?id=<comment_id>; a 404 means no such comment."""
+    try:
+        client.api.post(f"/history/{hist}/{item_id}/{action}", params={"id": comment_id}, json=json)
+    except TaigaNotFoundError:
+        raise ValueError(f"Comment {comment_id} not found on {label} (see list_comments).")
+
+
+@app.tool(
+    "list_comments",
+    description=(
+        "Read the comments of a user story, task, issue, or epic, in full and oldest first. "
+        "Each comment has id (needed by edit_comment/delete_comment/restore_comment), author, "
+        "created_at, the full text, edited_at and deleted_at. Deleted comments are left out "
+        "unless include_deleted=True. entity_type: 'story' (default), 'task', 'issue', or "
+        "'epic'. project accepts slug or ID."
+    ),
+)
+def list_comments(
+    project: Union[str, int],
+    ref: int,
+    entity_type: str = "story",
+    include_deleted: bool = False,
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    actual_session_id = core._get_session_id(session_id)
+    client = core._get_authenticated_client(actual_session_id)
+
+    def do_list():
+        _, item, hist = _resolve_item(client, project, entity_type, ref)
+        history = client.api.get(f"/history/{hist}/{item['id']}") or []
+        comments = [
+            _comment_summary(e)
+            for e in history
+            if (e.get("comment") or "").strip()
+            and (include_deleted or not e.get("delete_comment_date"))
+        ]
+        # Taiga returns history newest first; a conversation reads oldest first.
+        return sorted(comments, key=lambda c: c["created_at"] or "")
+
+    return core._execute_taiga_operation(
+        "list_comments", do_list, f"{entity_type} #{ref} in {project}"
+    )
+
+
+@app.tool(
+    "edit_comment",
+    description=(
+        "Replace the text of an existing comment. comment_id comes from list_comments; "
+        "Taiga keeps the earlier text as a version (see get_history with "
+        "include_comment_versions=True). entity_type: 'story' (default), 'task', 'issue', "
+        "or 'epic'. project accepts slug or ID."
+    ),
+)
+def edit_comment(
+    project: Union[str, int],
+    ref: int,
+    comment_id: str,
+    text: str,
+    entity_type: str = "story",
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    comment_id = _comment_id(comment_id)
+    if not text or not text.strip():
+        raise ValueError("Comment text must not be empty.")
+    text = text.replace("\\n", "\n").replace("\\t", "\t")
+    actual_session_id = core._get_session_id(session_id)
+    client = core._get_authenticated_client(actual_session_id)
+
+    def do_edit():
+        _, item, hist = _resolve_item(client, project, entity_type, ref)
+        label = f"{entity_type} #{ref}"
+        _comment_action(
+            client, hist, item["id"], "edit_comment", comment_id, label, {"comment": text}
+        )
+        return {
+            "status": "comment_edited",
+            "entity_type": entity_type,
+            "ref": ref,
+            "comment_id": comment_id,
+        }
+
+    return core._execute_taiga_operation(
+        "edit_comment", do_edit, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    )
+
+
+@app.tool(
+    "delete_comment",
+    description=(
+        "Delete a comment (soft delete: restore_comment brings it back, text included). "
+        "comment_id comes from list_comments. entity_type: 'story' (default), 'task', "
+        "'issue', or 'epic'. project accepts slug or ID."
+    ),
+)
+def delete_comment(
+    project: Union[str, int],
+    ref: int,
+    comment_id: str,
+    entity_type: str = "story",
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    comment_id = _comment_id(comment_id)
+    actual_session_id = core._get_session_id(session_id)
+    client = core._get_authenticated_client(actual_session_id)
+
+    def do_delete():
+        _, item, hist = _resolve_item(client, project, entity_type, ref)
+        _comment_action(
+            client, hist, item["id"], "delete_comment", comment_id, f"{entity_type} #{ref}"
+        )
+        return {
+            "status": "comment_deleted",
+            "entity_type": entity_type,
+            "ref": ref,
+            "comment_id": comment_id,
+        }
+
+    return core._execute_taiga_operation(
+        "delete_comment", do_delete, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    )
+
+
+@app.tool(
+    "restore_comment",
+    description=(
+        "Restore a comment removed with delete_comment. Find its id with "
+        "list_comments(include_deleted=True). entity_type: 'story' (default), 'task', "
+        "'issue', or 'epic'. project accepts slug or ID."
+    ),
+)
+def restore_comment(
+    project: Union[str, int],
+    ref: int,
+    comment_id: str,
+    entity_type: str = "story",
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    comment_id = _comment_id(comment_id)
+    actual_session_id = core._get_session_id(session_id)
+    client = core._get_authenticated_client(actual_session_id)
+
+    def do_restore():
+        _, item, hist = _resolve_item(client, project, entity_type, ref)
+        _comment_action(
+            client, hist, item["id"], "undelete_comment", comment_id, f"{entity_type} #{ref}"
+        )
+        return {
+            "status": "comment_restored",
+            "entity_type": entity_type,
+            "ref": ref,
+            "comment_id": comment_id,
+        }
+
+    return core._execute_taiga_operation(
+        "restore_comment", do_restore, f"{entity_type} #{ref} comment {comment_id} in {project}"
+    )
+
+
+@app.tool(
+    "get_history",
+    description=(
+        "Change history (audit trail) of a user story, task, issue, or epic, newest first: "
+        "who changed which fields when, plus comments. Each entry has id, created_at, author, "
+        "changed_fields, and comment details when the entry is a comment. With "
+        "include_comment_versions=True, edited comments also carry their earlier versions "
+        "(one extra request per edited comment). entity_type: 'story' (default), 'task', "
+        "'issue', or 'epic'. project accepts slug or ID."
+    ),
+)
+def get_history(
+    project: Union[str, int],
+    ref: int,
+    entity_type: str = "story",
+    include_comment_versions: bool = False,
+    session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    actual_session_id = core._get_session_id(session_id)
+    client = core._get_authenticated_client(actual_session_id)
+
+    def do_history():
+        _, item, hist = _resolve_item(client, project, entity_type, ref)
+        history = client.api.get(f"/history/{hist}/{item['id']}") or []
+        entries = []
+        for e in history:
+            entry: Dict[str, Any] = {
+                "id": e.get("id"),
+                "created_at": e.get("created_at"),
+                "author": _author(e),
+                # *_html keys duplicate their text field rendered as HTML.
+                "changed_fields": sorted(
+                    k for k in (e.get("diff") or {}) if not k.endswith("_html")
+                ),
+            }
+            if (e.get("comment") or "").strip():
+                entry["comment"] = e["comment"]
+                entry["comment_edited_at"] = e.get("edit_comment_date")
+                entry["comment_deleted_at"] = e.get("delete_comment_date")
+                if include_comment_versions and e.get("edit_comment_date"):
+                    versions = (
+                        client.api.get(
+                            f"/history/{hist}/{item['id']}/comment_versions", params={"id": e["id"]}
+                        )
+                        or []
+                    )
+                    entry["comment_versions"] = [
+                        {
+                            "date": v.get("date"),
+                            "author": (v.get("user") or {}).get("full_name_display")
+                            or (v.get("user") or {}).get("username"),
+                            "comment": v.get("comment"),
+                        }
+                        for v in versions
+                    ]
+            entries.append(entry)
+        return entries
+
+    return core._execute_taiga_operation(
+        "get_history", do_history, f"{entity_type} #{ref} in {project}"
     )

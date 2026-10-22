@@ -3439,3 +3439,185 @@ class TestBrowseBacklogDescription:
         desc = wf.mcp._tool_manager.get_tool("browse_backlog").description
         assert "ONLY the user stories assigned to no sprint" in desc
         assert "list_items" in desc
+
+
+# ---------------------------------------------------------------------------
+# v3 B6: comments & history (GitHub #154). Shapes taken from real Taiga.
+# ---------------------------------------------------------------------------
+
+
+def _hist(id_, created, comment="", diff=None, edited=None, deleted=None, name="Romain"):
+    return {
+        "id": id_,
+        "created_at": created,
+        "comment": comment,
+        "diff": diff or {},
+        "edit_comment_date": edited,
+        "delete_comment_date": deleted,
+        "user": {"pk": 6, "username": "rva", "name": name},
+    }
+
+
+STORY = {"id": 50, "ref": 3, "version": 2}
+# Taiga returns history newest first.
+HISTORY = [
+    _hist("c3", "2026-10-03T00:00:00Z", "deleted one", deleted="2026-10-04T00:00:00Z"),
+    _hist("h2", "2026-10-02T00:00:00Z", diff={"description": 1, "description_html": 1}),
+    _hist("c1", "2026-10-01T00:00:00Z", "first\n" + "x" * 400, edited="2026-10-05T00:00:00Z"),
+]
+
+
+class TestListComments:
+    def _route(self, mock_client, history=HISTORY):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY, "/history/userstory/50": history},
+        )
+
+    def test_full_text_oldest_first_deleted_hidden(self, session, mock_client):
+        self._route(mock_client)
+        result = wf.list_comments("p", 3, session_id=session)
+        assert [c["id"] for c in result] == ["c1"]
+        assert result[0]["comment"] == "first\n" + "x" * 400  # never truncated (#154)
+        assert result[0]["author"] == "Romain"
+        assert result[0]["edited_at"] == "2026-10-05T00:00:00Z"
+
+    def test_include_deleted(self, session, mock_client):
+        self._route(mock_client)
+        result = wf.list_comments("p", 3, include_deleted=True, session_id=session)
+        assert [c["id"] for c in result] == ["c1", "c3"]
+        assert result[1]["deleted_at"] == "2026-10-04T00:00:00Z"
+
+    @pytest.mark.parametrize(
+        "entity_type,segment,hist",
+        [("task", "tasks", "task"), ("issue", "issues", "issue"), ("epic", "epics", "epic")],
+    )
+    def test_history_segment_is_the_singular_model_name(
+        self, session, mock_client, entity_type, segment, hist
+    ):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={f"/{segment}/by_ref": {"id": 9}, f"/history/{hist}/9": []})
+        assert wf.list_comments("p", 1, entity_type=entity_type, session_id=session) == []
+
+    def test_unknown_ref_real_404(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/userstories/by_ref": _api_error(TaigaNotFoundError, 404)})
+        with pytest.raises(ValueError, match="Story #3 not found"):
+            wf.list_comments("p", 3, session_id=session)
+
+
+class TestCommentActions:
+    @pytest.mark.parametrize(
+        "tool,action,extra,status",
+        [
+            ("delete_comment", "delete_comment", {}, "comment_deleted"),
+            ("restore_comment", "undelete_comment", {}, "comment_restored"),
+        ],
+    )
+    def test_delete_and_restore_post_with_id_query(
+        self, session, mock_client, tool, action, extra, status
+    ):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY},
+            post={f"/history/userstory/50/{action}": None},
+        )
+        result = getattr(wf, tool)("p", 3, "c1", session_id=session)
+        assert result["status"] == status
+        mock_client.api.post.assert_called_once_with(
+            f"/history/userstory/50/{action}", params={"id": "c1"}, json=None
+        )
+
+    def test_edit_sends_text_in_body_id_in_query(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY},
+            post={"/history/userstory/50/edit_comment": None},
+        )
+        wf.edit_comment("p", 3, "c1", "line1\\nline2", session_id=session)
+        mock_client.api.post.assert_called_once_with(
+            "/history/userstory/50/edit_comment",
+            params={"id": "c1"},
+            json={"comment": "line1\nline2"},  # literal \\n from MCP JSON unescaped
+        )
+
+    def test_unknown_comment_id_is_clear(self, session, mock_client):
+        # Real Taiga: a wrong comment id is a 404 with an empty body.
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={"/userstories/by_ref": STORY},
+            post={"/history/userstory/50/delete_comment": _api_error(TaigaNotFoundError, 404, "")},
+        )
+        with pytest.raises(ValueError, match="Comment nope not found on story #3"):
+            wf.delete_comment("p", 3, "nope", session_id=session)
+
+    @pytest.mark.parametrize("tool", ["edit_comment", "delete_comment", "restore_comment"])
+    def test_empty_comment_id_rejected_before_any_call(self, session, mock_client, tool):
+        args = ("p", 3, "  ", "text") if tool == "edit_comment" else ("p", 3, "  ")
+        with pytest.raises(ValueError, match="comment_id must not be empty"):
+            getattr(wf, tool)(*args, session_id=session)
+        mock_client.api.get.assert_not_called()
+
+    def test_edit_empty_text_rejected(self, session, mock_client):
+        with pytest.raises(ValueError, match="must not be empty"):
+            wf.edit_comment("p", 3, "c1", "   ", session_id=session)
+        mock_client.api.post.assert_not_called()
+
+
+class TestGetHistory:
+    def test_entries_newest_first_with_changed_fields(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(mock_client, get={"/userstories/by_ref": STORY, "/history/userstory/50": HISTORY})
+        result = wf.get_history("p", 3, session_id=session)
+        assert [e["id"] for e in result] == ["c3", "h2", "c1"]
+        assert result[1]["changed_fields"] == ["description"]  # *_html duplicates dropped
+        assert result[1].get("comment") is None
+        assert result[0]["comment_deleted_at"] == "2026-10-04T00:00:00Z"
+        assert "comment_versions" not in result[2]
+
+    def test_comment_versions_only_for_edited_comments(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": STORY,
+                "/history/userstory/50": HISTORY,
+                "/history/userstory/50/comment_versions": [
+                    {
+                        "date": "2026-10-01T00:00:00Z",
+                        "user": {"username": "rva", "full_name_display": "Romain"},
+                        "comment": "original",
+                    }
+                ],
+            },
+        )
+        result = wf.get_history("p", 3, include_comment_versions=True, session_id=session)
+        versions_calls = [
+            c for c in mock_client.api.get.call_args_list if c.args[0].endswith("comment_versions")
+        ]
+        assert len(versions_calls) == 1  # only c1 was edited
+        assert versions_calls[0].kwargs["params"] == {"id": "c1"}
+        assert result[2]["comment_versions"] == [
+            {"date": "2026-10-01T00:00:00Z", "author": "Romain", "comment": "original"}
+        ]
+
+
+class TestActivityComments:
+    def _event(self, comment):
+        return {"event_type": "userstories.userstory.change", "data": {"comment": comment}}
+
+    def test_long_comment_truncated_visibly(self):
+        s = wf._summarize_timeline_event(self._event("y" * 500))
+        assert s["comment"] == "y" * 200 and s["comment_truncated"] is True
+
+    def test_full_comments_flag_keeps_everything(self):
+        s = wf._summarize_timeline_event(self._event("y" * 500), full_comments=True)
+        assert s["comment"] == "y" * 500 and "comment_truncated" not in s
+
+    def test_short_comment_untouched(self):
+        s = wf._summarize_timeline_event(self._event("short"))
+        assert s["comment"] == "short" and "comment_truncated" not in s
