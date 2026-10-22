@@ -10,18 +10,26 @@ MCP (Model Context Protocol) server bridging AI assistants with the Taiga projec
 
 ## One server
 
-Since v3 there is a single server, `src/server_workflow.py` (entry point `mcp-taiga`; `mcp-taiga-workflow` is a one-release alias). The former 107-tool `full` mode and `TAIGA_SERVER_MODE` are gone: the server ignores the variable and logs a warning if it is set to anything but `workflow`. Capabilities kept from full mode come back as intent tools in v3 B5–B9, ported from `git show main:src/server_full.py`.
+Since v3 there is a single server, the `src/server/` package (entry point `mcp-taiga`; `mcp-taiga-workflow` is a one-release alias). `src/server_workflow.py` is a compatibility shim re-exporting the package until B10. The former 107-tool `full` mode and `TAIGA_SERVER_MODE` are gone: the server ignores the variable and logs a warning if it is set to anything but `workflow`. Capabilities kept from full mode come back as intent tools in v3 B5–B9, ported from `git show main:src/server_full.py`.
 
 ## Architecture
 
 ```
 src/
-  server_workflow.py — the MCP server: intent tools + session/name-resolution helpers
+  server/
+    __init__.py      — imports everything; flat namespace (`import src.server as wf; wf.<name>`)
+    app.py           — FastMCP instance `mcp`, lifespan (env auto-auth), transport, main()
+    core.py          — active_sessions, per-session cache (_cached), _execute_taiga_operation
+    resolve.py       — _resolve_project/_sprint/_status/_user/_story_refs, summaries
+    tools/           — one module per group (session, projects, stories, tasks, issues,
+                       sprints, epics, items, comments, wiki); importing registers its tools
+  server_workflow.py — shim re-exporting src.server (removed in B10)
   taiga_client.py    — TaigaHTTP (httpx), Taiga errors, TaigaClientWrapper, user resolver
   config.py          — Pydantic settings (env vars, SecretStr credentials)
 ```
 
-- `server_workflow.py` — intent-oriented tools that accept human-readable names (project slug, sprint name, status name, member email or full name) and resolve them internally. Note: Taiga `/memberships` exposes no username field, so user resolution matches on `user_email` / `email` / `full_name` only. Tools composite multiple API calls to answer PO-level questions in one step.
+- **Module rule:** tool modules call shared helpers through their module — `core._get_authenticated_client(...)`, `resolve._resolve_project(...)`, `@app.mcp.tool(...)` — never `from src.server.core import X`, so one `monkeypatch.setattr(core, ...)` reaches every caller. A new tool group is a new `tools/<group>.py`, imported in `src/server/__init__.py`.
+- Tools are intent-oriented that accept human-readable names (project slug, sprint name, status name, member email or full name) and resolve them internally. Note: Taiga `/memberships` exposes no username field, so user resolution matches on `user_email` / `email` / `full_name` only. Tools composite multiple API calls to answer PO-level questions in one step.
 - `taiga_client.py` — `TaigaHTTP` is the whole client: `get/post/patch/put/delete(path, params=, json=, files=, headers=)` against `/api/v1`. Tools call endpoints directly (`client.api.get("/userstories/by_ref", params={"ref": r, "project": pid})`); there are no per-resource classes. `TaigaClientWrapper.list_resources()` lists with `x-disable-pagination`.
 - Session management: `active_sessions` dict keyed by UUID (or `"default"` for auto-auth).
 
