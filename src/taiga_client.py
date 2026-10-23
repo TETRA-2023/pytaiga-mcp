@@ -471,20 +471,6 @@ class TaigaClientWrapper:
             logger.error("Action required authentication, but client is not logged in.")
             raise PermissionError("Client not authenticated. Please login first.")
 
-    def get_resource(self, resource_type: str, resource_id: int) -> Dict[str, Any]:
-        """Fetch a single resource by ID via the raw API.
-
-        Used by name-based assignee resolution to look up an entity's
-        ``project`` before matching a username against that project's members.
-        """
-        self._ensure_authenticated()
-        endpoint = _RESOURCE_ENDPOINTS.get(resource_type)
-        if endpoint is None:
-            raise ValueError(
-                f"Unknown resource type: {resource_type}. Valid: {sorted(_RESOURCE_ENDPOINTS)}"
-            )
-        return self.api.get(f"{endpoint}/{resource_id}")
-
     def list_resources(
         self, resource_type: str, project_id: Optional[int] = None, **filters
     ) -> List[Dict[str, Any]]:

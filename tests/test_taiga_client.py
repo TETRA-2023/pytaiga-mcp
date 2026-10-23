@@ -482,26 +482,6 @@ class TestResolveUserId:
             resolve_user_id(self._members(), "bob")
 
 
-class TestGetResource:
-    """get_resource fetches a single entity by ID (used for name-based assignment)."""
-
-    def test_fetches_single_resource_by_id(self):
-        wrapper = TaigaClientWrapper(host="https://taiga.example")
-        wrapper.api = MagicMock(closed=False)
-        wrapper.api.auth_token = "tok"
-        wrapper.api.get.return_value = {"id": 5, "project": 1}
-        result = wrapper.get_resource("user_stories", 5)
-        assert result == {"id": 5, "project": 1}
-        wrapper.api.get.assert_called_once_with("/userstories/5")
-
-    def test_rejects_unknown_resource_type(self):
-        wrapper = TaigaClientWrapper(host="https://taiga.example")
-        wrapper.api = MagicMock(closed=False)
-        wrapper.api.auth_token = "tok"
-        with pytest.raises(ValueError, match="Unknown resource type"):
-            wrapper.get_resource("bogus", 5)
-
-
 class TestTaigaClientWrapper:
     """Tests for the TaigaClientWrapper class."""
 

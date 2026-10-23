@@ -4,28 +4,6 @@
 class TestConfig:
     """Tests for the configuration module."""
 
-    def test_mask_credential_normal(self):
-        """Test masking a normal-length credential."""
-        from src.config import mask_credential
-
-        result = mask_credential("mysecretpassword")
-        assert result.startswith("my")
-        assert result.endswith("rd")
-        assert "****" in result
-
-    def test_mask_credential_short(self):
-        """Test masking a short credential."""
-        from src.config import mask_credential
-
-        result = mask_credential("ab")
-        assert result == "**"
-
-    def test_mask_credential_empty(self):
-        """Test masking an empty credential."""
-        from src.config import mask_credential
-
-        assert mask_credential("") == "<empty>"
-
     def test_taiga_settings_defaults(self):
         """Test TaigaSettings default values."""
         from src.config import TaigaSettings

@@ -57,24 +57,5 @@ class TaigaSettings(BaseSettings):
         return self.password.get_secret_value() if self.password else None
 
 
-def mask_credential(value: str, visible_chars: int = 2) -> str:
-    """Mask a credential for safe logging.
-
-    Args:
-        value: The credential to mask
-        visible_chars: Number of characters to show at start/end
-
-    Returns:
-        Masked string like "us****rd"
-    """
-    if not value:
-        return "<empty>"
-    if len(value) <= visible_chars * 2:
-        return "*" * len(value)
-    return (
-        f"{value[:visible_chars]}{'*' * (len(value) - visible_chars * 2)}{value[-visible_chars:]}"
-    )
-
-
 # Global settings instance
 settings = TaigaSettings()

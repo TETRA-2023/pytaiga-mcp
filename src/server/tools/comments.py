@@ -9,10 +9,6 @@ from src.taiga_client import _NO_PAGINATION_HEADERS, TaigaAuthenticationError, T
 logger = logging.getLogger(__name__)
 
 
-# entity_type -> REST path segment (also the by_ref route prefix).
-_COMMENT_PATH_MAP = resolve._ENTITY_PATH_MAP
-
-
 # ---------------------------------------------------------------------------
 # Comment tool
 # ---------------------------------------------------------------------------
@@ -36,9 +32,9 @@ def add_comment(
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
-    if entity_type not in _COMMENT_PATH_MAP:
+    if entity_type not in resolve._ENTITY_PATH_MAP:
         raise ValueError(
-            f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_COMMENT_PATH_MAP)}."
+            f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(resolve._ENTITY_PATH_MAP)}."
         )
     if not text or not text.strip():
         raise ValueError("Comment text must not be empty.")
@@ -47,7 +43,7 @@ def add_comment(
     def do_comment():
         _, current, _ = _resolve_item(client, project, entity_type, ref)
         client.api.patch(
-            f"/{_COMMENT_PATH_MAP[entity_type]}/{current['id']}",
+            f"/{resolve._ENTITY_PATH_MAP[entity_type]}/{current['id']}",
             json={"comment": text, "version": current["version"]},
         )
         return {"status": "comment_added", "entity_type": entity_type, "ref": ref}
