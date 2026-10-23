@@ -688,3 +688,77 @@ class TestSandboxWrites:
             if sprint_id:
                 _delete(session_id, "milestones", sprint_id)
         assert len(sess.list_resources("user_stories", project_id=project_id)) == before_count
+
+    def test_partial_description_edits_on_real_taiga(self, session_id):
+        """GitHub #194: on a >20k-char epic description, one exact replacement and one
+        append in a single call; an absent or repeated `old` and a stale version are
+        refused without writing; Taiga's own version mismatch surfaces as a conflict."""
+        tag = uuid.uuid4().hex[:6]
+        rows = "".join(f"| row {i:04d} | value {i} |\n" for i in range(1100))
+        text = f"# Plan {tag}\n{rows}| dup |\n| dup |\n## History\n- v1\n"
+        assert len(text) > 20_000
+        epic = None
+
+        def read():
+            return wf.get_epic_overview(TEST_PROJECT, epic["ref"], session_id=session_id)["epic"]
+
+        try:
+            epic = wf.create_epic(
+                TEST_PROJECT,
+                f"[TEST - CAN DELETE] long description {tag}",
+                description=text,
+                session_id=session_id,
+            )
+            before = read()
+            assert before["description"] == text
+
+            result = wf.update_epic(
+                TEST_PROJECT,
+                epic["ref"],
+                description_edits=[{"old": "| row 0400 | value 400 |", "new": "| row 0400 | X |"}],
+                description_append="- v2\n",
+                version=before["version"],
+                session_id=session_id,
+            )
+            expected = text.replace("| row 0400 | value 400 |", "| row 0400 | X |") + "- v2\n"
+            after = read()
+            assert after["description"] == expected
+            assert result["description_change"] == {
+                "replacements": 1,
+                "prepended": False,
+                "appended": True,
+                "length_before": len(text),
+                "length_after": len(expected),
+                "version": after["version"],
+            }
+            assert after["version"] == before["version"] + 1
+
+            for old, match in (("| row 9999 |", "not found"), ("| dup |", "found 2 times")):
+                with pytest.raises(ValueError, match=match):
+                    wf.update_epic(
+                        TEST_PROJECT,
+                        epic["ref"],
+                        description_edits=[{"old": old, "new": "x"}],
+                        session_id=session_id,
+                    )
+            with pytest.raises(ValueError, match="Version conflict: the item is at version"):
+                wf.update_epic(
+                    TEST_PROJECT,
+                    epic["ref"],
+                    description_append="- stale\n",
+                    version=before["version"],
+                    session_id=session_id,
+                )
+            # A stale version on a field changed since: Taiga answers 400 {"version"}.
+            with pytest.raises(ValueError, match="Version conflict: the item changed"):
+                wf.resolve._patch_versioned(
+                    wf.active_sessions[session_id],
+                    f"/epics/{epic['id']}",
+                    {"version": before["version"], "description": "overwrite"},
+                )
+            final = read()
+            assert final["description"] == expected
+            assert final["version"] == after["version"]
+        finally:
+            if epic:
+                _delete(session_id, "epics", epic["id"])

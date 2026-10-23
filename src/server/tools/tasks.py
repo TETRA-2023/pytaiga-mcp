@@ -45,6 +45,7 @@ def get_task(
         # Single-item read: include the full description (see get_story rationale).
         result = resolve._task_summary(task)
         result["description"] = task.get("description")
+        result["version"] = task.get("version")
         return result
 
     return core._execute_taiga_operation("get_task", do_get, f"task #{ref} in {project}")
@@ -144,7 +145,13 @@ def create_task(
         "Update a task by its ref number. All fields are optional — only provided fields change. "
         "status, assignee, and sprint are resolved by name. story_ref reparents the task to a "
         "different user story. sprint accepts a name or ID; tasks can have a milestone "
-        "independent of their parent story. project accepts slug or ID."
+        "independent of their parent story. "
+        "description replaces the whole text; to change part of it, pass description_edits "
+        "([{'old': ..., 'new': ...}], applied in order, each old must occur exactly once or "
+        "nothing is written) and/or description_append / description_prepend (joined as-is, "
+        "no newline added); the answer reports description_change. version: the version the "
+        "item was read at (get_* returns it); if it changed since, nothing is written. "
+        "project accepts slug or ID."
     ),
 )
 def update_task(
@@ -152,6 +159,10 @@ def update_task(
     ref: int,
     subject: Optional[str] = None,
     description: Optional[str] = None,
+    description_edits: Optional[List[Dict[str, str]]] = None,
+    description_append: Optional[str] = None,
+    description_prepend: Optional[str] = None,
+    version: Optional[int] = None,
     status: Optional[str] = None,
     assignee: Optional[str] = None,
     sprint: Optional[Union[str, int]] = None,
@@ -160,6 +171,9 @@ def update_task(
     tags: Optional[List[str]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    resolve._check_description_args(
+        description, description_edits, description_append, description_prepend
+    )
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -174,8 +188,16 @@ def update_task(
         payload: Dict[str, Any] = {"version": current["version"]}
         if subject is not None:
             payload["subject"] = subject
-        if description is not None:
-            payload["description"] = description
+        new_description, description_change = resolve._description_payload(
+            current,
+            description,
+            description_edits,
+            description_append,
+            description_prepend,
+            version,
+        )
+        if new_description is not None:
+            payload["description"] = new_description
         if status is not None:
             payload["status"] = resolve._resolve_status(
                 client, project_id, "task", status, actual_session_id
@@ -200,10 +222,11 @@ def update_task(
         if len(payload) == 1:  # only version key
             raise ValueError("No fields to update were provided.")
 
-        version = payload["version"]
-        data = {k: v for k, v in payload.items() if k != "version"}
-        result = client.api.patch(f"/tasks/{current['id']}", json={"version": version, **data})
-        return resolve._task_summary(result)
+        result = resolve._patch_versioned(client, f"/tasks/{current['id']}", payload)
+        summary = resolve._task_summary(result)
+        if description_change is not None:
+            summary["description_change"] = {**description_change, "version": result.get("version")}
+        return summary
 
     return core._execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
 

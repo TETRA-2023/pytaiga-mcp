@@ -11,6 +11,7 @@ from src import taiga_client
 from src.taiga_client import (
     TaigaAPIError,
     TaigaAuthenticationError,
+    TaigaBadRequestError,
     TaigaException,
     TaigaNotFoundError,
     TaigaServerError,
@@ -3344,6 +3345,175 @@ class TestUpdateEpic:
         )
         with pytest.raises(ValueError, match="Epic #4 not found"):
             wf.update_epic("p", 4, subject="x", session_id=session)
+
+
+class TestDescriptionEdits:
+    """Partial description edits on the four update tools (GitHub #194)."""
+
+    TOOLS = [
+        (wf.update_epic, "epics"),
+        (wf.update_story, "userstories"),
+        (wf.update_issue, "issues"),
+        (wf.update_task, "tasks"),
+    ]
+    TEXT = "# Plan\n| a | 1 |\n|--|--|--|\n| b | 2 |\n## History\n- v51\n"
+
+    def _route(self, mock_client, segment, patch=None, text=TEXT):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={f"/{segment}/by_ref": {"id": 500, "ref": 4, "version": 6, "description": text}},
+            patch={
+                f"/{segment}/500": patch
+                if patch is not None
+                else (lambda json: {**json, "ref": 4, "version": 7})
+            },
+        )
+
+    @pytest.mark.parametrize("tool,segment", TOOLS)
+    def test_replace_and_append_in_one_patch(self, session, mock_client, tool, segment):
+        self._route(mock_client, segment)
+        result = tool(
+            "p",
+            4,
+            description_edits=[{"old": "| b | 2 |", "new": "| b | 3 |"}],
+            description_append="- v52\n",
+            session_id=session,
+        )
+        expected = self.TEXT.replace("| b | 2 |", "| b | 3 |") + "- v52\n"
+        assert sent(mock_client, "patch", f"/{segment}/500") == [
+            {"version": 6, "description": expected}
+        ]
+        assert result["description_change"] == {
+            "replacements": 1,
+            "prepended": False,
+            "appended": True,
+            "length_before": len(self.TEXT),
+            "length_after": len(expected),
+            "version": 7,
+        }
+
+    @pytest.mark.parametrize("tool,segment", TOOLS)
+    @pytest.mark.parametrize(
+        "old,match",
+        [("| c | 9 |", "not found"), ("| ", "found 4 times"), ("--|--", "found 2 times")],
+    )
+    def test_absent_or_repeated_old_writes_nothing(
+        self, session, mock_client, tool, segment, old, match
+    ):
+        self._route(mock_client, segment)
+        with pytest.raises(ValueError, match=match):
+            tool("p", 4, description_edits=[{"old": old, "new": "x"}], session_id=session)
+        mock_client.api.patch.assert_not_called()
+
+    def test_edits_apply_in_order_then_prepend(self, session, mock_client):
+        self._route(mock_client, "epics")
+        wf.update_epic(
+            "p",
+            4,
+            description_edits=[
+                {"old": "| a | 1 |", "new": "| a | X |"},
+                # Only unique once the first edit has run.
+                {"old": "X", "new": "Y"},
+            ],
+            description_prepend="> draft\n",
+            session_id=session,
+        )
+        (payload,) = sent(mock_client, "patch", "/epics/500")
+        assert payload["description"] == "> draft\n" + self.TEXT.replace("| a | 1 |", "| a | Y |")
+
+    def test_empty_description_is_edited_as_empty_text(self, session, mock_client):
+        self._route(mock_client, "userstories", text=None)
+        wf.update_story("p", 4, description_append="first line", session_id=session)
+        assert sent(mock_client, "patch", "/userstories/500") == [
+            {"version": 6, "description": "first line"}
+        ]
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"description": "x", "description_append": "y"}, "do not combine"),
+            ({"description_edits": [{"old": "", "new": "x"}]}, "old is empty"),
+            ({"description_edits": [{"old": "a"}]}, "exactly two string keys"),
+            ({"description_edits": [{"old": "a", "new": 1}]}, "exactly two string keys"),
+        ],
+    )
+    def test_bad_arguments_raise_before_any_call(self, session, mock_client, kwargs, match):
+        self._route(mock_client, "epics")
+        with pytest.raises(ValueError, match=match):
+            wf.update_epic("p", 4, session_id=session, **kwargs)
+        mock_client.api.get.assert_not_called()
+        mock_client.api.patch.assert_not_called()
+
+    def test_empty_edits_list_counts_as_no_field(self, session, mock_client):
+        self._route(mock_client, "epics")
+        with pytest.raises(ValueError, match="No fields to update"):
+            wf.update_epic("p", 4, description_edits=[], session_id=session)
+
+    def test_whole_text_replacement_reports_lengths(self, session, mock_client):
+        self._route(mock_client, "tasks")
+        result = wf.update_task("p", 4, description="short", session_id=session)
+        assert result["description_change"] == {
+            "replaced_whole_text": True,
+            "length_before": len(self.TEXT),
+            "length_after": 5,
+            "version": 7,
+        }
+
+    def test_no_description_change_no_report(self, session, mock_client):
+        self._route(mock_client, "tasks")
+        result = wf.update_task("p", 4, subject="New", session_id=session)
+        assert "description_change" not in result
+
+    @pytest.mark.parametrize("tool,segment", TOOLS)
+    def test_stale_version_refused_before_write(self, session, mock_client, tool, segment):
+        self._route(mock_client, segment)
+        with pytest.raises(ValueError, match="Version conflict: the item is at version 6, not 5"):
+            tool("p", 4, description_append="x", version=5, session_id=session)
+        mock_client.api.patch.assert_not_called()
+
+    def test_matching_version_is_sent(self, session, mock_client):
+        self._route(mock_client, "issues")
+        wf.update_issue("p", 4, description_append="x", version=6, session_id=session)
+        assert sent(mock_client, "patch", "/issues/500") == [
+            {"version": 6, "description": self.TEXT + "x"}
+        ]
+
+    @pytest.mark.parametrize("tool,segment", TOOLS)
+    def test_taiga_version_mismatch_is_a_conflict_not_retried(
+        self, session, mock_client, tool, segment
+    ):
+        # Taiga answers a concurrent change with 400 {"version": ...}, not 409.
+        error = TaigaBadRequestError(
+            400,
+            "version: The version doesn't match with the current one",
+            {"version": "The version doesn't match with the current one"},
+        )
+        self._route(mock_client, segment, patch=error)
+        with pytest.raises(ValueError, match="Version conflict: the item changed"):
+            tool("p", 4, description_append="x", session_id=session)
+        assert mock_client.api.patch.call_count == 1
+
+    def test_other_bad_request_is_not_a_conflict(self, session, mock_client):
+        self._route(mock_client, "epics", patch=_api_error(TaigaBadRequestError, 400, "bad"))
+        with pytest.raises(TaigaBadRequestError):
+            wf.update_epic("p", 4, description_append="x", session_id=session)
+
+    @pytest.mark.parametrize(
+        "tool,segment,key",
+        [
+            (wf.get_story, "userstories", None),
+            (wf.get_task, "tasks", None),
+            (wf.get_issue, "issues", None),
+            (wf.get_epic_overview, "epics", "epic"),
+        ],
+    )
+    def test_single_reads_return_version(self, session, mock_client, tool, segment, key):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = []
+        route(mock_client, get={f"/{segment}/by_ref": {"id": 500, "ref": 4, "version": 6}})
+        result = tool("p", 4, session_id=session)
+        assert (result[key] if key else result)["version"] == 6
 
 
 class TestDeleteItem:

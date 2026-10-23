@@ -34,6 +34,7 @@ def get_issue(
         # helpers are reused by lean board/list composites.
         result = resolve._issue_summary(issue, client, proj["id"], actual_session_id)
         result["description"] = issue.get("description")
+        result["version"] = issue.get("version")
         return result
 
     return core._execute_taiga_operation("get_issue", do_get, f"#{ref} in {project}")
@@ -136,6 +137,11 @@ def create_issue(
     description=(
         "Update an issue by ref number. All fields optional. "
         "status, priority, severity, type, and assignee are resolved by name. "
+        "description replaces the whole text; to change part of it, pass description_edits "
+        "([{'old': ..., 'new': ...}], applied in order, each old must occur exactly once or "
+        "nothing is written) and/or description_append / description_prepend (joined as-is, "
+        "no newline added); the answer reports description_change. version: the version the "
+        "item was read at (get_* returns it); if it changed since, nothing is written. "
         "project accepts slug or ID."
     ),
 )
@@ -144,6 +150,10 @@ def update_issue(
     ref: int,
     subject: Optional[str] = None,
     description: Optional[str] = None,
+    description_edits: Optional[List[Dict[str, str]]] = None,
+    description_append: Optional[str] = None,
+    description_prepend: Optional[str] = None,
+    version: Optional[int] = None,
     status: Optional[str] = None,
     assignee: Optional[str] = None,
     priority: Optional[str] = None,
@@ -153,6 +163,9 @@ def update_issue(
     tags: Optional[List[str]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    resolve._check_description_args(
+        description, description_edits, description_append, description_prepend
+    )
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -167,8 +180,16 @@ def update_issue(
         payload: Dict[str, Any] = {"version": current["version"]}
         if subject is not None:
             payload["subject"] = subject
-        if description is not None:
-            payload["description"] = description
+        new_description, description_change = resolve._description_payload(
+            current,
+            description,
+            description_edits,
+            description_append,
+            description_prepend,
+            version,
+        )
+        if new_description is not None:
+            payload["description"] = new_description
         if status is not None:
             payload["status"] = resolve._resolve_status(
                 client, project_id, "issue", status, actual_session_id
@@ -197,10 +218,8 @@ def update_issue(
         if len(payload) == 1:
             raise ValueError("No fields to update were provided.")
 
-        version = payload["version"]
-        data = {k: v for k, v in payload.items() if k != "version"}
-        result = client.api.patch(f"/issues/{current['id']}", json={"version": version, **data})
-        return {
+        result = resolve._patch_versioned(client, f"/issues/{current['id']}", payload)
+        summary = {
             "ref": result.get("ref"),
             "subject": result.get("subject"),
             "status": (result.get("status_extra_info") or {}).get("name"),
@@ -221,5 +240,8 @@ def update_issue(
             "is_blocked": result.get("is_blocked"),
             "is_closed": result.get("is_closed", False),
         }
+        if description_change is not None:
+            summary["description_change"] = {**description_change, "version": result.get("version")}
+        return summary
 
     return core._execute_taiga_operation("update_issue", do_update, f"#{ref} in {project}")

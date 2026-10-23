@@ -1,11 +1,13 @@
 """Name resolution (project, sprint, status, user, refs) and result summaries."""
 
 import logging
+import re
 from datetime import date
 from typing import Any, Dict, List, Optional
 
 from src.server import core
 from src.taiga_client import (
+    TaigaBadRequestError,
     TaigaClientWrapper,
     TaigaNotFoundError,
     resolve_user_id,
@@ -256,6 +258,127 @@ def _get_by_ref(
         return client.api.get(f"/{segment}/by_ref", params={"ref": ref, "project": project_id})
     except TaigaNotFoundError:
         return None
+
+
+def _check_description_args(
+    description: Optional[str],
+    edits: Optional[List[Dict[str, str]]],
+    append: Optional[str],
+    prepend: Optional[str],
+) -> bool:
+    """Validate the description arguments before any call; True when one is given.
+
+    ``description`` replaces the whole text, so it cannot be combined with the
+    partial forms. An empty ``edits`` list counts as not given.
+    """
+    partial = bool(edits) or append is not None or prepend is not None
+    if description is not None and partial:
+        raise ValueError(
+            "description replaces the whole text: do not combine it with "
+            "description_edits, description_append or description_prepend."
+        )
+    for i, edit in enumerate(edits or []):
+        if (
+            not isinstance(edit, dict)
+            or set(edit) != {"old", "new"}
+            or not all(isinstance(edit[k], str) for k in ("old", "new"))
+        ):
+            raise ValueError(
+                f"description_edits[{i}] must be an object with exactly two string keys, "
+                "'old' and 'new'."
+            )
+        if not edit["old"]:
+            raise ValueError(f"description_edits[{i}].old is empty.")
+    return description is not None or partial
+
+
+def _edit_description(
+    text: Optional[str],
+    edits: Optional[List[Dict[str, str]]],
+    append: Optional[str],
+    prepend: Optional[str],
+) -> tuple:
+    """Apply exact replacements, then prepend/append, to a description.
+
+    Edits apply in order, each to the text as the previous one left it, and each
+    ``old`` must occur exactly once at that point; otherwise ValueError, so the
+    caller writes nothing. Append and prepend are joined as-is (no newline added).
+    Returns (new text, change report).
+    """
+    before = text or ""
+    new = before
+    for i, edit in enumerate(edits or []):
+        # Overlapping matches count: str.count would see "--|--" once in "--|--|--".
+        count = len(re.findall(f"(?={re.escape(edit['old'])})", new))
+        if count != 1:
+            found = "not found" if count == 0 else f"found {count} times"
+            raise ValueError(
+                f"description_edits[{i}].old must occur exactly once in the description, "
+                f"{found}. Nothing was written."
+            )
+        new = new.replace(edit["old"], edit["new"], 1)
+    if prepend is not None:
+        new = prepend + new
+    if append is not None:
+        new = new + append
+    return new, {
+        "replacements": len(edits or []),
+        "prepended": prepend is not None,
+        "appended": append is not None,
+        "length_before": len(before),
+        "length_after": len(new),
+    }
+
+
+def _description_payload(
+    current: Dict[str, Any],
+    description: Optional[str],
+    edits: Optional[List[Dict[str, str]]],
+    append: Optional[str],
+    prepend: Optional[str],
+    version: Optional[int],
+) -> tuple:
+    """(new description or None, change report or None) for an update tool.
+
+    ``version`` is the version the caller read the item at: when the item has
+    moved on since, the call is refused before anything is written, because the
+    caller's edits were written against a text that is no longer there.
+    """
+    if version is not None and version != current.get("version"):
+        raise ValueError(
+            f"Version conflict: the item is at version {current.get('version')}, "
+            f"not {version}. It changed since it was read; nothing was written. "
+            "Read it again and redo the change."
+        )
+    if description is not None:
+        before = current.get("description") or ""
+        return description, {
+            "replaced_whole_text": True,
+            "length_before": len(before),
+            "length_after": len(description),
+        }
+    if edits or append is not None or prepend is not None:
+        return _edit_description(current.get("description"), edits, append, prepend)
+    return None, None
+
+
+def _patch_versioned(client: TaigaClientWrapper, path: str, payload: Dict[str, Any]):
+    """PATCH with OCC; Taiga's version-mismatch 400 becomes an explicit conflict.
+
+    Taiga refuses a stale ``version`` only when a field changed since that version
+    is also being written, and answers 400 ``{"version": ...}``, not 409. The
+    conflict is reported, never retried: a retry would overwrite the other change.
+    """
+    try:
+        return client.api.patch(path, json=payload)
+    except TaigaBadRequestError as e:
+        if isinstance(e.body, dict) and "version" in e.body:
+            raise ValueError(
+                f"Version conflict: the item changed while this update was being sent "
+                f"(Taiga: {e.error_detail}). Nothing was written; read it again and "
+                "redo the change."
+            ) from e
+        raise
 
 
 def _resolve_item_by_ref(client: TaigaClientWrapper, project: Any, entity_type: str, ref: int):
