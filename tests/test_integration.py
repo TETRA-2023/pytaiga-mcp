@@ -741,7 +741,8 @@ class TestSandboxWrites:
                         description_edits=[{"old": old, "new": "x"}],
                         session_id=session_id,
                     )
-            with pytest.raises(ValueError, match="Version conflict: the item is at version"):
+            # The description changed since `before`: Taiga answers 400 {"version"}.
+            with pytest.raises(ValueError, match="Version conflict: a field this update writes"):
                 wf.update_epic(
                     TEST_PROJECT,
                     epic["ref"],
@@ -749,16 +750,26 @@ class TestSandboxWrites:
                     version=before["version"],
                     session_id=session_id,
                 )
-            # A stale version on a field changed since: Taiga answers 400 {"version"}.
-            with pytest.raises(ValueError, match="Version conflict: the item changed"):
-                wf.resolve._patch_versioned(
-                    wf.active_sessions[session_id],
-                    f"/epics/{epic['id']}",
-                    {"version": before["version"], "description": "overwrite"},
-                )
-            final = read()
-            assert final["description"] == expected
-            assert final["version"] == after["version"]
+            unchanged = read()
+            assert unchanged["description"] == expected
+            assert unchanged["version"] == after["version"]
+
+            # Only the subject changed since `after`: Taiga's check is field-aware,
+            # so a description edit made against `after` still goes through.
+            wf.update_epic(
+                TEST_PROJECT,
+                epic["ref"],
+                subject=f"[TEST - CAN DELETE] long description {tag} v2",
+                session_id=session_id,
+            )
+            wf.update_epic(
+                TEST_PROJECT,
+                epic["ref"],
+                description_append="- v3\n",
+                version=after["version"],
+                session_id=session_id,
+            )
+            assert read()["description"] == expected + "- v3\n"
         finally:
             if epic:
                 _delete(session_id, "epics", epic["id"])

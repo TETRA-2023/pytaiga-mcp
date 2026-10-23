@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from src.server import core
 from src.taiga_client import (
-    TaigaBadRequestError,
     TaigaClientWrapper,
+    TaigaConcurrencyError,
     TaigaNotFoundError,
     resolve_user_id,
     safe_lower,
@@ -260,13 +260,24 @@ def _get_by_ref(
         return None
 
 
+# Shared help text for the description arguments of update_epic/story/issue/task.
+_DESCRIPTION_EDITS_HELP = (
+    "description replaces the whole text; to change part of it, pass description_edits "
+    "([{'old': ..., 'new': ...}], applied in order, each old must occur exactly once or "
+    "nothing is written) and/or description_append / description_prepend (joined as-is, "
+    "no newline added); the answer reports description_change. version: the version the "
+    "item was read at (get_* returns it); if a field this call writes changed since, "
+    "nothing is written (changes to other fields, comments included, do not block it). "
+)
+
+
 def _check_description_args(
     description: Optional[str],
     edits: Optional[List[Dict[str, str]]],
     append: Optional[str],
     prepend: Optional[str],
-) -> bool:
-    """Validate the description arguments before any call; True when one is given.
+) -> None:
+    """Validate the description arguments before any call.
 
     ``description`` replaces the whole text, so it cannot be combined with the
     partial forms. An empty ``edits`` list counts as not given.
@@ -289,7 +300,6 @@ def _check_description_args(
             )
         if not edit["old"]:
             raise ValueError(f"description_edits[{i}].old is empty.")
-    return description is not None or partial
 
 
 def _edit_description(
@@ -308,15 +318,18 @@ def _edit_description(
     before = text or ""
     new = before
     for i, edit in enumerate(edits or []):
-        # Overlapping matches count: str.count would see "--|--" once in "--|--|--".
-        count = len(re.findall(f"(?={re.escape(edit['old'])})", new))
-        if count != 1:
+        old = edit["old"]
+        first = new.find(old)
+        # Overlapping matches count (search again from first + 1): str.count
+        # would see "--|--" once in "--|--|--".
+        if first < 0 or new.find(old, first + 1) >= 0:
+            count = len(re.findall(f"(?={re.escape(old)})", new))
             found = "not found" if count == 0 else f"found {count} times"
             raise ValueError(
                 f"description_edits[{i}].old must occur exactly once in the description, "
                 f"{found}. Nothing was written."
             )
-        new = new.replace(edit["old"], edit["new"], 1)
+        new = new[:first] + edit["new"] + new[first + len(old) :]
     if prepend is not None:
         new = prepend + new
     if append is not None:
@@ -336,20 +349,8 @@ def _description_payload(
     edits: Optional[List[Dict[str, str]]],
     append: Optional[str],
     prepend: Optional[str],
-    version: Optional[int],
 ) -> tuple:
-    """(new description or None, change report or None) for an update tool.
-
-    ``version`` is the version the caller read the item at: when the item has
-    moved on since, the call is refused before anything is written, because the
-    caller's edits were written against a text that is no longer there.
-    """
-    if version is not None and version != current.get("version"):
-        raise ValueError(
-            f"Version conflict: the item is at version {current.get('version')}, "
-            f"not {version}. It changed since it was read; nothing was written. "
-            "Read it again and redo the change."
-        )
+    """(new description or None, change report or None) for an update tool."""
     if description is not None:
         before = current.get("description") or ""
         return description, {
@@ -362,23 +363,33 @@ def _description_payload(
     return None, None
 
 
+def _base_version(current: Dict[str, Any], version: Optional[int]) -> int:
+    """The version to PATCH with: the caller's when given, else the one just read.
+
+    Taiga's own check is field-aware: a stale version is refused only when a field
+    being written changed since. So a description edit against version V goes
+    through after a mere comment or status change, and is refused when the
+    description itself moved on, the one case where the edits may be wrong.
+    """
+    return current["version"] if version is None else version
+
+
 def _patch_versioned(client: TaigaClientWrapper, path: str, payload: Dict[str, Any]):
     """PATCH with OCC; Taiga's version-mismatch 400 becomes an explicit conflict.
 
     Taiga refuses a stale ``version`` only when a field changed since that version
-    is also being written, and answers 400 ``{"version": ...}``, not 409. The
-    conflict is reported, never retried: a retry would overwrite the other change.
+    is also being written, and answers 400 ``{"version": ...}`` (raised as
+    TaigaConcurrencyError). The conflict is reported, never retried: a retry would
+    overwrite the other change.
     """
     try:
         return client.api.patch(path, json=payload)
-    except TaigaBadRequestError as e:
-        if isinstance(e.body, dict) and "version" in e.body:
-            raise ValueError(
-                f"Version conflict: the item changed while this update was being sent "
-                f"(Taiga: {e.error_detail}). Nothing was written; read it again and "
-                "redo the change."
-            ) from e
-        raise
+    except TaigaConcurrencyError as e:
+        raise ValueError(
+            f"Version conflict: a field this update writes changed since version "
+            f"{payload.get('version')} (Taiga: {e.error_detail}). Nothing was written; "
+            "read the item again and redo the change."
+        ) from e
 
 
 def _resolve_item_by_ref(client: TaigaClientWrapper, project: Any, entity_type: str, ref: int):

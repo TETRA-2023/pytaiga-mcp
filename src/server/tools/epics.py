@@ -159,12 +159,8 @@ def create_epic(
         "change. status and assignee are resolved by name; color is a hex string "
         "(e.g. '#A5694F'); tags replaces the epic's tags. Linking stories is not done "
         "here: use create_epic(story_refs=...) or update_story(epic=...). "
-        "description replaces the whole text; to change part of it, pass description_edits "
-        "([{'old': ..., 'new': ...}], applied in order, each old must occur exactly once or "
-        "nothing is written) and/or description_append / description_prepend (joined as-is, "
-        "no newline added); the answer reports description_change. version: the version the "
-        "item was read at (get_* returns it); if it changed since, nothing is written. "
-        "project accepts slug or ID."
+        + resolve._DESCRIPTION_EDITS_HELP
+        + "project accepts slug or ID."
     ),
 )
 def update_epic(
@@ -183,11 +179,22 @@ def update_epic(
     blocked: Optional[bool] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    description_given = resolve._check_description_args(
+    resolve._check_description_args(
         description, description_edits, description_append, description_prepend
     )
-    fields = (subject, status, assignee, color, tags, blocked)
-    if not description_given and all(v is None for v in fields):
+    fields = (
+        subject,
+        description,
+        description_edits or None,  # an empty list counts as not given
+        description_append,
+        description_prepend,
+        status,
+        assignee,
+        color,
+        tags,
+        blocked,
+    )
+    if all(v is None for v in fields):
         raise ValueError("No fields to update were provided.")
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
@@ -200,7 +207,7 @@ def update_epic(
         if not current:
             raise ValueError(f"Epic #{ref} not found in project '{proj['slug']}'.")
 
-        payload: Dict[str, Any] = {"version": current["version"]}
+        payload: Dict[str, Any] = {"version": resolve._base_version(current, version)}
         if subject is not None:
             payload["subject"] = subject
         new_description, description_change = resolve._description_payload(
@@ -209,7 +216,6 @@ def update_epic(
             description_edits,
             description_append,
             description_prepend,
-            version,
         )
         if new_description is not None:
             payload["description"] = new_description

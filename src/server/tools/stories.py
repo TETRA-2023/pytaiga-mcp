@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
+from src.taiga_client import TaigaException
 
 logger = logging.getLogger(__name__)
 
@@ -159,12 +160,8 @@ def create_story(
         "Update a user story by its ref number. All fields are optional — only provided fields are changed. "
         "status, assignee, and sprint are resolved by name. "
         "epic accepts an epic ref number to link the story to that epic, or 0 to unlink from all epics. "
-        "description replaces the whole text; to change part of it, pass description_edits "
-        "([{'old': ..., 'new': ...}], applied in order, each old must occur exactly once or "
-        "nothing is written) and/or description_append / description_prepend (joined as-is, "
-        "no newline added); the answer reports description_change. version: the version the "
-        "item was read at (get_* returns it); if it changed since, nothing is written. "
-        "project accepts slug or ID."
+        + resolve._DESCRIPTION_EDITS_HELP
+        + "project accepts slug or ID."
     ),
 )
 def update_story(
@@ -198,7 +195,7 @@ def update_story(
         if not current:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
 
-        payload: Dict[str, Any] = {"version": current["version"]}
+        payload: Dict[str, Any] = {"version": resolve._base_version(current, version)}
         if subject is not None:
             payload["subject"] = subject
         new_description, description_change = resolve._description_payload(
@@ -207,7 +204,6 @@ def update_story(
             description_edits,
             description_append,
             description_prepend,
-            version,
         )
         if new_description is not None:
             payload["description"] = new_description
@@ -247,20 +243,36 @@ def update_story(
         if len(payload) > 1:
             result = resolve._patch_versioned(client, f"/userstories/{current['id']}", payload)
 
+        epic_error = None
         if epic is not None:
-            # Taiga's UserStorySerializer returns `epics` as a list of dicts
-            # ({"id": <epic_id>, "ref": ..., "subject": ..., "color": ...}),
-            # not bare IDs — extract `id` from each entry.
-            for old_epic in current.get("epics") or []:
-                client.api.delete(f"/epics/{old_epic['id']}/related_userstories/{current['id']}")
-            if new_epic is not None:
-                client.api.post(
-                    f"/epics/{new_epic['id']}/related_userstories",
-                    json={"epic": new_epic["id"], "user_story": current["id"]},
+            try:
+                # Taiga's UserStorySerializer returns `epics` as a list of dicts
+                # ({"id": <epic_id>, "ref": ..., "subject": ..., "color": ...}),
+                # not bare IDs — extract `id` from each entry.
+                for old_epic in current.get("epics") or []:
+                    client.api.delete(
+                        f"/epics/{old_epic['id']}/related_userstories/{current['id']}"
+                    )
+                if new_epic is not None:
+                    client.api.post(
+                        f"/epics/{new_epic['id']}/related_userstories",
+                        json={"epic": new_epic["id"], "user_story": current["id"]},
+                    )
+                epic_changed = True
+            except TaigaException as e:
+                if result is current:  # nothing else was written: a plain failure
+                    raise
+                # The PATCH is saved; raising would make the caller retry it against
+                # a version that has moved on. Report the relink failure instead.
+                epic_error = (
+                    f"The other fields were saved, but relinking to "
+                    f"{f'epic #{epic}' if epic else 'no epic'} failed: {e}. "
+                    "The story's epic links may be partly changed."
                 )
-            epic_changed = True
 
         summary = resolve._story_summary(result)
+        if epic_error:
+            summary["epic_error"] = epic_error
         if epic_changed:
             summary["epic"] = epic if epic else None
         if description_change is not None:

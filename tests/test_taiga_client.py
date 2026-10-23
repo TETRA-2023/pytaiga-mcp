@@ -14,6 +14,7 @@ from src.taiga_client import (
     TaigaAuthenticationError,
     TaigaBadRequestError,
     TaigaClientWrapper,
+    TaigaConcurrencyError,
     TaigaException,
     TaigaHTTP,
     TaigaNotFoundError,
@@ -114,6 +115,15 @@ class TestTaigaHTTPErrors:
             api.get("/x")
         assert ei.value.status_code == code
         assert isinstance(ei.value, TaigaAPIError)
+
+    def test_occ_version_400_is_a_concurrency_error(self):
+        # taiga-back's OCCResourceMixin refuses a stale version with 400, not 409.
+        body = {"version": "The version doesn't match with the current one"}
+        api = _http(lambda request: httpx.Response(400, json=body))
+        with pytest.raises(TaigaConcurrencyError) as ei:
+            api.patch("/epics/1", json={"version": 3, "description": "x"})
+        assert ei.value.status_code == 400
+        assert ei.value.body == body
 
     def test_field_errors_are_kept(self):
         # The real 400 body shape from a live Taiga (POST /userstories without

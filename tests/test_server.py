@@ -12,6 +12,7 @@ from src.taiga_client import (
     TaigaAPIError,
     TaigaAuthenticationError,
     TaigaBadRequestError,
+    TaigaConcurrencyError,
     TaigaException,
     TaigaNotFoundError,
     TaigaServerError,
@@ -3466,11 +3467,14 @@ class TestDescriptionEdits:
         assert "description_change" not in result
 
     @pytest.mark.parametrize("tool,segment", TOOLS)
-    def test_stale_version_refused_before_write(self, session, mock_client, tool, segment):
+    def test_callers_version_is_sent_for_taiga_to_check(self, session, mock_client, tool, segment):
+        # Taiga's check is field-aware: an older version still goes through when
+        # only other fields (or comments) changed since, so it is Taiga's call.
         self._route(mock_client, segment)
-        with pytest.raises(ValueError, match="Version conflict: the item is at version 6, not 5"):
-            tool("p", 4, description_append="x", version=5, session_id=session)
-        mock_client.api.patch.assert_not_called()
+        tool("p", 4, description_append="x", version=5, session_id=session)
+        assert sent(mock_client, "patch", f"/{segment}/500") == [
+            {"version": 5, "description": self.TEXT + "x"}
+        ]
 
     def test_matching_version_is_sent(self, session, mock_client):
         self._route(mock_client, "issues")
@@ -3483,14 +3487,15 @@ class TestDescriptionEdits:
     def test_taiga_version_mismatch_is_a_conflict_not_retried(
         self, session, mock_client, tool, segment
     ):
-        # Taiga answers a concurrent change with 400 {"version": ...}, not 409.
-        error = TaigaBadRequestError(
+        # Taiga answers a stale version with 400 {"version": ...}, raised as
+        # TaigaConcurrencyError by the client (see test_taiga_client).
+        error = TaigaConcurrencyError(
             400,
             "version: The version doesn't match with the current one",
             {"version": "The version doesn't match with the current one"},
         )
         self._route(mock_client, segment, patch=error)
-        with pytest.raises(ValueError, match="Version conflict: the item changed"):
+        with pytest.raises(ValueError, match="Version conflict: a field this update writes"):
             tool("p", 4, description_append="x", session_id=session)
         assert mock_client.api.patch.call_count == 1
 
@@ -3498,6 +3503,54 @@ class TestDescriptionEdits:
         self._route(mock_client, "epics", patch=_api_error(TaigaBadRequestError, 400, "bad"))
         with pytest.raises(TaigaBadRequestError):
             wf.update_epic("p", 4, description_append="x", session_id=session)
+
+    def _route_story_relink(self, mock_client, post):
+        mock_client.api.get.return_value = PROJECT
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": {
+                    "id": 500,
+                    "ref": 4,
+                    "version": 6,
+                    "description": "d",
+                    "epics": [{"id": 70}],
+                },
+                "/epics/by_ref": {"id": 80, "ref": 9},
+            },
+            patch={"/userstories/500": lambda json: {**json, "ref": 4, "version": 7}},
+            delete={"/epics/70/related_userstories/500": None},
+            post={"/epics/80/related_userstories": post},
+        )
+
+    def test_story_relink_failure_after_saved_patch_is_reported(self, session, mock_client):
+        self._route_story_relink(mock_client, _api_error(TaigaServerError, 500, "down"))
+        result = wf.update_story("p", 4, description_append="x", epic=9, session_id=session)
+        assert sent(mock_client, "patch", "/userstories/500") == [
+            {"version": 6, "description": "dx"}
+        ]
+        assert result["description_change"]["version"] == 7
+        assert "relinking to epic #9 failed" in result["epic_error"]
+        assert "epic" not in result
+
+    def test_story_relink_failure_alone_still_raises(self, session, mock_client):
+        self._route_story_relink(mock_client, _api_error(TaigaServerError, 500, "down"))
+        with pytest.raises(TaigaServerError):
+            wf.update_story("p", 4, epic=9, session_id=session)
+        mock_client.api.patch.assert_not_called()
+
+    def test_story_conflict_leaves_epic_links_alone(self, session, mock_client):
+        self._route_story_relink(mock_client, {})
+        route(
+            mock_client,
+            patch={
+                "/userstories/500": TaigaConcurrencyError(400, "version: stale", {"version": "x"})
+            },
+        )
+        with pytest.raises(ValueError, match="Version conflict"):
+            wf.update_story("p", 4, description_append="x", epic=9, session_id=session)
+        mock_client.api.delete.assert_not_called()
+        mock_client.api.post.assert_not_called()
 
     @pytest.mark.parametrize(
         "tool,segment,key",

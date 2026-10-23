@@ -133,7 +133,7 @@ class TaigaNotFoundError(TaigaAPIError):
 
 
 class TaigaConcurrencyError(TaigaAPIError):
-    """409."""
+    """409, or Taiga's optimistic-concurrency 400 (body keyed on ``version``)."""
 
 
 class TaigaRateLimitError(TaigaAPIError):
@@ -175,7 +175,8 @@ def _api_error(response: httpx.Response) -> TaigaAPIError:
         cls = TaigaAuthenticationError
     elif code == 404:
         cls = TaigaNotFoundError
-    elif code == 409:
+    elif code == 409 or (code == 400 and isinstance(body, dict) and "version" in body):
+        # Taiga refuses a stale `version` with 400 {"version": ...}, not 409.
         cls = TaigaConcurrencyError
     elif code == 429:
         cls = TaigaRateLimitError

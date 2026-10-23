@@ -146,12 +146,8 @@ def create_task(
         "status, assignee, and sprint are resolved by name. story_ref reparents the task to a "
         "different user story. sprint accepts a name or ID; tasks can have a milestone "
         "independent of their parent story. "
-        "description replaces the whole text; to change part of it, pass description_edits "
-        "([{'old': ..., 'new': ...}], applied in order, each old must occur exactly once or "
-        "nothing is written) and/or description_append / description_prepend (joined as-is, "
-        "no newline added); the answer reports description_change. version: the version the "
-        "item was read at (get_* returns it); if it changed since, nothing is written. "
-        "project accepts slug or ID."
+        + resolve._DESCRIPTION_EDITS_HELP
+        + "project accepts slug or ID."
     ),
 )
 def update_task(
@@ -185,7 +181,7 @@ def update_task(
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
-        payload: Dict[str, Any] = {"version": current["version"]}
+        payload: Dict[str, Any] = {"version": resolve._base_version(current, version)}
         if subject is not None:
             payload["subject"] = subject
         new_description, description_change = resolve._description_payload(
@@ -194,7 +190,6 @@ def update_task(
             description_edits,
             description_append,
             description_prepend,
-            version,
         )
         if new_description is not None:
             payload["description"] = new_description
