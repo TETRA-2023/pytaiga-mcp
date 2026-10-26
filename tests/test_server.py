@@ -1,6 +1,7 @@
 """Unit tests for the MCP server (src/server/): name resolution, tools, offload."""
 
 import asyncio
+import sys
 import uuid
 from unittest.mock import DEFAULT, MagicMock, call
 
@@ -8,6 +9,7 @@ import pytest
 
 import src.server as wf
 from src import taiga_client
+from src.server import core
 from src.taiga_client import (
     TaigaAPIError,
     TaigaAuthenticationError,
@@ -182,6 +184,12 @@ class TestSessionHelpers:
 
     def test_get_session_id_raises_when_no_default(self):
         with pytest.raises(ValueError, match="No session_id provided"):
+            wf._get_session_id()
+
+    def test_get_session_id_reports_failed_auto_login(self, monkeypatch):
+        # #197: the startup login failure is the cause, not a missing session_id.
+        monkeypatch.setattr(core, "auto_login_error", "TaigaNotFoundError: Not found.")
+        with pytest.raises(ValueError, match="Auto-login at startup failed: TaigaNotFoundError"):
             wf._get_session_id()
 
     def test_get_authenticated_client_ok(self, session, mock_client):
@@ -2616,6 +2624,44 @@ class TestGetWiki:
         ]
         with pytest.raises(ValueError, match="Wiki page 'home' not found"):
             wf.get_wiki("p", slug="home", session_id=session)
+
+
+class TestAutoLogin:
+    """The lifespan's startup login (#197)."""
+
+    def _run_lifespan(self, monkeypatch, wrapper):
+        app_module = sys.modules["src.server.app"]
+        monkeypatch.setattr(core, "auto_login_error", None)
+        monkeypatch.setattr(taiga_client, "TaigaClientWrapper", lambda host: wrapper)
+        monkeypatch.setattr(type(app_module.settings), "has_credentials", property(lambda s: True))
+        monkeypatch.setattr(type(app_module.settings), "get_username_value", lambda s: "u")
+        monkeypatch.setattr(type(app_module.settings), "get_password_value", lambda s: "p")
+        errors = []
+
+        async def run():
+            async with app_module.server_lifespan(MagicMock()):
+                try:
+                    errors.append(wf._get_session_id())
+                except ValueError as e:
+                    errors.append(e)
+
+        asyncio.run(run())
+        return errors[0]
+
+    def test_failed_auto_login_is_reported_by_tools(self, monkeypatch):
+        wrapper = MagicMock()
+        wrapper.login.side_effect = TaigaNotFoundError(404, "Not found.")
+        error = self._run_lifespan(monkeypatch, wrapper)
+        assert isinstance(error, ValueError)
+        assert "Auto-login at startup failed: TaigaNotFoundError" in str(error)
+        assert "TAIGA_API_URL" in str(error)
+        assert "No session_id provided" not in str(error)
+
+    def test_successful_auto_login_gives_the_default_session(self, monkeypatch):
+        wrapper = MagicMock()
+        wrapper.login.return_value = True
+        assert self._run_lifespan(monkeypatch, wrapper) == wf.DEFAULT_SESSION_ID
+        assert core.auto_login_error is None
 
 
 class TestLogin:

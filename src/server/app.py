@@ -55,8 +55,10 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
                 password=settings.get_password_value(),
             ):
                 core.active_sessions[core.DEFAULT_SESSION_ID] = wrapper
+                core.auto_login_error = None
                 logger.info("Auto-authentication successful.")
         except Exception as e:
+            core.auto_login_error = f"{type(e).__name__}: {e} (host {settings.host})"
             logger.error(f"Auto-authentication error: {e}")
             logger.warning("Continuing without auto-authentication.")
     else:

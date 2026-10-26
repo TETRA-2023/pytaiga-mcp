@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 active_sessions: Dict[str, TaigaClientWrapper] = {}
 DEFAULT_SESSION_ID = "default"
+# Why the startup auto-login failed, if it did: tools report it instead of a bare
+# "No session_id provided" (#197). Set once by the lifespan.
+auto_login_error: Optional[str] = None
 
 # Per-session lookup cache: {session_id: {"members_{pid}": [...], ...}}
 _session_cache: Dict[str, Dict[str, Any]] = {}
@@ -67,6 +70,11 @@ def _get_session_id(session_id: Optional[str] = None) -> str:
         return session_id
     if DEFAULT_SESSION_ID in active_sessions:
         return DEFAULT_SESSION_ID
+    if auto_login_error:
+        raise ValueError(
+            f"Auto-login at startup failed: {auto_login_error}. Check that TAIGA_API_URL "
+            "is the Taiga host (the server adds /api/v1) and the credentials, or call login()."
+        )
     raise ValueError(
         "No session_id provided and no default session available. "
         "Set TAIGA_USERNAME/TAIGA_PASSWORD env vars or call login()."

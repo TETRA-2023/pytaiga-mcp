@@ -238,7 +238,10 @@ class TaigaHTTP:
     ):
         if not host:
             raise ValueError("Taiga host URL cannot be empty.")
-        self.host = host.rstrip("/")
+        # TAIGA_API_URL is the host; API_PATH is added below. Accept a URL that
+        # already ends in /api/v1 too (many configs do), instead of 404ing on
+        # .../api/v1/api/v1/auth (#197).
+        self.host = host.rstrip("/").removesuffix(self.API_PATH.rstrip("/")).rstrip("/")
         self.auth_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._refresh_lock = threading.Lock()

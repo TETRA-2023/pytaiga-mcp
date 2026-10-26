@@ -51,6 +51,23 @@ class TestTaigaHTTPRequests:
         assert seen["url"] == f"{HOST}/api/v1/userstories/by_ref?ref=7"
         assert seen["auth"] == "Bearer t1"
 
+    @pytest.mark.parametrize(
+        "host",
+        [HOST, f"{HOST}/", f"{HOST}/api/v1", f"{HOST}/api/v1/", f"{HOST}/api/v1//"],
+    )
+    def test_host_with_or_without_api_v1_reaches_the_same_url(self, host):
+        # #197: a TAIGA_API_URL ending in /api/v1 used to build .../api/v1/api/v1/auth.
+        seen = {}
+
+        def handler(request):
+            seen["url"] = str(request.url)
+            return httpx.Response(200, json={"auth_token": "t", "refresh": "r"})
+
+        api = TaigaHTTP(host, transport=httpx.MockTransport(handler))
+        api.login("u", "p")
+        assert seen["url"] == f"{HOST}/api/v1/auth"
+        assert api.host == HOST
+
     def test_json_body_and_custom_headers_sent(self):
         seen = {}
 
