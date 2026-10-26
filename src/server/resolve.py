@@ -508,7 +508,22 @@ def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
         # arrives as `milestone` (ID) plus flat `milestone_name`/`milestone_slug`.
         "sprint": us.get("milestone_name") or us.get("milestone_slug"),
         "tags": us.get("tags", []),
+        "epics": _epic_links(us),
     }
+
+
+def _epic_links(us: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The story's epic links as {ref, subject}, plus `project` (slug) for an epic of
+    another project, whose ref means nothing in this one. Taiga sends `epics: null`,
+    not [], for a story in no epic."""
+    links = []
+    for e in us.get("epics") or []:
+        link = {"ref": e.get("ref"), "subject": e.get("subject")}
+        epic_project = e.get("project") or {}
+        if epic_project.get("id") not in (None, us.get("project")):
+            link["project"] = epic_project.get("slug")
+        links.append(link)
+    return links
 
 
 def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -519,6 +534,7 @@ def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:
         "assignee": (task.get("assigned_to_extra_info") or {}).get("full_name_display"),
         "is_blocked": task.get("is_blocked", False),
         "is_closed": _is_closed(task),
+        "story_ref": (task.get("user_story_extra_info") or {}).get("ref"),
     }
 
 

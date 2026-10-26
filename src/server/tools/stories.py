@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
     "get_story",
     description=(
         "Read a single user story by its ref number. Returns resolved human fields "
-        "(status name, is_closed, assignee, sprint, tags) plus the full description "
+        "(status name, is_closed, assignee, sprint, tags, epics) plus the full description "
         "— no mutation. project accepts slug or ID."
     ),
 )
@@ -159,7 +159,9 @@ def create_story(
     description=(
         "Update a user story by its ref number. All fields are optional — only provided fields are changed. "
         "status, assignee, and sprint are resolved by name. "
-        "epic accepts an epic ref number to link the story to that epic, or 0 to unlink from all epics. "
+        "epic REPLACES the story's epic links: epic=N unlinks it from every epic it is in, then "
+        "links it to epic #N; epic=0 unlinks it from all epics. To add one epic and keep the "
+        "others, use link_to_epic. The result's epics_before lists the links that were replaced. "
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -271,10 +273,17 @@ def update_story(
                 )
 
         summary = resolve._story_summary(result)
+        if epic is not None:
+            summary["epics_before"] = resolve._epic_links(current)
         if epic_error:
             summary["epic_error"] = epic_error
+            summary["epics"] = None  # unknown: the relink stopped part-way
         if epic_changed:
             summary["epic"] = epic if epic else None
+            # `result` was read before the relink: its epics are the old ones.
+            summary["epics"] = (
+                [{"ref": new_epic["ref"], "subject": new_epic.get("subject")}] if new_epic else []
+            )
         if description_change is not None:
             summary["description_change"] = {**description_change, "version": result.get("version")}
         return summary

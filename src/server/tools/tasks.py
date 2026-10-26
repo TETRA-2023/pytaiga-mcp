@@ -25,7 +25,8 @@ _TASK_OVERRIDE_KEYS = {
     "get_task",
     description=(
         "Read a single task by its ref number. Returns resolved human fields "
-        "(status name, is_closed, assignee) plus the full description — no mutation. "
+        "(status name, is_closed, assignee, parent story_ref) plus the full description "
+        "— no mutation. "
         "project accepts slug or ID."
     ),
 )

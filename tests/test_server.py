@@ -932,6 +932,45 @@ class TestUpdateStoryEpicRelink:
             json={"epic": 99, "user_story": 100},
         )
 
+    def test_epic_zero_reports_both_replaced_links(self, session, mock_client):
+        # #204: a story in two epics. epic=0 drops both, and the result says so.
+        self._route(
+            mock_client,
+            self._story_with_epics(
+                [{"id": 50, "ref": 1, "subject": "A"}, {"id": 51, "ref": 2, "subject": "B"}]
+            ),
+        )
+        result = wf.update_story("p", 5, epic=0, session_id=session)
+        assert result["epics_before"] == [
+            {"ref": 1, "subject": "A"},
+            {"ref": 2, "subject": "B"},
+        ]
+        assert result["epics"] == []
+
+    def test_epic_relink_reports_new_link_not_stale_read(self, session, mock_client):
+        # The story read before the relink still lists the old epic; the result
+        # must show the link as it is after the relink.
+        self._route(
+            mock_client,
+            self._story_with_epics([{"id": 50, "ref": 1, "subject": "Old"}]),
+            epic={"id": 99, "ref": 7, "subject": "New Epic"},
+        )
+        result = wf.update_story("p", 5, epic=7, session_id=session)
+        assert result["epics_before"] == [{"ref": 1, "subject": "Old"}]
+        assert result["epics"] == [{"ref": 7, "subject": "New Epic"}]
+
+    def test_no_epic_arg_reports_no_epics_before(self, session, mock_client):
+        self._route(mock_client, self._story_with_epics([{"id": 50, "ref": 1, "subject": "A"}]))
+        route(mock_client, patch={"/userstories/100": lambda json: {**json, "ref": 5}})
+        result = wf.update_story("p", 5, subject="New", session_id=session)
+        assert "epics_before" not in result
+        mock_client.api.delete.assert_not_called()
+
+    def test_description_says_epic_replaces_links(self):
+        description = wf.mcp._tool_manager.get_tool("update_story").description
+        assert "REPLACES" in description
+        assert "link_to_epic" in description
+
     def test_no_op_when_no_fields_and_no_epic(self, session, mock_client):
         self._route(mock_client, self._story_with_epics([]))
 
@@ -1032,6 +1071,15 @@ class TestUpdateTask:
         self._route(mock_client, story={"id": 99, "ref": 44})
         wf.update_task("p", 7, story_ref=44, session_id=session)
         assert sent(mock_client, "patch", "/tasks/200") == [{"version": 3, "user_story": 99}]
+
+    def test_reparent_result_shows_new_story_ref(self, session, mock_client):
+        self._route(
+            mock_client,
+            updated={"ref": 7, "user_story": 99, "user_story_extra_info": {"id": 99, "ref": 44}},
+            story={"id": 99, "ref": 44},
+        )
+        result = wf.update_task("p", 7, story_ref=44, session_id=session)
+        assert result["story_ref"] == 44
 
     def test_sprint_move_supported(self, session, mock_client):
         self._route(mock_client)
@@ -1956,6 +2004,44 @@ class TestStorySummary:
 
     def test_sprint_is_none_when_story_has_no_milestone(self):
         assert wf._story_summary({"ref": 3})["sprint"] is None
+
+    def test_epics_empty_when_taiga_sends_null(self):
+        # Taiga sends `epics: null`, not [], for a story in no epic.
+        assert wf._story_summary({"ref": 3, "epics": None})["epics"] == []
+        assert wf._story_summary({"ref": 3})["epics"] == []
+
+    def test_epics_lists_every_link(self):
+        story = {
+            "ref": 4,
+            "project": 13,
+            "epics": [
+                {"id": 223, "ref": 458, "subject": "One", "color": "#d3d7cf",
+                 "project": {"id": 13, "name": "P", "slug": "p"}},
+                {"id": 224, "ref": 459, "subject": "Two", "color": "#c4a000",
+                 "project": {"id": 13, "name": "P", "slug": "p"}},
+            ],
+        }  # fmt: skip
+        assert wf._story_summary(story)["epics"] == [
+            {"ref": 458, "subject": "One"},
+            {"ref": 459, "subject": "Two"},
+        ]
+
+    def test_epic_of_another_project_names_that_project(self):
+        story = {
+            "ref": 4,
+            "project": 13,
+            "epics": [{"id": 9, "ref": 2, "subject": "X", "project": {"id": 8, "slug": "other"}}],
+        }
+        assert wf._story_summary(story)["epics"] == [{"ref": 2, "subject": "X", "project": "other"}]
+
+
+class TestTaskSummary:
+    def test_story_ref_comes_from_user_story_extra_info(self):
+        task = {"ref": 7, "user_story": 480, "user_story_extra_info": {"id": 480, "ref": 1}}
+        assert wf._task_summary(task)["story_ref"] == 1
+
+    def test_story_ref_is_none_for_a_task_without_story(self):
+        assert wf._task_summary({"ref": 7, "user_story_extra_info": None})["story_ref"] is None
 
 
 class TestGetStory:
@@ -3532,6 +3618,7 @@ class TestDescriptionEdits:
         assert result["description_change"]["version"] == 7
         assert "relinking to epic #9 failed" in result["epic_error"]
         assert "epic" not in result
+        assert result["epics"] is None
 
     def test_story_relink_failure_alone_still_raises(self, session, mock_client):
         self._route_story_relink(mock_client, _api_error(TaigaServerError, 500, "down"))

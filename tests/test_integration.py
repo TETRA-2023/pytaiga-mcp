@@ -253,6 +253,41 @@ class TestSandboxWrites:
                 assignee=me["email"]
             )
 
+            # #204: the parent story and the epic links are visible, and epic=0
+            # reports the links it replaced.
+            assert (
+                wf.get_task(TEST_PROJECT, task["ref"], session_id=session_id)["story_ref"]
+                == (b["ref"])
+            )
+            moved = wf.update_task(
+                TEST_PROJECT, task["ref"], story_ref=a["ref"], session_id=session_id
+            )
+            assert moved["story_ref"] == a["ref"]
+            back = wf.update_task(
+                TEST_PROJECT, task["ref"], story_ref=b["ref"], session_id=session_id
+            )
+            assert back["story_ref"] == b["ref"]  # deleted with b below
+            assert wf.get_story(TEST_PROJECT, b["ref"], session_id=session_id)["epics"] == []
+            epic2 = wf.create_epic(
+                TEST_PROJECT,
+                f"[TEST - CAN DELETE] epic2 {tag}",
+                story_refs=[b["ref"]],
+                session_id=session_id,
+            )
+            made["epics"].append(epic2["id"])
+            wf.link_to_epic(TEST_PROJECT, epic["ref"], [b["ref"]], session_id=session_id)
+            two = {
+                e["ref"]
+                for e in wf.get_story(TEST_PROJECT, b["ref"], session_id=session_id)["epics"]
+            }
+            assert two == {epic["ref"], epic2["ref"]}
+            dropped = wf.update_story(TEST_PROJECT, b["ref"], epic=0, session_id=session_id)
+            assert {e["ref"] for e in dropped["epics_before"]} == two
+            assert dropped["epics"] == []
+            assert wf.get_story(TEST_PROJECT, b["ref"], session_id=session_id)["epics"] == []
+            wf.delete_item(TEST_PROJECT, "epic", epic2["ref"], session_id=session_id)
+            made["epics"].remove(epic2["id"])
+
             # update_epic: status resolved by name via epic_statuses, then filter by it.
             statuses = [
                 s["name"] for s in sess.list_resources("epic_statuses", project_id=project_id)
