@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-taiga-bridge"
-version = "3.2.1"
+# Real version = git tag vX.Y.Z (see GitHub Releases); never bumped here. Taiga #2870.
+version = "0.0.0"
 description = "Taiga integration bridge for MCP"
 requires-python = ">=3.12"
 authors = [{ name = "Talha Orak", email = "talhaorak.git@gmail.com" }]
@@ -74,11 +75,10 @@ markers = [
 ]
 addopts = "-v"
 
+# Tag only: .github/workflows/release.yml tags the commit and creates the
+# GitHub Release; nothing is committed to main.
 [tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
 branch = "main"
-commit_message = "chore(release): v{version}"
-build_command = ""
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "style", "refactor", "test"]
@@ -88,9 +88,6 @@ patch_tags = ["fix", "perf"]
 [tool.semantic_release.remote]
 type = "github"
 token = { env = "GH_TOKEN" }
-
-[tool.semantic_release.changelog.default_templates]
-changelog_file = "CHANGELOG.md"
 
 [dependency-groups]
 dev = [

@@ -2,9 +2,9 @@
 #
 # main requires PRs to be up to date (strict), GitHub auto-merge never updates
 # a branch, and Dependabot only rebases on its own when a PR CONFLICTS. So any
-# push to main that doesn't touch a Dependabot PR's files (a ci/docs change,
-# every semantic-release version commit) leaves every open Dependabot PR BEHIND
-# forever, green checks and all (#177/#178, 2026-10-22).
+# push to main that doesn't touch a Dependabot PR's files (a ci/docs change)
+# leaves every open Dependabot PR BEHIND forever, green checks and all
+# (#177/#178, 2026-10-22).
 #
 # Asks Dependabot to rebase the OLDEST stuck PR with auto-merge on, via an
 # `@dependabot rebase` comment. Why a comment and not the update-branch API:
@@ -16,9 +16,8 @@
 #
 # One PR at a time on purpose: its merge pushes to main and re-triggers this
 # workflow for the next one, instead of N parallel CI runs that all go stale
-# after the first merge. Expect TWO rebases per merge in repos with a release
-# job: the merge commit triggers one, and the semantic-release commit ~2 min
-# later strands it and triggers another. That's expected, not a bug.
+# after the first merge. Releases are tag-only since 2026-10-28 (Taiga #2870):
+# no version commit lands on main, so one merge means one rebase.
 #
 # PRs without auto-merge (majors, held by policy) are skipped. The schedule is
 # a backstop in case nothing pushes to main. A candidate stuck for more than
@@ -51,8 +50,9 @@ jobs:
     steps:
       - name: Ask Dependabot to rebase the oldest stuck auto-merge PR
         env:
-          # NOT GITHUB_TOKEN: Dependabot ignores commands from bot accounts.
-          # Same PAT as the auto-merge job (a real account with write access).
+          # NOT GITHUB_TOKEN, and NOT the tetra-release App token either:
+          # Dependabot ignores commands from bot accounts, so this one job
+          # keeps the GH_TOKEN PAT (a real account with write access).
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
