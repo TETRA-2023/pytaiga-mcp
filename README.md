@@ -117,7 +117,7 @@ Client configuration without Docker:
 
 | Variable | Description | Default |
 |---|---|---|
-| `TAIGA_API_URL` | Taiga base URL (the server adds `/api/v1`). Use the final `https://` URL: a redirect turns a POST into a GET. | `http://localhost:9000` |
+| `TAIGA_API_URL` | Taiga host (the server adds `/api/v1`; a trailing `/api/v1` is ignored). If the startup login fails, tools report why. Use the final `https://` URL: a redirect turns a POST into a GET. | `http://localhost:9000` |
 | `TAIGA_USERNAME` / `TAIGA_PASSWORD` | Credentials for auto-authentication at startup | (none) |
 | `TAIGA_TRANSPORT` | `stdio`, `sse` or `streamable-http` (a `--sse` / `--streamable-http` flag wins) | `stdio` |
 | `MCP_HOST` | Bind address for the HTTP transports (`0.0.0.0` in Docker) | `127.0.0.1` |
