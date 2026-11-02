@@ -2015,6 +2015,20 @@ class TestGetProjectActivity:
         with pytest.raises(ValueError, match="Unknown entity"):
             wf.get_project_activity("p", entity="stories", session_id=session)
 
+    def test_epic_link_event_is_named_by_the_epic(self, session, mock_client):
+        # epics.relateduserstory.* carries the epic AND the story (live payload).
+        event = self._event(event_type="epics.relateduserstory.create")
+        event["data"]["epic"] = {"id": 106, "ref": 453, "subject": "Identity & Access"}
+        event["data"]["userstory"] = {"id": 1678, "ref": 3143, "subject": "Keycloak"}
+        self._setup(mock_client, [event])
+        row = wf.get_project_activity("p", session_id=session)["events"][0]
+        assert (row["entity"], row["ref"], row["subject"]) == ("epic", 453, "Identity & Access")
+        assert row["story_ref"] == 3143
+
+    def test_activity_is_sent_once_as_text(self):
+        # No structuredContent copy: the size guard budgets the text block alone.
+        assert wf.mcp._tool_manager.get_tool("get_project_activity").output_schema is None
+
     def test_bad_group_by_raises(self, session, mock_client):
         with pytest.raises(ValueError, match="group_by"):
             wf.get_project_activity("p", group_by="actor", session_id=session)
@@ -2039,6 +2053,8 @@ class TestGetProjectActivity:
             self._story_event(f"2026-11-02T10:{m:02d}:00Z", m, comment="c" * 150)
             for m in range(40, 0, -1)
         ]
+        for event in page:
+            event["data"]["userstory"]["subject"] = "s" * 100
         self._paged(mock_client, [page])
         result = wf.get_project_activity(
             "p", since="2026-11-02", group_by="ticket", session_id=session
@@ -2049,7 +2065,77 @@ class TestGetProjectActivity:
         assert result["tickets_omitted"] == 40 - len(kept) > 0
         assert kept[0]["ref"] == 40  # the newest rows are kept
         assert all("last_comment" not in r for r in kept)
+        assert all(len(r["subject"]) == 60 for r in kept)
         assert projects_tools._size(result) <= 2000
+        # The fewest rows are cut: one more row would not fit.
+        result["tickets"].append(dict(kept[-1]))
+        assert projects_tools._size(result) > 2000
+
+    def test_flags_only_report_what_was_cut(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_MAX_CHARS", 1500)
+        page = [self._story_event(f"2026-11-02T10:{m:02d}:00Z", m) for m in range(40, 0, -1)]
+        self._paged(mock_client, [page])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        assert result["too_large"] is True
+        assert "comments_dropped" not in result and "subjects_shortened" not in result
+
+    def test_sprint_and_wiki_events_get_their_own_rows(self, session, mock_client):
+        def named(when, prefix, key, field, value):
+            event = self._at(when, f"{when}-{value}")
+            event["event_type"] = f"{prefix}.{key}.change"
+            event["data"][key] = {"id": 1, field: value}
+            return event
+
+        page = [
+            named("2026-11-02T10:00:00Z", "milestones", "milestone", "name", "Sprint 12"),
+            named("2026-11-02T09:00:00Z", "milestones", "milestone", "name", "Sprint 13"),
+            named("2026-11-02T08:00:00Z", "wiki", "wikipage", "slug", "home"),
+            named("2026-11-02T07:00:00Z", "wiki", "wikipage", "slug", "faq"),
+        ]
+        self._paged(mock_client, [page])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        assert [(r["entity"], r["subject"]) for r in result["tickets"]] == [
+            ("sprint", "Sprint 12"),
+            ("sprint", "Sprint 13"),
+            ("wiki_page", "home"),
+            ("wiki_page", "faq"),
+        ]
+
+    def test_member_without_events_is_reported(self, session, mock_client):
+        self._members(mock_client)
+        self._paged(mock_client, [[self._story_event("2026-11-02T10:00:00Z", 1, "Alice A", 1)]])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", actor=["alice@x", "bob@x"], session_id=session
+        )
+        assert result["count"] == 1 and result["unmatched_actors"] == ["bob@x"]
+
+    def test_actor_matched_past_the_limit_is_not_unmatched(self, session, mock_client):
+        self._members(mock_client)
+        page = [
+            self._story_event("2026-11-02T10:00:00Z", 1, "Alice A", 1),
+            self._story_event("2026-11-02T09:00:00Z", 2, "GitHub", 99),
+        ]
+        self._paged(mock_client, [page])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", actor=["alice@x", "GitHub"], limit=1, session_id=session
+        )
+        assert result["truncated"] is True and "unmatched_actors" not in result
+
+    def test_blank_actor_raises(self, session, mock_client):
+        self._members(mock_client)
+        with pytest.raises(ValueError, match="blank"):
+            wf.get_project_activity("p", since="2026-11-02", actor=[" "], session_id=session)
+
+    def test_entity_filter_accepts_output_labels(self, session, mock_client):
+        self._paged(mock_client, [[self._story_event("2026-11-02T10:00:00Z", 1)]])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", entity="user_story", session_id=session
+        )
+        assert result["count"] == 1
 
     def test_cut_drops_edit_only_rows_before_older_moves(self, session, mock_client, monkeypatch):
         monkeypatch.setattr(projects_tools, "_ACTIVITY_MAX_CHARS", 3000)
@@ -3521,7 +3607,11 @@ class TestThreadOffload:
         plain = FastMCP("plain")
         for t in wf.mcp._tool_manager.list_tools():
             original = t.fn.__wrapped__
-            plain.add_tool(original, name=t.name, description=t.description)
+            # A tool registered with structured_output=False has no output schema.
+            structured = None if t.output_schema is not None else False
+            plain.add_tool(
+                original, name=t.name, description=t.description, structured_output=structured
+            )
             ref = plain._tool_manager.get_tool(t.name)
             assert t.parameters == ref.parameters, t.name
             assert t.output_schema == ref.output_schema, t.name
