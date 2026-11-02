@@ -1,5 +1,8 @@
 # CHANGELOG
 
+> Frozen on 2026-10-28 at v3.2.1. Later versions: see the
+> [GitHub Releases](https://github.com/TETRA-2023/pytaiga-mcp/releases).
+
 <!-- version list -->
 
 ## v3.2.1 (2026-10-26)

@@ -468,6 +468,14 @@ def _is_closed(item: Dict[str, Any]) -> bool:
     return bool(val)
 
 
+def _activity_fields(item: Dict[str, Any]) -> Dict[str, Any]:
+    """When the item last changed, and why it is blocked (only when it is)."""
+    fields: Dict[str, Any] = {"modified_date": item.get("modified_date")}
+    if item.get("is_blocked") and item.get("blocked_note"):
+        fields["blocked_note"] = item["blocked_note"]
+    return fields
+
+
 def _epic_summary(epic: Dict[str, Any]) -> Dict[str, Any]:
     """Extract readable fields from a raw epic dict (list rows, update results)."""
     return {
@@ -479,6 +487,7 @@ def _epic_summary(epic: Dict[str, Any]) -> Dict[str, Any]:
         "is_blocked": epic.get("is_blocked", False),
         "is_closed": _is_closed(epic),
         "tags": epic.get("tags", []),
+        **_activity_fields(epic),
     }
 
 
@@ -509,6 +518,7 @@ def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
         "sprint": us.get("milestone_name") or us.get("milestone_slug"),
         "tags": us.get("tags", []),
         "epics": _epic_links(us),
+        **_activity_fields(us),
     }
 
 
@@ -535,6 +545,7 @@ def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:
         "is_blocked": task.get("is_blocked", False),
         "is_closed": _is_closed(task),
         "story_ref": (task.get("user_story_extra_info") or {}).get("ref"),
+        **_activity_fields(task),
     }
 
 
