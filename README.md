@@ -29,7 +29,7 @@ An [MCP](https://modelcontextprotocol.io/) server that lets AI assistants work i
 | **Issues** | `get_issue`, `create_issue`, `update_issue` |
 | **Sprints** | `get_sprint_board`, `plan_sprint`, `move_to_sprint`, `close_sprint` |
 | **Epics** | `get_epic_overview`, `create_epic`, `update_epic`, `link_to_epic` |
-| **Any item** | `list_items` (every story — sprint-assigned included —, epic or sprint, with filters), `assign_item`, `delete_item` |
+| **Any item** | `list_items` (every story — sprint-assigned included —, task, epic or sprint, with filters), `assign_item`, `delete_item` |
 | **Comments & history** | `add_comment`, `list_comments`, `edit_comment`, `delete_comment`, `restore_comment`, `get_history` |
 | **Attachments** | `list_attachments`, `add_attachment` (base64, 10 MB), `delete_attachment` |
 | **Tags** | `list_tags`, `rename_tag`, `merge_tags` |

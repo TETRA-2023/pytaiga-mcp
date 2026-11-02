@@ -11,6 +11,7 @@ server has no delete tool yet). Never point TAIGA_TEST_PROJECT at a real project
 
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -208,6 +209,8 @@ class TestSandboxWrites:
         stories_before = len(sess.list_resources("user_stories", project_id=project_id))
         made = {"userstories": [], "tasks": [], "epics": [], "milestones": [], "wiki": []}
         me = wf.get_current_user(session_id=session_id)
+        # Five minutes of slack for clock skew between this host and Taiga.
+        started = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
         try:
             sprint = f"[TEST] b5 {tag}"
             planned = wf.plan_sprint(
@@ -244,6 +247,21 @@ class TestSandboxWrites:
 
             def refs(**kw):
                 return {s["ref"] for s in wf.list_items(TEST_PROJECT, session_id=session_id, **kw)}
+
+            # #224: tasks are listed by parent story and open state, rows carry
+            # modified_date, and the activity since the test began names what moved.
+            def task_refs(**kw):
+                rows = wf.list_items(TEST_PROJECT, entity_type="task", session_id=session_id, **kw)
+                assert all("modified_date" in r for r in rows)
+                return {r["ref"] for r in rows}
+
+            assert task_refs(story=b["ref"]) == {task["ref"]}
+            assert task_refs(story=a["ref"]) == set()
+            assert task["ref"] in task_refs(closed=False)
+            assert task["ref"] not in task_refs(closed=True)
+            activity = wf.get_project_activity(TEST_PROJECT, since=started, session_id=session_id)
+            assert activity["truncated"] is False
+            assert {a["ref"], b["ref"], task["ref"]} <= {e.get("ref") for e in activity["events"]}
 
             # Story filters really exclude b.
             assert refs(sprint=sprint) == {a["ref"]}
