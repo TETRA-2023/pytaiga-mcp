@@ -1,7 +1,6 @@
 """Unit tests for the MCP server (src/server/): name resolution, tools, offload."""
 
 import asyncio
-import json
 import sys
 import uuid
 from unittest.mock import DEFAULT, MagicMock, call
@@ -2050,7 +2049,34 @@ class TestGetProjectActivity:
         assert result["tickets_omitted"] == 40 - len(kept) > 0
         assert kept[0]["ref"] == 40  # the newest rows are kept
         assert all("last_comment" not in r for r in kept)
-        assert len(json.dumps(result)) <= 2000
+        assert projects_tools._size(result) <= 2000
+
+    def test_cut_drops_edit_only_rows_before_older_moves(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_MAX_CHARS", 3000)
+        page = [
+            self._story_event(f"2026-11-02T10:{m:02d}:00Z", m)  # edit-only: newest
+            for m in range(30, 10, -1)
+        ] + [
+            self._story_event(f"2026-11-02T09:{m:02d}:00Z", 100 + m, move=("New", "Done"))
+            for m in range(5, 0, -1)
+        ]
+        self._paged(mock_client, [page])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        kept = {r["ref"] for r in result["tickets"]}
+        assert {101, 102, 103, 104, 105} <= kept  # every status move kept
+        assert result["too_large"] is True and len(kept) < 25  # edit-only rows went
+        assert result["active_omitted"] == 0
+        times = [r["last_event"] for r in result["tickets"]]
+        assert times == sorted(times, reverse=True)  # still newest first
+
+    def test_size_is_measured_as_fastmcp_sends_it(self):
+        # FastMCP sends a dict result as indented JSON; the guard measures that.
+        result = {"a": [1, 2], "b": "é"}
+        assert projects_tools._size(result) == len(
+            '{\n  "a": [\n    1,\n    2\n  ],\n  "b": "é"\n}'
+        )
 
     def test_empty_event_type_yields_unknown_entity(self, session, mock_client):
         event = self._event(event_type="")

@@ -1,9 +1,10 @@
 """Project-level reads: projects, overview, search, workload, health, activity."""
 
-import json
 import logging
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
+
+import pydantic_core
 
 from src.server import app, core, resolve
 from src.taiga_client import TaigaNotFoundError
@@ -480,13 +481,15 @@ def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _size(result: Dict[str, Any]) -> int:
-    return len(json.dumps(result, ensure_ascii=False, default=str))
+    """Characters of the text block the client receives: FastMCP serialises a
+    dict result exactly like this (indented), about 35% larger than compact."""
+    return len(pydantic_core.to_json(result, fallback=str, indent=2).decode())
 
 
 def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
     """Keep the result under _ACTIVITY_MAX_CHARS: events become ticket rows, then
-    rows lose their last comment, then subjects are shortened, then the oldest
-    rows go (too_large)."""
+    rows lose their last comment, then subjects are shortened, then rows go:
+    edit-only ones first, oldest first (too_large)."""
     if _size(result) <= _ACTIVITY_MAX_CHARS:
         return result
     if "events" in result:
@@ -508,12 +511,25 @@ def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
                 row["subject"] = subject[:_ACTIVITY_SHORT_SUBJECT]
         result["subjects_shortened"] = True
     total = len(result["tickets"])
-    while result["tickets"] and _size(result) > _ACTIVITY_MAX_CHARS:
-        cut = max(1, len(result["tickets"]) // 10)
-        del result["tickets"][-cut:]
-    if len(result["tickets"]) < total:
+    # Cut edit-only rows (no status move, no comment) first, then by age; the
+    # rows keep their newest-first order.
+    rows = result["tickets"]
+    order = sorted(
+        range(len(rows)),
+        key=lambda i: (bool(rows[i].get("status_change") or rows[i]["comments"]), -i),
+    )
+    dropped: set = set()
+    while len(dropped) < total and _size(result) > _ACTIVITY_MAX_CHARS:
+        step = max(1, (total - len(dropped)) // 10)
+        dropped.update(order[len(dropped) : len(dropped) + step])
+        result["tickets"] = [r for i, r in enumerate(rows) if i not in dropped]
+        # Set inside the loop so the measured size includes them.
         result["too_large"] = True
-        result["tickets_omitted"] = total - len(result["tickets"])
+        result["tickets_omitted"] = len(dropped)
+        # How many of those moved or were commented on: 0 means only edits were lost.
+        result["active_omitted"] = sum(
+            1 for i in dropped if rows[i].get("status_change") or rows[i]["comments"]
+        )
     return result
 
 
@@ -531,14 +547,17 @@ def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
         "actor: one member (email or full name) or a list; other names (e.g. 'GitHub') match "
         "the event's display name; unmatched_actors lists values that matched no event. "
         "entity: 'story', 'task', 'issue', 'epic', 'sprint', 'wiki', or a list of them. "
-        "actor and entity filter on the server, and limit counts matching events only. "
+        "actor and entity filter on the server; with since, limit counts matching events "
+        "only (without since, the latest `limit` events are read, then filtered). "
         "group_by='ticket': one row per item instead of events — entity, ref, subject, "
         "status_change {from (first), to (last)} over the window, events, comments, actors, "
         "last_event, last_comment (200 characters). "
         "Size guard: a result over 50,000 characters is returned as ticket rows "
         "(summarised=true); rows that still don't fit lose last_comment "
         "(comments_dropped=true), then subjects are cut to 60 characters "
-        "(subjects_shortened=true), then the oldest rows go (too_large=true, tickets_omitted). "
+        "(subjects_shortened=true), then rows go — those with no status move and no comment "
+        "first, then the oldest (too_large=true, tickets_omitted; active_omitted = how many "
+        "of them moved or had a comment, 0 if only edit-only rows were cut). "
         "Comments longer than 200 characters are shortened and flagged "
         "comment_truncated=true unless full_comments=True; list_comments returns an "
         "item's comments in full. "
