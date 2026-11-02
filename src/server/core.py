@@ -73,7 +73,8 @@ def _get_session_id(session_id: Optional[str] = None) -> str:
     if auto_login_error:
         raise ValueError(
             f"Auto-login at startup failed: {auto_login_error}. Check that TAIGA_API_URL "
-            "is the Taiga host (the server adds /api/v1) and the credentials, or call login()."
+            "is the Taiga base URL (the server adds /api/v1) and the credentials, or call "
+            "login()."
         )
     raise ValueError(
         "No session_id provided and no default session available. "

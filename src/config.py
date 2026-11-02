@@ -22,7 +22,10 @@ class TaigaSettings(BaseSettings):
     host: str = Field(
         default="http://localhost:9000",
         alias="TAIGA_API_URL",
-        description="Taiga host, e.g. https://taiga.example.com (the client adds /api/v1)",
+        description=(
+            "Taiga base URL: scheme, host and any path prefix, e.g. https://taiga.example.com "
+            "(the client adds /api/v1)"
+        ),
     )
 
     # Credentials (using SecretStr for security)
