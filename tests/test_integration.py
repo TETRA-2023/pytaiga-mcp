@@ -262,6 +262,18 @@ class TestSandboxWrites:
             activity = wf.get_project_activity(TEST_PROJECT, since=started, session_id=session_id)
             assert activity["truncated"] is False
             assert {a["ref"], b["ref"], task["ref"]} <= {e.get("ref") for e in activity["events"]}
+            # T2.9: filtered on the server by actor and type, summarised per ticket.
+            mine = wf.get_project_activity(
+                TEST_PROJECT,
+                since=started,
+                actor=me["email"],
+                entity="task",
+                group_by="ticket",
+                session_id=session_id,
+            )
+            assert task["ref"] in {r["ref"] for r in mine["tickets"]}
+            assert {r["entity"] for r in mine["tickets"]} == {"task"}
+            assert "unmatched_actors" not in mine
 
             # Story filters really exclude b.
             assert refs(sprint=sprint) == {a["ref"]}

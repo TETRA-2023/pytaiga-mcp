@@ -4,8 +4,10 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
+import pydantic_core
+
 from src.server import app, core, resolve
-from src.taiga_client import TaigaNotFoundError
+from src.taiga_client import TaigaNotFoundError, safe_lower
 
 logger = logging.getLogger(__name__)
 
@@ -325,12 +327,40 @@ _TIMELINE_ENTITY_MAP = {
 }
 
 
-# Where a timeline event names its item ({id, ref, subject}), most specific first:
-# a task event also carries its story.
-_TIMELINE_ITEM_KEYS = ("task", "issue", "userstory", "epic")
+# get_project_activity(entity=...): user-facing type -> timeline event_type prefix.
+# Accepts the labels the events carry too (user_story, wiki_page).
+_ACTIVITY_ENTITY_FILTER = {
+    **resolve._ENTITY_PATH_MAP,
+    "sprint": "milestones",
+    "wiki": "wiki",
+    "wiki_page": "wiki",
+}
 
-# get_project_activity(since=...) reads the timeline this many events per page.
+# Ticket-row subjects are shortened to this when a summary is too large.
+_ACTIVITY_SHORT_SUBJECT = 60
+
+# Where a timeline event names its item, by event_type prefix: data[key] is
+# {id, ref, subject}, or {id, name|slug} for a sprint or wiki page (no ref).
+# Chosen by prefix, not by which keys are present: an epics.relateduserstory.*
+# event carries BOTH the epic and the linked story (live, 2026-11-02).
+_TIMELINE_ITEM_KEYS = {
+    "userstories": ("userstory", "subject"),
+    "tasks": ("task", "subject"),
+    "issues": ("issue", "subject"),
+    "epics": ("epic", "subject"),
+    "milestones": ("milestone", "name"),
+    "wiki": ("wikipage", "slug"),
+}
+
+# get_project_activity(since=...) reads the timeline this many events per page,
+# and stops (truncated) after scanning this many, matched by the filters or not.
 _ACTIVITY_PAGE_SIZE = 100
+_ACTIVITY_MAX_SCAN = 5000
+
+# Above this many characters of JSON an agent client stores the result in a file
+# instead of reading it (T2.9: 438 events = 143,000 characters), so the result is
+# summarised per ticket, then cut.
+_ACTIVITY_MAX_CHARS = 50_000
 
 # Activity comments longer than this are shortened unless full_comments=True.
 _ACTIVITY_COMMENT_CHARS = 200
@@ -357,16 +387,18 @@ def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False
         "actor": actor,
         "entity": entity,
         "action": action,
-        # The timeline is namespaced per project: object_id is the PROJECT's id,
-        # not the item's. The item is named by ref/subject below.
-        "object_id": event.get("object_id"),
+        # No object_id: the timeline is namespaced per project, so it is the
+        # PROJECT's id. The item is named by ref/subject below.
     }
-    for key in _TIMELINE_ITEM_KEYS:
-        item = data.get(key)
-        if isinstance(item, dict):
+    key, name = _TIMELINE_ITEM_KEYS.get(parts[0], (None, None))
+    item = data.get(key) if key else None
+    if isinstance(item, dict):
+        if "ref" in item:
             summary["ref"] = item.get("ref")
-            summary["subject"] = item.get("subject")
-            break
+        summary["subject"] = item.get(name)
+    linked = data.get("userstory") if parts[0] == "epics" else None
+    if isinstance(linked, dict):  # epics.relateduserstory.*: the story linked or unlinked
+        summary["story_ref"] = linked.get("ref")
     if changed_fields:
         summary["changed_fields"] = changed_fields
     status_diff = values_diff.get("status")
@@ -395,8 +427,151 @@ def _parse_since(since: str) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
+def _event_actor(event: Dict[str, Any]) -> Dict[str, Any]:
+    return (event.get("data") or {}).get("user") or {}
+
+
+def _actor_matcher(client, project_id: int, actors: List[str], session_id: str):
+    """A predicate on raw events, plus the set of actor values it has matched.
+
+    A member (email or full name) is matched on user id. Any other value (a
+    former member, the GitHub integration user) is matched on the event's
+    display name or username, case-insensitively.
+    """
+    ids: Dict[Any, List[str]] = {}
+    names: Dict[str, List[str]] = {}
+    for actor in actors:
+        if not safe_lower(actor).strip():
+            raise ValueError("actor values must not be blank.")
+        try:
+            uid = resolve._resolve_user(client, project_id, actor, session_id)
+            ids.setdefault(uid, []).append(actor)
+        except ValueError:
+            names.setdefault(safe_lower(actor).strip(), []).append(actor)
+    hits: set = set()
+
+    def matches(event: Dict[str, Any]) -> bool:
+        user = _event_actor(event)
+        found = list(ids.get(user.get("id"), []))
+        for k in ("name", "username"):
+            found += names.get(safe_lower(user.get(k)).strip(), [])
+        hits.update(found)
+        return bool(found)
+
+    return matches, hits
+
+
+def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row per item that moved, from event summaries (newest first)."""
+    rows: Dict[Any, Dict[str, Any]] = {}
+    for event in reversed(events):  # oldest first, so "from" is the first move
+        # Sprints and wiki pages have no ref: their name tells them apart.
+        ref = event.get("ref")
+        key = (event["entity"], ref, event.get("subject") if ref is None else None)
+        row = rows.get(key)
+        if row is None:
+            row = rows[key] = {
+                "entity": event["entity"],
+                "ref": event.get("ref"),
+                "subject": event.get("subject"),
+                "events": 0,
+                "comments": 0,
+                "actors": [],
+            }
+        row["events"] += 1
+        if event.get("subject"):
+            row["subject"] = event["subject"]
+        if event["actor"] not in row["actors"]:
+            row["actors"].append(event["actor"])
+        move = event.get("status_change")
+        if move:
+            row.setdefault("status_change", {"from": move["from"]})["to"] = move["to"]
+        if event.get("comment"):
+            # Already shortened by _summarize_timeline_event unless full_comments.
+            row["comments"] += 1
+            row["last_comment"] = event["comment"]
+            if event.get("comment_truncated"):
+                row["last_comment_truncated"] = True
+            else:
+                row.pop("last_comment_truncated", None)
+        row["last_event"] = event["when"]
+    return sorted(rows.values(), key=lambda r: r["last_event"] or "", reverse=True)
+
+
+def _size(result: Dict[str, Any]) -> int:
+    """Characters of the text block the client receives: FastMCP serialises a
+    dict result exactly like this (indented), about 35% larger than compact."""
+    return len(pydantic_core.to_json(result, fallback=str, indent=2).decode())
+
+
+def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep the result under _ACTIVITY_MAX_CHARS: events become ticket rows, then
+    rows lose their last comment, then subjects are shortened, then rows go:
+    edit-only ones first, oldest first (too_large)."""
+    if _size(result) <= _ACTIVITY_MAX_CHARS:
+        return result
+    if "events" in result:
+        events = result.pop("events")
+        result["group_by"] = "ticket"
+        result["summarised"] = True
+        result["tickets"] = _ticket_rows(events)
+        result["ticket_count"] = len(result["tickets"])
+        if _size(result) <= _ACTIVITY_MAX_CHARS:
+            return result
+    cut_comments = [row.pop("last_comment", None) for row in result["tickets"]]
+    for row in result["tickets"]:
+        row.pop("last_comment_truncated", None)
+    if any(c is not None for c in cut_comments):
+        result["comments_dropped"] = True
+    if _size(result) <= _ACTIVITY_MAX_CHARS:
+        return result
+    for row in result["tickets"]:
+        subject = row.get("subject") or ""
+        if len(subject) > _ACTIVITY_SHORT_SUBJECT:
+            row["subject"] = subject[:_ACTIVITY_SHORT_SUBJECT]
+            result["subjects_shortened"] = True
+    if _size(result) <= _ACTIVITY_MAX_CHARS:
+        return result
+    # Cut edit-only rows (no status move, no comment) first, then by age; the
+    # rows keep their newest-first order.
+    rows = result["tickets"]
+    total = len(rows)
+    if not total:
+        return result
+
+    def active(i: int) -> bool:
+        return bool(rows[i].get("status_change") or rows[i]["comments"])
+
+    order = sorted(range(total), key=lambda i: (active(i), -i))
+
+    def cut(k: int) -> bool:
+        dropped = set(order[:k])
+        result["tickets"] = [r for i, r in enumerate(rows) if i not in dropped]
+        # Set before measuring, so the measured size includes them.
+        result["too_large"] = True
+        result["tickets_omitted"] = k
+        # How many of those moved or were commented on: 0 means only edits were lost.
+        result["active_omitted"] = sum(1 for i in dropped if active(i))
+        return _size(result) <= _ACTIVITY_MAX_CHARS
+
+    # The fewest rows to cut so the result fits: smaller cuts are larger results.
+    lo, hi = 1, total
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if cut(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    cut(lo)
+    return result
+
+
+# structured_output=False: with an output schema FastMCP sends the result twice
+# (text block + structuredContent), doubling a payload the size guard keeps
+# under _ACTIVITY_MAX_CHARS. The text block alone carries it.
 @app.tool(
     "get_project_activity",
+    structured_output=False,
     description=(
         "Return recent activity on a project — who did what to which item and when, newest "
         "first. Each event names its item (ref, subject) and, for a status move, "
@@ -406,6 +581,21 @@ def _parse_since(since: str) -> datetime:
         "'2026-11-02T00:00:00+01:00' for Paris midnight): EVERY event since then, read page "
         "by page, up to `limit` (default 500, max 2000); truncated=true means more events "
         "since that moment exist than were returned. "
+        "actor: one member (email or full name) or a list; other names (e.g. 'GitHub') match "
+        "the event's display name; unmatched_actors lists values that matched no event. "
+        "entity: 'story', 'task', 'issue', 'epic', 'sprint', 'wiki' (or the labels events "
+        "carry: 'user_story', 'wiki_page'), or a list of them. "
+        "actor and entity filter on the server; with since, limit counts matching events "
+        "only (without since, the latest `limit` events are read, then filtered). "
+        "group_by='ticket': one row per item instead of events — entity, ref, subject, "
+        "status_change {from (first), to (last)} over the window, events, comments, actors, "
+        "last_event, last_comment (200 characters). "
+        "Size guard: a result over 50,000 characters is returned as ticket rows "
+        "(summarised=true); rows that still don't fit lose last_comment "
+        "(comments_dropped=true), then subjects are cut to 60 characters "
+        "(subjects_shortened=true), then rows go — those with no status move and no comment "
+        "first, then the oldest (too_large=true, tickets_omitted; active_omitted = how many "
+        "of them moved or had a comment, 0 if only edit-only rows were cut). "
         "Comments longer than 200 characters are shortened and flagged "
         "comment_truncated=true unless full_comments=True; list_comments returns an "
         "item's comments in full. "
@@ -417,11 +607,24 @@ def get_project_activity(
     limit: Optional[int] = None,
     full_comments: bool = False,
     since: Optional[str] = None,
+    actor: Optional[Union[str, List[str]]] = None,
+    entity: Optional[Union[str, List[str]]] = None,
+    group_by: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
+    if group_by not in (None, "ticket"):
+        raise ValueError("group_by must be 'ticket' or omitted.")
+    actors = [actor] if isinstance(actor, str) else list(actor or [])
+    entities = [entity] if isinstance(entity, str) else list(entity or [])
+    unknown = [e for e in entities if e not in _ACTIVITY_ENTITY_FILTER]
+    if unknown:
+        raise ValueError(
+            f"Unknown entity {unknown}. Must be among: {', '.join(_ACTIVITY_ENTITY_FILTER)}."
+        )
+    prefixes = {_ACTIVITY_ENTITY_FILTER[e] for e in entities}
     since_moment = _parse_since(since) if since is not None else None
     max_limit = 2000 if since_moment else 100
     if limit is None:
@@ -435,20 +638,27 @@ def get_project_activity(
         result: Dict[str, Any] = {
             "project": {"id": proj["id"], "name": proj["name"], "slug": proj["slug"]},
         }
+        by_actor, hits = (lambda e: True), set()
+        if actors:
+            by_actor, hits = _actor_matcher(client, project_id, actors, actual_session_id)
+
+        def matches(event: Dict[str, Any]) -> bool:
+            prefix = (event.get("event_type") or "").split(".")[0]
+            return (not prefixes or prefix in prefixes) and by_actor(event)
 
         if since_moment is None:
             raw = client.api.get(
                 f"/timeline/project/{project_id}",
                 params={"page_size": limit},
             )
-            events = raw if isinstance(raw, list) else []
+            events = [e for e in (raw if isinstance(raw, list) else []) if matches(e)]
         else:
             # The timeline is newest first: read pages until an event is older
             # than `since`, or one past the limit (to know whether it truncated).
             # A write landing mid-read shifts later pages down by one, so a page can
             # start with an event already taken: skip repeated ids.
             events, seen = [], set()
-            page, done = 1, False
+            page, done, scanned = 1, False, 0
             while not done:
                 try:
                     raw = client.api.get(
@@ -465,19 +675,33 @@ def get_project_activity(
                     if event.get("id") in seen:
                         continue
                     seen.add(event.get("id"))
-                    events.append(event)
-                    if len(events) > limit:
+                    scanned += 1
+                    if matches(event):
+                        events.append(event)
+                    if len(events) > limit or scanned >= _ACTIVITY_MAX_SCAN:
                         done = True
                         break
                 if len(batch) < _ACTIVITY_PAGE_SIZE:
                     break
                 page += 1
             result["since"] = since_moment.isoformat()
-            result["truncated"] = len(events) > limit
+            result["truncated"] = len(events) > limit or scanned >= _ACTIVITY_MAX_SCAN
             events = events[:limit]
 
-        result["count"] = len(events)
-        result["events"] = [_summarize_timeline_event(e, full_comments) for e in events]
-        return result
+        # Values that matched no event read (before the limit cut): a typo, or
+        # nobody by that name acted in what was read.
+        unmatched = [a for a in actors if a not in hits]
+        if unmatched:
+            result["unmatched_actors"] = unmatched
+
+        summaries = [_summarize_timeline_event(e, full_comments) for e in events]
+        result["count"] = len(summaries)
+        if group_by == "ticket":
+            result["group_by"] = "ticket"
+            result["tickets"] = _ticket_rows(summaries)
+            result["ticket_count"] = len(result["tickets"])
+        else:
+            result["events"] = summaries
+        return _fit(result)
 
     return core._execute_taiga_operation("get_project_activity", do_activity, str(project))
