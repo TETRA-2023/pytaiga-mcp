@@ -1,10 +1,11 @@
 """Project-level reads: projects, overview, search, workload, health, activity."""
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
+from src.taiga_client import TaigaNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +325,13 @@ _TIMELINE_ENTITY_MAP = {
 }
 
 
+# Where a timeline event names its item ({id, ref, subject}), most specific first:
+# a task event also carries its story.
+_TIMELINE_ITEM_KEYS = ("task", "issue", "userstory", "epic")
+
+# get_project_activity(since=...) reads the timeline this many events per page.
+_ACTIVITY_PAGE_SIZE = 100
+
 # Activity comments longer than this are shortened unless full_comments=True.
 _ACTIVITY_COMMENT_CHARS = 200
 
@@ -349,10 +357,21 @@ def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False
         "actor": actor,
         "entity": entity,
         "action": action,
+        # The timeline is namespaced per project: object_id is the PROJECT's id,
+        # not the item's. The item is named by ref/subject below.
         "object_id": event.get("object_id"),
     }
+    for key in _TIMELINE_ITEM_KEYS:
+        item = data.get(key)
+        if isinstance(item, dict):
+            summary["ref"] = item.get("ref")
+            summary["subject"] = item.get("subject")
+            break
     if changed_fields:
         summary["changed_fields"] = changed_fields
+    status_diff = values_diff.get("status")
+    if isinstance(status_diff, list) and len(status_diff) == 2:
+        summary["status_change"] = {"from": status_diff[0], "to": status_diff[1]}
     if comment:
         if full_comments or len(comment) <= _ACTIVITY_COMMENT_CHARS:
             summary["comment"] = comment
@@ -364,12 +383,29 @@ def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False
     return summary
 
 
+def _parse_since(since: str) -> datetime:
+    """An ISO date or datetime; a date, or a time without offset, is UTC."""
+    try:
+        moment = datetime.fromisoformat(since)
+    except ValueError:
+        raise ValueError(
+            f"since must be an ISO date or datetime (e.g. '2026-11-02' or "
+            f"'2026-11-02T09:00:00+01:00'), got {since!r}."
+        ) from None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
 @app.tool(
     "get_project_activity",
     description=(
-        "Return recent activity on a project — who did what to which entity and when. "
-        "Answers 'what changed today/this week?' for a PO-level audit. "
-        "limit controls how many events to return (default 20, max 100). "
+        "Return recent activity on a project — who did what to which item and when, newest "
+        "first. Each event names its item (ref, subject) and, for a status move, "
+        "status_change {from, to}. Answers 'what changed today/this week?'. "
+        "Without since: the latest `limit` events (default 20, max 100). "
+        "With since (ISO date or datetime; a date or a time without offset is UTC, e.g. "
+        "'2026-11-02T00:00:00+01:00' for Paris midnight): EVERY event since then, read page "
+        "by page, up to `limit` (default 500, max 2000); truncated=true means more events "
+        "since that moment exist than were returned. "
         "Comments longer than 200 characters are shortened and flagged "
         "comment_truncated=true unless full_comments=True; list_comments returns an "
         "item's comments in full. "
@@ -378,29 +414,70 @@ def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False
 )
 def get_project_activity(
     project: Union[str, int],
-    limit: int = 20,
+    limit: Optional[int] = None,
     full_comments: bool = False,
+    since: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
-    if limit < 1 or limit > 100:
-        raise ValueError("limit must be between 1 and 100.")
+    since_moment = _parse_since(since) if since is not None else None
+    max_limit = 2000 if since_moment else 100
+    if limit is None:
+        limit = 500 if since_moment else 20
+    if limit < 1 or limit > max_limit:
+        raise ValueError(f"limit must be between 1 and {max_limit}.")
 
     def do_activity():
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
-
-        raw = client.api.get(
-            f"/timeline/project/{project_id}",
-            params={"page_size": limit},
-        )
-        events = raw if isinstance(raw, list) else []
-        return {
+        result: Dict[str, Any] = {
             "project": {"id": proj["id"], "name": proj["name"], "slug": proj["slug"]},
-            "count": len(events),
-            "events": [_summarize_timeline_event(e, full_comments) for e in events],
         }
+
+        if since_moment is None:
+            raw = client.api.get(
+                f"/timeline/project/{project_id}",
+                params={"page_size": limit},
+            )
+            events = raw if isinstance(raw, list) else []
+        else:
+            # The timeline is newest first: read pages until an event is older
+            # than `since`, or one past the limit (to know whether it truncated).
+            # A write landing mid-read shifts later pages down by one, so a page can
+            # start with an event already taken: skip repeated ids.
+            events, seen = [], set()
+            page, done = 1, False
+            while not done:
+                try:
+                    raw = client.api.get(
+                        f"/timeline/project/{project_id}",
+                        params={"page_size": _ACTIVITY_PAGE_SIZE, "page": page},
+                    )
+                except TaigaNotFoundError:  # past the last page
+                    break
+                batch = raw if isinstance(raw, list) else []
+                for event in batch:
+                    if datetime.fromisoformat(event["created"]) < since_moment:
+                        done = True
+                        break
+                    if event.get("id") in seen:
+                        continue
+                    seen.add(event.get("id"))
+                    events.append(event)
+                    if len(events) > limit:
+                        done = True
+                        break
+                if len(batch) < _ACTIVITY_PAGE_SIZE:
+                    break
+                page += 1
+            result["since"] = since_moment.isoformat()
+            result["truncated"] = len(events) > limit
+            events = events[:limit]
+
+        result["count"] = len(events)
+        result["events"] = [_summarize_timeline_event(e, full_comments) for e in events]
+        return result
 
     return core._execute_taiga_operation("get_project_activity", do_activity, str(project))

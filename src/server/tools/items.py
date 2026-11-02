@@ -55,6 +55,7 @@ def assign_item(
 # real Taiga (tests/test_integration.py).
 _LIST_FILTERS = {
     "story": {"status", "sprint", "epic", "tags", "assignee"},
+    "task": {"status", "assignee", "story", "closed"},
     "epic": {"status", "assignee"},
     "sprint": {"status"},
 }
@@ -63,13 +64,16 @@ _LIST_FILTERS = {
 @app.tool(
     "list_items",
     description=(
-        "List every user story, epic, or sprint of a project, with optional filters. "
+        "List every user story, task, epic, or sprint of a project, with optional filters. "
         "entity_type: 'story' (default; ALL stories, sprint-assigned ones included — "
-        "browse_backlog returns only those in no sprint), 'epic', or 'sprint'. "
+        "browse_backlog returns only those in no sprint), 'task', 'epic', or 'sprint'. "
         "Filters by type — story: status (name), sprint (name or ID), epic (ref), "
-        "tags (comma-separated), assignee (email/full name); epic: status (name), assignee; "
+        "tags (comma-separated), assignee (email/full name); task: status (name), assignee, "
+        "story (parent story ref), closed (true/false); epic: status (name), assignee; "
         "sprint: status 'open' or 'closed'. A filter that does not apply to the type is an "
-        "error. project accepts slug or ID."
+        "error. Story, task and epic rows carry modified_date, and blocked_note when "
+        "blocked. A project can hold thousands of tasks: filter them. "
+        "project accepts slug or ID."
     ),
 )
 def list_items(
@@ -80,6 +84,8 @@ def list_items(
     epic: Optional[int] = None,
     tags: Optional[str] = None,
     assignee: Optional[str] = None,
+    story: Optional[int] = None,
+    closed: Optional[bool] = None,
     session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     if entity_type not in _LIST_FILTERS:
@@ -94,6 +100,8 @@ def list_items(
             ("epic", epic),
             ("tags", tags),
             ("assignee", assignee),
+            ("story", story),
+            ("closed", closed),
         )
         if value is not None
     }
@@ -118,6 +126,25 @@ def list_items(
                 filters["closed"] = status.lower() == "closed"
             sprints = client.list_resources("milestones", project_id=project_id, **filters)
             return [resolve._sprint_summary(m) for m in sprints]
+
+        if entity_type == "task":
+            if status is not None:
+                filters["status"] = resolve._resolve_status(
+                    client, project_id, "task", status, actual_session_id
+                )
+            if assignee is not None:
+                filters["assigned_to"] = resolve._resolve_user(
+                    client, project_id, assignee, actual_session_id
+                )
+            if story is not None:
+                parent = resolve._get_by_ref(client, "userstories", story, project_id)
+                if not parent:
+                    raise ValueError(f"User story #{story} not found in '{proj['slug']}'.")
+                filters["user_story"] = parent["id"]
+            if closed is not None:
+                filters["status__is_closed"] = closed
+            tasks = client.list_resources("tasks", project_id=project_id, **filters)
+            return [resolve._task_summary(t) for t in tasks]
 
         if entity_type == "epic":
             if status is not None:

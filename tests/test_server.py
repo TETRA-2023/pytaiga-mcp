@@ -10,6 +10,7 @@ import pytest
 import src.server as wf
 from src import taiga_client
 from src.server import core
+from src.server.tools import projects as projects_tools
 from src.taiga_client import (
     TaigaAPIError,
     TaigaAuthenticationError,
@@ -1793,6 +1794,119 @@ class TestGetProjectActivity:
         assert result["events"][0]["when"] == "2026-06-05T10:00:00Z"
         assert result["events"][0]["object_id"] == 42
 
+    def test_event_names_its_item_and_status_move(self, session, mock_client):
+        event = self._event()
+        event["data"]["userstory"] = {"id": 5, "ref": 3104, "subject": "US-2"}
+        event["data"]["values_diff"] = {"status": ["New", "In progress"]}
+        self._setup(mock_client, [event])
+        row = wf.get_project_activity("p", session_id=session)["events"][0]
+        assert (row["ref"], row["subject"]) == (3104, "US-2")
+        assert row["status_change"] == {"from": "New", "to": "In progress"}
+
+    def test_task_event_is_named_by_the_task_not_its_story(self, session, mock_client):
+        event = self._event(event_type="tasks.task.change")
+        event["data"]["task"] = {"id": 8, "ref": 3122, "subject": "T2.8"}
+        event["data"]["userstory"] = {"id": 5, "ref": 3104, "subject": "US-2"}
+        self._setup(mock_client, [event])
+        assert wf.get_project_activity("p", session_id=session)["events"][0]["ref"] == 3122
+
+    def _paged(self, mock_client, pages):
+        """Timeline answered page by page; a page past the end is a 404."""
+        seen = []
+
+        def api_get(path, params=None):
+            if "/projects/by_slug" in str(path):
+                return self._project()
+            seen.append(params)
+            page = params["page"]
+            if page > len(pages):
+                raise _api_error(TaigaNotFoundError, 404, "Invalid page.")
+            return pages[page - 1]
+
+        mock_client.api.get.side_effect = api_get
+        return seen
+
+    def _at(self, when, event_id=None):
+        event = self._event()
+        event["created"] = when
+        event["id"] = event_id if event_id is not None else when
+        return event
+
+    def test_since_skips_an_event_repeated_by_a_shifted_page(
+        self, session, mock_client, monkeypatch
+    ):
+        # A write during the read pushes page 1's last event onto page 2.
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
+        pages = [
+            [self._at("2026-11-02T10:00:00Z", 3), self._at("2026-11-02T09:00:00Z", 2)],
+            [self._at("2026-11-02T09:00:00Z", 2), self._at("2026-11-02T08:00:00Z", 1)],
+        ]
+        self._paged(mock_client, pages)
+        result = wf.get_project_activity("p", since="2026-11-02", session_id=session)
+        assert [e["when"] for e in result["events"]] == [
+            "2026-11-02T10:00:00Z",
+            "2026-11-02T09:00:00Z",
+            "2026-11-02T08:00:00Z",
+        ]
+
+    def test_since_pages_until_an_older_event(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
+        pages = [
+            [self._at("2026-11-02T10:00:00Z"), self._at("2026-11-02T09:00:00Z")],
+            [self._at("2026-11-01T23:30:00Z"), self._at("2026-11-01T22:00:00Z")],
+            [self._at("2026-10-30T10:00:00Z")],
+        ]
+        seen = self._paged(mock_client, pages)
+        # Paris midnight on 11-02 is 23:00Z on 11-01.
+        result = wf.get_project_activity("p", since="2026-11-02T00:00:00+01:00", session_id=session)
+        assert [e["when"] for e in result["events"]] == [
+            "2026-11-02T10:00:00Z",
+            "2026-11-02T09:00:00Z",
+            "2026-11-01T23:30:00Z",
+        ]
+        assert result["truncated"] is False
+        assert [p["page"] for p in seen] == [1, 2]  # stopped at the first older event
+
+    def test_since_reports_truncation_at_the_limit(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
+        pages = [
+            [self._at("2026-11-02T10:00:00Z", 4), self._at("2026-11-02T10:00:00Z", 3)],
+            [self._at("2026-11-02T09:00:00Z", 2), self._at("2026-11-02T09:00:00Z", 1)],
+        ]
+        self._paged(mock_client, pages)
+        result = wf.get_project_activity("p", since="2026-11-01", limit=3, session_id=session)
+        assert result["count"] == 3
+        assert result["truncated"] is True
+
+    def test_since_stops_at_the_last_page(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
+        # A full last page: the next one is a 404, which ends the read.
+        self._paged(
+            mock_client,
+            [[self._at("2026-11-02T10:00:00Z", 2), self._at("2026-11-02T10:00:00Z", 1)]],
+        )
+        result = wf.get_project_activity("p", since="2026-01-01", session_id=session)
+        assert result["count"] == 2 and result["truncated"] is False
+
+    def test_since_date_only_is_utc_midnight(self, session, mock_client):
+        self._paged(mock_client, [[self._at("2026-11-02T00:30:00Z")]])
+        result = wf.get_project_activity("p", since="2026-11-02", session_id=session)
+        assert result["since"] == "2026-11-02T00:00:00+00:00"
+        assert result["count"] == 1
+
+    def test_since_must_be_iso(self, session, mock_client):
+        with pytest.raises(ValueError, match="ISO date"):
+            wf.get_project_activity("p", since="yesterday", session_id=session)
+
+    def test_since_allows_a_larger_limit(self, session, mock_client):
+        with pytest.raises(ValueError, match="between 1 and 2000"):
+            wf.get_project_activity("p", since="2026-11-01", limit=2001, session_id=session)
+
+    def test_without_since_no_truncated_key(self, session, mock_client):
+        self._setup(mock_client, [self._event()])
+        result = wf.get_project_activity("p", session_id=session)
+        assert "truncated" not in result and "since" not in result
+
     def test_empty_event_type_yields_unknown_entity(self, session, mock_client):
         event = self._event(event_type="")
         self._setup(mock_client, [event])
@@ -2041,6 +2155,24 @@ class TestStorySummary:
             "epics": [{"id": 9, "ref": 2, "subject": "X", "project": {"id": 8, "slug": "other"}}],
         }
         assert wf._story_summary(story)["epics"] == [{"ref": 2, "subject": "X", "project": "other"}]
+
+
+class TestActivityFields:
+    """modified_date on every listed item; blocked_note only when blocked."""
+
+    @pytest.mark.parametrize("summary", ["_story_summary", "_task_summary", "_epic_summary"])
+    def test_modified_date_and_blocked_note(self, summary):
+        blocked = {"ref": 1, "modified_date": "2026-10-19T08:00:00Z", "is_blocked": True,
+                   "blocked_note": "waiting on Ops"}  # fmt: skip
+        row = getattr(wf, summary)(blocked)
+        assert row["modified_date"] == "2026-10-19T08:00:00Z"
+        assert row["blocked_note"] == "waiting on Ops"
+
+    @pytest.mark.parametrize("summary", ["_story_summary", "_task_summary", "_epic_summary"])
+    def test_no_blocked_note_on_an_unblocked_item(self, summary):
+        # Taiga keeps the note after unblocking; showing it would read as blocked.
+        row = getattr(wf, summary)({"ref": 1, "is_blocked": False, "blocked_note": "old"})
+        assert "blocked_note" not in row
 
 
 class TestTaskSummary:
@@ -3400,7 +3532,15 @@ class TestListItems:
 
     @pytest.mark.parametrize(
         "entity_type,kwargs",
-        [("epic", {"sprint": "S1"}), ("epic", {"tags": "x"}), ("sprint", {"assignee": "bob"})],
+        [
+            ("epic", {"sprint": "S1"}),
+            ("epic", {"tags": "x"}),
+            ("sprint", {"assignee": "bob"}),
+            ("task", {"sprint": "S1"}),
+            ("task", {"epic": 4}),
+            ("story", {"story": 3}),
+            ("story", {"closed": False}),
+        ],
     )
     def test_filter_not_supported_by_type_is_rejected_before_any_call(
         self, session, mock_client, entity_type, kwargs
@@ -3415,6 +3555,60 @@ class TestListItems:
     def test_unknown_entity_type(self, session, mock_client):
         with pytest.raises(ValueError, match="Invalid entity_type"):
             wf.list_items("p", entity_type="issue", session_id=session)
+
+    def test_tasks_with_every_filter_resolved(self, session, mock_client):
+        route(mock_client, get={"/projects/by_slug": PROJECT, "/userstories/by_ref": {"id": 62}})
+
+        def lr(resource, project_id=None, **filters):
+            return {
+                "task_statuses": [{"id": 44, "name": "In progress"}],
+                "memberships": [{"user": 7, "full_name": "Bob", "email": "bob@x"}],
+                "tasks": [
+                    {
+                        "ref": 11,
+                        "subject": "T",
+                        "modified_date": "2026-10-19T08:00:00Z",
+                        "is_blocked": True,
+                        "blocked_note": "waiting on Ops",
+                        "user_story_extra_info": {"id": 62, "ref": 3},
+                    }
+                ],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.list_items(
+            "p",
+            entity_type="task",
+            status="In progress",
+            assignee="bob",
+            story=3,
+            closed=False,
+            session_id=session,
+        )
+        last = mock_client.list_resources.call_args
+        assert last.args == ("tasks",)
+        assert last.kwargs == {
+            "project_id": 1,
+            "status": 44,
+            "assigned_to": 7,
+            "user_story": 62,
+            "status__is_closed": False,
+        }
+        assert result[0]["story_ref"] == 3
+        assert result[0]["modified_date"] == "2026-10-19T08:00:00Z"
+        assert result[0]["blocked_note"] == "waiting on Ops"
+
+    def test_tasks_of_unknown_story_is_value_error(self, session, mock_client):
+        route(
+            mock_client,
+            get={
+                "/projects/by_slug": PROJECT,
+                "/userstories/by_ref": _api_error(TaigaNotFoundError, 404, "No US matches"),
+            },
+        )
+        with pytest.raises(ValueError, match="User story #3 not found"):
+            wf.list_items("p", entity_type="task", story=3, session_id=session)
+        mock_client.list_resources.assert_not_called()
 
 
 class TestUpdateEpic:
