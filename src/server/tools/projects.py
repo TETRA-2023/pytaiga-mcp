@@ -445,7 +445,9 @@ def get_project_activity(
         else:
             # The timeline is newest first: read pages until an event is older
             # than `since`, or one past the limit (to know whether it truncated).
-            events = []
+            # A write landing mid-read shifts later pages down by one, so a page can
+            # start with an event already taken: skip repeated ids.
+            events, seen = [], set()
             page, done = 1, False
             while not done:
                 try:
@@ -460,6 +462,9 @@ def get_project_activity(
                     if datetime.fromisoformat(event["created"]) < since_moment:
                         done = True
                         break
+                    if event.get("id") in seen:
+                        continue
+                    seen.add(event.get("id"))
                     events.append(event)
                     if len(events) > limit:
                         done = True

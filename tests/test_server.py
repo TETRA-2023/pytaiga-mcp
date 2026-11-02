@@ -1826,10 +1826,28 @@ class TestGetProjectActivity:
         mock_client.api.get.side_effect = api_get
         return seen
 
-    def _at(self, when):
+    def _at(self, when, event_id=None):
         event = self._event()
         event["created"] = when
+        event["id"] = event_id if event_id is not None else when
         return event
+
+    def test_since_skips_an_event_repeated_by_a_shifted_page(
+        self, session, mock_client, monkeypatch
+    ):
+        # A write during the read pushes page 1's last event onto page 2.
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
+        pages = [
+            [self._at("2026-11-02T10:00:00Z", 3), self._at("2026-11-02T09:00:00Z", 2)],
+            [self._at("2026-11-02T09:00:00Z", 2), self._at("2026-11-02T08:00:00Z", 1)],
+        ]
+        self._paged(mock_client, pages)
+        result = wf.get_project_activity("p", since="2026-11-02", session_id=session)
+        assert [e["when"] for e in result["events"]] == [
+            "2026-11-02T10:00:00Z",
+            "2026-11-02T09:00:00Z",
+            "2026-11-02T08:00:00Z",
+        ]
 
     def test_since_pages_until_an_older_event(self, session, mock_client, monkeypatch):
         monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
@@ -1851,7 +1869,10 @@ class TestGetProjectActivity:
 
     def test_since_reports_truncation_at_the_limit(self, session, mock_client, monkeypatch):
         monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
-        pages = [[self._at("2026-11-02T10:00:00Z")] * 2, [self._at("2026-11-02T09:00:00Z")] * 2]
+        pages = [
+            [self._at("2026-11-02T10:00:00Z", 4), self._at("2026-11-02T10:00:00Z", 3)],
+            [self._at("2026-11-02T09:00:00Z", 2), self._at("2026-11-02T09:00:00Z", 1)],
+        ]
         self._paged(mock_client, pages)
         result = wf.get_project_activity("p", since="2026-11-01", limit=3, session_id=session)
         assert result["count"] == 3
@@ -1860,7 +1881,10 @@ class TestGetProjectActivity:
     def test_since_stops_at_the_last_page(self, session, mock_client, monkeypatch):
         monkeypatch.setattr(projects_tools, "_ACTIVITY_PAGE_SIZE", 2)
         # A full last page: the next one is a 404, which ends the read.
-        self._paged(mock_client, [[self._at("2026-11-02T10:00:00Z")] * 2])
+        self._paged(
+            mock_client,
+            [[self._at("2026-11-02T10:00:00Z", 2), self._at("2026-11-02T10:00:00Z", 1)]],
+        )
         result = wf.get_project_activity("p", since="2026-01-01", session_id=session)
         assert result["count"] == 2 and result["truncated"] is False
 
