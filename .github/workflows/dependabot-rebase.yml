@@ -1,32 +1,40 @@
 # Keep auto-merged Dependabot PRs moving under strict branch protection.
 #
-# main requires PRs to be up to date (strict), GitHub auto-merge never updates
-# a branch, and Dependabot only rebases on its own when a PR CONFLICTS. So any
-# push to main that doesn't touch a Dependabot PR's files (a ci/docs change)
-# leaves every open Dependabot PR BEHIND forever, green checks and all
-# (#177/#178, 2026-10-22).
+# Canonical copy: TETRA-2023/ci-workflows copies/dependabot-rebase.yml.
+# Every repo with Dependabot carries this file byte-identical; change it there
+# first (Taiga US-7 #2938).
+#
+# The default branch requires PRs to be up to date (strict), GitHub auto-merge
+# never updates a branch, and Dependabot only rebases on its own when a PR
+# CONFLICTS. So any push that doesn't touch a Dependabot PR's files (a ci/docs
+# change) leaves every open Dependabot PR BEHIND forever, green checks and all
+# (pytaiga-mcp #177/#178, 2026-10-22).
 #
 # Updates the OLDEST stuck PR with auto-merge on through the update-branch API,
-# with the tetra-release App token (Taiga #2870). It used to post
-# `@dependabot rebase` with a personal PAT, but Dependabot ignores commands from
-# bot accounts, and the App is one. Trade-off: once its branch is updated by
-# someone else, Dependabot stops rebasing that PR; if it later CONFLICTS, close
-# it and Dependabot opens a fresh one. The App's push is not GITHUB_TOKEN, so CI
-# and auto-merge run as usual (langfuse-mcp #98, 2026-10-28).
+# with the tetra-release App token (Taiga #2870). `@dependabot rebase` needed a
+# personal PAT: Dependabot ignores commands from bot accounts, and the App is
+# one. Trade-off: once its branch is updated by someone else, Dependabot stops
+# rebasing that PR; if it later CONFLICTS, close it and Dependabot opens a fresh
+# one. The App's push is not GITHUB_TOKEN, so CI and auto-merge run as usual
+# (langfuse-mcp #98, 2026-10-28).
 #
-# One PR at a time on purpose: its merge pushes to main and re-triggers this
-# workflow for the next one, instead of N parallel CI runs that all go stale
-# after the first merge. Releases are tag-only since 2026-10-28 (Taiga #2870):
-# no version commit lands on main, so one merge means one update.
+# One PR at a time on purpose: its merge pushes to the default branch and
+# re-triggers this workflow for the next one, instead of N parallel CI runs
+# that all go stale after the first merge. Releases are tag-only (Taiga #2870):
+# no version commit lands on the branch, so one merge means one update.
+#
+# Same file on `main` and gitflow (`develop`) repos: the push filter lists the
+# usual default branch names, and the job only runs for a push to the repo's
+# actual default branch.
 #
 # PRs without auto-merge (majors, held by policy) are skipped. The schedule is
-# a backstop in case nothing pushes to main. A candidate stuck for more than
-# 24h fails the run, so a stall shows up as a red run instead of silence.
+# a backstop in case nothing pushes. A candidate stuck for more than 24h fails
+# the run, so a stall shows up as a red run instead of silence.
 name: Dependabot rebase
 
 on:
   push:
-    branches: [main]
+    branches: [main, master, develop]
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
@@ -47,6 +55,10 @@ jobs:
     # GitHub-hosted like dependabot-auto-merge.yml: `gh` is there, and a job
     # holding a write token has no business on a self-hosted runner.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The push payload carries the default branch; schedule and dispatch
+    # always run.
+    if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
     steps:
       # Workflows: write because Dependabot's github-actions PRs edit
       # .github/workflows/, and updating such a branch rewrites those files.
@@ -94,7 +106,7 @@ jobs:
           elif [ "$state" = "DIRTY" ]; then
             # update-branch cannot resolve a conflict. Dependabot rebases a
             # conflicting PR itself unless someone else updated it before.
-            echo "::warning::#$n conflicts with main; if Dependabot does not rebase it, close it so it reopens."
+            echo "::warning::#$n conflicts with the base branch; if Dependabot does not rebase it, close it so it reopens."
           else
             gh api -X PUT "repos/$REPO/pulls/$n/update-branch" --jq .message
           fi
