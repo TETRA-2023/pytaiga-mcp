@@ -2080,6 +2080,73 @@ class TestGetProjectActivity:
         assert result["tickets"][0]["epic_refs"] == [1]
         assert result["epics"] == [{"ref": 1, "subject": "E1"}]
 
+    def test_status_to_keeps_rows_that_reached_a_status(self, session, mock_client):
+        page = [  # newest first
+            self._story_event("2026-11-02T12:00:00Z", 7, move=("Ready for test", "Done"),
+                              comment="Outcome: shipped. Artifacts: PR #1"),
+            self._story_event("2026-11-02T11:00:00Z", 8, move=("New", "In progress")),
+            self._story_event("2026-11-02T10:00:00Z", 9, comment="edit only"),
+            self._story_event("2026-11-02T09:00:00Z", 7, move=("In progress", "Ready for test")),
+            self._story_event("2026-11-02T08:00:00Z", 6, move=("In progress", "Ready for test")),
+        ]  # fmt: skip
+        self._paged(mock_client, [page])
+        mock_client.list_resources.return_value = [
+            {"ref": 7, "epics": [{"ref": 3102, "subject": "Rules"}]},
+            {"ref": 6, "epics": []},
+            {"ref": 8, "epics": [{"ref": 1, "subject": "Not kept"}]},
+        ]
+        result = wf.get_project_activity(
+            "p",
+            since="2026-11-02",
+            group_by="ticket",
+            status_to=["done", "Ready for test", "Archived"],
+            session_id=session,
+        )
+        assert [r["ref"] for r in result["tickets"]] == [7, 6]
+        assert result["ticket_count"] == 2 and result["count"] == 5
+        assert result["tickets"][0]["status_change"] == {"from": "In progress", "to": "Done"}
+        assert result["tickets"][0]["last_comment"].startswith("Outcome:")
+        assert result["tickets"][0]["epic_refs"] == [3102]
+        assert result["epics"] == [{"ref": 3102, "subject": "Rules"}]
+        assert result["unmatched_status_to"] == ["Archived"]
+
+    def test_status_to_single_name(self, session, mock_client):
+        page = [self._story_event("2026-11-02T12:00:00Z", 7, move=("New", "Done"))]
+        self._paged(mock_client, [page])
+        mock_client.list_resources.return_value = []
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", status_to="Done", session_id=session
+        )
+        assert [r["ref"] for r in result["tickets"]] == [7]
+        assert "unmatched_status_to" not in result
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"status_to": "Done"}, {"status_to": [], "group_by": "ticket"}]
+    )
+    def test_status_to_needs_ticket_rows_and_a_name(self, session, mock_client, kwargs):
+        with pytest.raises(ValueError, match="status_to"):
+            wf.get_project_activity("p", session_id=session, **kwargs)
+
+    def test_comments_of_moved_rows_are_dropped_last(self, session, mock_client, monkeypatch):
+        page = [
+            self._story_event("2026-11-02T12:00:00Z", 7, move=("New", "Done"), comment="R" * 150),
+            self._story_event("2026-11-02T11:00:00Z", 8, comment="E" * 150),
+        ]
+        self._paged(mock_client, [page])
+        mock_client.list_resources.return_value = []
+        full = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        # Just too big with both comments, fits once the edit-only one goes.
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_MAX_CHARS", projects_tools._size(full) - 1)
+        self._paged(mock_client, [page])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        rows = {r["ref"]: r for r in result["tickets"]}
+        assert result["comments_dropped"] is True
+        assert rows[7]["last_comment"] == "R" * 150 and "last_comment" not in rows[8]
+
     def test_entity_filter(self, session, mock_client):
         task = self._story_event("2026-11-02T09:00:00Z", 2)
         task["event_type"] = "tasks.task.change"

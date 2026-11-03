@@ -532,13 +532,16 @@ def _fit(result: Dict[str, Any], load_stories=list) -> Dict[str, Any]:
         result["ticket_count"] = len(result["tickets"])
         if _size(result) <= _ACTIVITY_MAX_CHARS:
             return result
-    cut_comments = [row.pop("last_comment", None) for row in result["tickets"]]
-    for row in result["tickets"]:
-        row.pop("last_comment_truncated", None)
-    if any(c is not None for c in cut_comments):
-        result["comments_dropped"] = True
-    if _size(result) <= _ACTIVITY_MAX_CHARS:
-        return result
+    # Comments of rows with no status move go first: a status move's comment
+    # (a closing receipt) is what a review reads.
+    for moved in (False, True):
+        for row in result["tickets"]:
+            if bool(row.get("status_change")) == moved and "last_comment" in row:
+                del row["last_comment"]
+                row.pop("last_comment_truncated", None)
+                result["comments_dropped"] = True
+        if _size(result) <= _ACTIVITY_MAX_CHARS:
+            return result
     for row in result["tickets"]:
         subject = row.get("subject") or ""
         if len(subject) > _ACTIVITY_SHORT_SUBJECT:
@@ -611,9 +614,14 @@ def _fit(result: Dict[str, Any], load_stories=list) -> Dict[str, Any]:
         "epic_refs (its story's epics, [] when in none), listed once in a top-level "
         "epics [{ref, subject}] (plus project for an epic of another project); a task "
         "row carries its parent story_ref. Task events carry story_ref too. "
+        "status_to (group_by='ticket' only): a status name or a list; keeps the rows whose "
+        "status_change.to (the last status reached in the window) is one of them, "
+        "case-insensitive, before the size guard — e.g. ['Done', 'Ready for test'] with "
+        "full_comments=True returns each closing comment in full; unmatched_status_to "
+        "lists names no row reached. "
         "Size guard: a result over 50,000 characters is returned as ticket rows "
-        "(summarised=true); rows that still don't fit lose last_comment "
-        "(comments_dropped=true), then subjects are cut to 60 characters "
+        "(summarised=true); rows that still don't fit lose last_comment, rows with no "
+        "status move first (comments_dropped=true), then subjects are cut to 60 characters "
         "(subjects_shortened=true), then rows go — those with no status move and no comment "
         "first, then the oldest (too_large=true, tickets_omitted; active_omitted = how many "
         "of them moved or had a comment, 0 if only edit-only rows were cut). "
@@ -631,6 +639,7 @@ def get_project_activity(
     actor: Optional[Union[str, List[str]]] = None,
     entity: Optional[Union[str, List[str]]] = None,
     group_by: Optional[str] = None,
+    status_to: Optional[Union[str, List[str]]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
@@ -638,6 +647,11 @@ def get_project_activity(
 
     if group_by not in (None, "ticket"):
         raise ValueError("group_by must be 'ticket' or omitted.")
+    targets = [status_to] if isinstance(status_to, str) else list(status_to or [])
+    if status_to is not None and (group_by != "ticket" or not targets):
+        raise ValueError(
+            "status_to takes a status name or a non-empty list, with group_by='ticket'."
+        )
     actors = [actor] if isinstance(actor, str) else list(actor or [])
     entities = [entity] if isinstance(entity, str) else list(entity or [])
     unknown = [e for e in entities if e not in _ACTIVITY_ENTITY_FILTER]
@@ -723,6 +737,18 @@ def get_project_activity(
         if group_by == "ticket":
             result["group_by"] = "ticket"
             result["tickets"] = _ticket_rows(summaries)
+            if targets:
+                wanted = {safe_lower(t).strip(): t for t in targets}
+                kept, hit = [], set()
+                for row in result["tickets"]:
+                    to = safe_lower((row.get("status_change") or {}).get("to")).strip()
+                    if to in wanted:
+                        kept.append(row)
+                        hit.add(to)
+                result["tickets"] = kept
+                missed = [t for k, t in wanted.items() if k not in hit]
+                if missed:
+                    result["unmatched_status_to"] = missed
             _add_story_epics(result, load_stories)
             result["ticket_count"] = len(result["tickets"])
         else:
