@@ -395,6 +395,8 @@ def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False
             summary["ref"] = item.get("ref")
         summary["subject"] = item.get(name)
     linked = data.get("userstory") if parts[0] == "epics" else None
+    if parts[0] == "tasks" and isinstance(item, dict):
+        linked = item.get("userstory")  # the task's parent story
     if isinstance(linked, dict):  # epics.relateduserstory.*: the story linked or unlinked
         summary["story_ref"] = linked.get("ref")
     if changed_fields:
@@ -472,6 +474,8 @@ def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         row["events"] += 1
         if event.get("subject"):
             row["subject"] = event["subject"]
+        if row["entity"] == "task" and event.get("story_ref") is not None:
+            row["story_ref"] = event["story_ref"]
         if event["actor"] not in row["actors"]:
             row["actors"].append(event["actor"])
         move = event.get("status_change")
@@ -489,11 +493,31 @@ def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(rows.values(), key=lambda r: r["last_event"] or "", reverse=True)
 
 
+def _add_story_epics(result: Dict[str, Any], load_stories) -> None:
+    """Give each user_story ticket row its story's epic refs (epic_refs), and list
+    those epics once in result["epics"] [{ref, subject}] (plus project for an epic
+    of another project): an epic repeats on many rows. ONE story list read, made
+    only when a story row exists. A story no longer in the project (deleted) gets
+    no epic_refs key."""
+    rows = result["tickets"]
+    if not any(r["entity"] == "user_story" and r.get("ref") is not None for r in rows):
+        return
+    links_by_ref = {s.get("ref"): resolve._epic_links(s) for s in load_stories()}
+    epics: Dict[Any, Dict[str, Any]] = {}
+    for row in rows:
+        if row["entity"] == "user_story" and row.get("ref") in links_by_ref:
+            links = links_by_ref[row["ref"]]
+            row["epic_refs"] = [link["ref"] for link in links]
+            for link in links:
+                epics.setdefault((link.get("project"), link["ref"]), link)
+    result["epics"] = sorted(epics.values(), key=lambda e: (e.get("project") or "", e["ref"]))
+
+
 def _size(result: Dict[str, Any]) -> int:
     return core._text_size(result)
 
 
-def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
+def _fit(result: Dict[str, Any], load_stories=list) -> Dict[str, Any]:
     """Keep the result under _ACTIVITY_MAX_CHARS: events become ticket rows, then
     rows lose their last comment, then subjects are shortened, then rows go:
     edit-only ones first, oldest first (too_large)."""
@@ -504,6 +528,7 @@ def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
         result["group_by"] = "ticket"
         result["summarised"] = True
         result["tickets"] = _ticket_rows(events)
+        _add_story_epics(result, load_stories)
         result["ticket_count"] = len(result["tickets"])
         if _size(result) <= _ACTIVITY_MAX_CHARS:
             return result
@@ -532,10 +557,14 @@ def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
         return bool(rows[i].get("status_change") or rows[i]["comments"])
 
     order = sorted(range(total), key=lambda i: (active(i), -i))
+    all_epics = result.get("epics")
 
     def cut(k: int) -> bool:
         dropped = set(order[:k])
         result["tickets"] = [r for i, r in enumerate(rows) if i not in dropped]
+        if all_epics:  # only the epics the kept rows still name
+            named = {ref for r in result["tickets"] for ref in r.get("epic_refs", [])}
+            result["epics"] = [e for e in all_epics if e["ref"] in named]
         # Set before measuring, so the measured size includes them.
         result["too_large"] = True
         result["tickets_omitted"] = k
@@ -578,7 +607,10 @@ def _fit(result: Dict[str, Any]) -> Dict[str, Any]:
         "only (without since, the latest `limit` events are read, then filtered). "
         "group_by='ticket': one row per item instead of events — entity, ref, subject, "
         "status_change {from (first), to (last)} over the window, events, comments, actors, "
-        "last_event, last_comment (200 characters). "
+        "last_event, last_comment (200 characters); a user_story row also carries "
+        "epic_refs (its story's epics, [] when in none), listed once in a top-level "
+        "epics [{ref, subject}] (plus project for an epic of another project); a task "
+        "row carries its parent story_ref. Task events carry story_ref too. "
         "Size guard: a result over 50,000 characters is returned as ticket rows "
         "(summarised=true); rows that still don't fit lose last_comment "
         "(comments_dropped=true), then subjects are cut to 60 characters "
@@ -683,14 +715,18 @@ def get_project_activity(
         if unmatched:
             result["unmatched_actors"] = unmatched
 
+        def load_stories() -> List[Dict[str, Any]]:
+            return client.list_resources("user_stories", project_id=project_id)
+
         summaries = [_summarize_timeline_event(e, full_comments) for e in events]
         result["count"] = len(summaries)
         if group_by == "ticket":
             result["group_by"] = "ticket"
             result["tickets"] = _ticket_rows(summaries)
+            _add_story_epics(result, load_stories)
             result["ticket_count"] = len(result["tickets"])
         else:
             result["events"] = summaries
-        return _fit(result)
+        return _fit(result, load_stories)
 
     return core._execute_taiga_operation("get_project_activity", do_activity, str(project))

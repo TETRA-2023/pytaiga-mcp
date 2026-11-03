@@ -2001,6 +2001,85 @@ class TestGetProjectActivity:
         assert second["ref"] == 8 and "status_change" not in second
         assert len(second["last_comment"]) == 200 and second["last_comment_truncated"] is True
 
+    def _task_event(self, when, ref, story_ref):
+        event = self._story_event(when, ref)
+        event["event_type"] = "tasks.task.change"
+        del event["data"]["userstory"]
+        event["data"]["task"] = {
+            "id": ref,
+            "ref": ref,
+            "subject": f"T{ref}",
+            "userstory": {"id": story_ref, "ref": story_ref, "subject": f"S{story_ref}"},
+        }
+        return event
+
+    def test_ticket_rows_carry_story_epics_and_task_story_ref(self, session, mock_client):
+        page = [
+            self._story_event("2026-11-02T12:00:00Z", 7),
+            self._story_event("2026-11-02T11:00:00Z", 8),
+            self._story_event("2026-11-02T10:45:00Z", 6),
+            self._story_event("2026-11-02T10:30:00Z", 9),  # deleted since
+            self._task_event("2026-11-02T10:00:00Z", 70, 7),
+        ]
+        self._paged(mock_client, [page])
+        rules = {"ref": 3102, "subject": "Team working rules"}
+        mock_client.list_resources.return_value = [
+            {"ref": 7, "epics": [rules]},
+            {
+                "ref": 6,
+                "project": 1,
+                "epics": [rules, {"ref": 5, "subject": "Other", "project": {"id": 2, "slug": "o"}}],
+            },
+            {"ref": 8, "epics": None},
+            {"ref": 99, "epics": [{"ref": 1, "subject": "not in the window"}]},
+        ]
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        rows = {r["ref"]: r for r in result["tickets"]}
+        assert rows[7]["epic_refs"] == [3102]
+        assert rows[6]["epic_refs"] == [3102, 5]
+        assert rows[8]["epic_refs"] == []
+        assert "epic_refs" not in rows[9]
+        assert rows[70]["story_ref"] == 7 and "epic_refs" not in rows[70]
+        # Each epic once, sorted by ref; only those the rows name.
+        assert result["epics"] == [rules, {"ref": 5, "subject": "Other", "project": "o"}]
+        # ONE story list read for every row, not one get_story per row.
+        mock_client.list_resources.assert_called_once_with("user_stories", project_id=1)
+
+    def test_no_story_rows_no_story_read(self, session, mock_client):
+        self._paged(mock_client, [[self._task_event("2026-11-02T10:00:00Z", 70, 7)]])
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        assert result["tickets"][0]["story_ref"] == 7 and "epics" not in result
+        mock_client.list_resources.assert_not_called()
+
+    def test_task_events_carry_story_ref(self, session, mock_client):
+        self._paged(mock_client, [[self._task_event("2026-11-02T10:00:00Z", 70, 7)]])
+        result = wf.get_project_activity("p", since="2026-11-02", session_id=session)
+        assert result["events"][0]["story_ref"] == 7
+        mock_client.list_resources.assert_not_called()  # events mode: no epics read
+
+    def test_summarised_rows_get_epics_and_cut_rows_drop_theirs(
+        self, session, mock_client, monkeypatch
+    ):
+        monkeypatch.setattr(projects_tools, "_ACTIVITY_MAX_CHARS", 900)
+        page = [
+            self._story_event("2026-11-02T10:01:00Z", 7, move=("New", "Done")),
+            self._story_event("2026-11-02T10:00:00Z", 8),  # edit-only: cut first
+        ] + [self._story_event(f"2026-11-02T09:{m:02d}:00Z", 7) for m in range(10)]
+        self._paged(mock_client, [page])
+        mock_client.list_resources.return_value = [
+            {"ref": 7, "epics": [{"ref": 1, "subject": "E1"}]},
+            {"ref": 8, "epics": [{"ref": 2, "subject": "E" * 400}]},
+        ]
+        result = wf.get_project_activity("p", since="2026-11-02", session_id=session)
+        assert result["summarised"] is True and result["too_large"] is True
+        assert [r["ref"] for r in result["tickets"]] == [7]
+        assert result["tickets"][0]["epic_refs"] == [1]
+        assert result["epics"] == [{"ref": 1, "subject": "E1"}]
+
     def test_entity_filter(self, session, mock_client):
         task = self._story_event("2026-11-02T09:00:00Z", 2)
         task["event_type"] = "tasks.task.change"
