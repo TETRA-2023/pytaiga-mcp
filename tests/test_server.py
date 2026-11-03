@@ -1,6 +1,7 @@
 """Unit tests for the MCP server (src/server/): name resolution, tools, offload."""
 
 import asyncio
+import json
 import sys
 import uuid
 from unittest.mock import DEFAULT, MagicMock, call
@@ -3870,6 +3871,153 @@ class TestListItems:
         with pytest.raises(ValueError, match="User story #3 not found"):
             wf.list_items("p", entity_type="task", story=3, session_id=session)
         mock_client.list_resources.assert_not_called()
+
+    # --- T2.10: blocked, status list, modified_before, size guard ---
+
+    def _task_lr(self, tasks):
+        def lr(resource, project_id=None, **filters):
+            return {
+                "task_statuses": [
+                    {"id": 41, "name": "New"},
+                    {"id": 42, "name": "In progress"},
+                    {"id": 43, "name": "Needs Info"},
+                ],
+                "tasks": tasks,
+            }[resource]
+
+        return lr
+
+    def test_task_status_list_is_sent_comma_joined(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.side_effect = self._task_lr([])
+        wf.list_items(
+            "p",
+            entity_type="task",
+            status=["Needs Info", "in progress", "Needs Info"],
+            session_id=session,
+        )
+        last = mock_client.list_resources.call_args
+        assert last.args == ("tasks",)
+        assert last.kwargs == {"project_id": 1, "status": "43,42"}
+
+    def test_story_status_list_is_sent_comma_joined(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+
+        def lr(resource, project_id=None, **filters):
+            return {
+                "userstory_statuses": [{"id": 3, "name": "Done"}, {"id": 4, "name": "New"}],
+                "user_stories": [],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        wf.list_items("p", status=["New", "Done"], session_id=session)
+        assert mock_client.list_resources.call_args.kwargs == {"project_id": 1, "status": "4,3"}
+
+    def test_empty_status_list_is_rejected(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.side_effect = self._task_lr([])
+        with pytest.raises(ValueError, match="non-empty list"):
+            wf.list_items("p", entity_type="task", status=[], session_id=session)
+
+    def test_sprint_status_list_is_rejected(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        with pytest.raises(ValueError, match="'open' or 'closed'"):
+            wf.list_items("p", entity_type="sprint", status=["open"], session_id=session)
+
+    def test_blocked_filters_rows_after_the_read(self, session, mock_client):
+        # Taiga ignores is_blocked: it must not be sent, and rows are filtered here.
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.side_effect = self._task_lr(
+            [
+                {"ref": 1, "is_blocked": True, "blocked_note": "waiting on X"},
+                {"ref": 2, "is_blocked": False},
+                {"ref": 3},
+            ]
+        )
+        result = wf.list_items("p", entity_type="task", blocked=True, session_id=session)
+        assert [r["ref"] for r in result] == [1]
+        assert "is_blocked" not in mock_client.list_resources.call_args.kwargs
+        result = wf.list_items("p", entity_type="task", blocked=False, session_id=session)
+        assert [r["ref"] for r in result] == [2, 3]
+
+    def test_blocked_applies_to_epics(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = [
+            {"ref": 1, "is_blocked": True},
+            {"ref": 2, "is_blocked": False},
+        ]
+        result = wf.list_items("p", entity_type="epic", blocked=True, session_id=session)
+        assert [r["ref"] for r in result] == [1]
+
+    def test_modified_before_sent_as_modified_date_lt_in_utc(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.side_effect = self._task_lr([])
+        wf.list_items("p", entity_type="task", modified_before="2026-10-27", session_id=session)
+        assert mock_client.list_resources.call_args.kwargs == {
+            "project_id": 1,
+            "modified_date__lt": "2026-10-27T00:00:00+00:00",
+        }
+        mock_client.list_resources.return_value = []
+        mock_client.list_resources.side_effect = None
+        wf.list_items(
+            "p", modified_before="2026-10-27T09:00:00+01:00", closed=None, session_id=session
+        )
+        assert mock_client.list_resources.call_args.kwargs == {
+            "project_id": 1,
+            "modified_date__lt": "2026-10-27T09:00:00+01:00",
+        }
+
+    def test_modified_before_rejects_a_non_iso_value(self, session, mock_client):
+        with pytest.raises(ValueError, match="modified_before must be an ISO date"):
+            wf.list_items("p", entity_type="task", modified_before="last week", session_id=session)
+
+    @pytest.mark.parametrize(
+        "entity_type,kwargs",
+        [
+            ("epic", {"modified_before": "2026-10-27"}),
+            ("sprint", {"blocked": True}),
+        ],
+    )
+    def test_new_filters_rejected_where_they_do_not_apply(
+        self, session, mock_client, entity_type, kwargs
+    ):
+        with pytest.raises(ValueError, match="do not apply"):
+            wf.list_items("p", entity_type=entity_type, session_id=session, **kwargs)
+
+    def test_oversized_result_is_refused_with_a_breakdown(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        tasks = [
+            {
+                "ref": i,
+                "subject": "x" * 200,
+                "status_extra_info": {"name": "New" if i % 4 else "In progress"},
+                "is_blocked": i % 10 == 0,
+            }
+            for i in range(400)
+        ]
+        mock_client.list_resources.side_effect = self._task_lr(tasks)
+        with pytest.raises(ValueError) as err:
+            wf.list_items("p", entity_type="task", session_id=session)
+        msg = str(err.value)
+        assert "400 task rows" in msg and "nothing returned" in msg
+        assert "New 300, In progress 100" in msg
+        assert "blocked: 40" in msg
+        assert "blocked" in msg.split("Narrow with:")[1]
+        # The guard measures what is left after `blocked`: 40 rows fit.
+        result = wf.list_items("p", entity_type="task", blocked=True, session_id=session)
+        assert len(result) == 40
+
+    def test_size_guard_measures_the_text_blocks_fastmcp_sends(self):
+        from src.server.tools import items as items_tools
+
+        rows = [{"ref": 1, "subject": "é"}, {"ref": 2}]
+        assert items_tools._rows_size(rows) == sum(
+            len(json.dumps(r, indent=2, ensure_ascii=False)) for r in rows
+        )
+
+    def test_list_items_sends_no_structured_output(self):
+        tool = wf.mcp._tool_manager.get_tool("list_items")
+        assert tool.fn_metadata.output_schema is None
 
 
 class TestUpdateEpic:

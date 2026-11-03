@@ -259,6 +259,27 @@ class TestSandboxWrites:
             assert task_refs(story=a["ref"]) == set()
             assert task["ref"] in task_refs(closed=False)
             assert task["ref"] not in task_refs(closed=True)
+            # T2.10: blocked is filtered after the read (Taiga ignores is_blocked),
+            # a status list matches any of its names, modified_before excludes.
+            assert task_refs(story=b["ref"], blocked=False) == {task["ref"]}
+            assert task_refs(story=b["ref"], blocked=True) == set()
+            task_statuses = [
+                s["name"] for s in sess.list_resources("task_statuses", project_id=project_id)
+            ]
+            first = wf.get_task(TEST_PROJECT, task["ref"], session_id=session_id)["status"]
+            other = next(n for n in task_statuses if n != first)
+            wf.update_task(
+                TEST_PROJECT, task["ref"], status=other, blocked=True, session_id=session_id
+            )
+            assert task_refs(story=b["ref"], blocked=True) == {task["ref"]}
+            assert task_refs(story=b["ref"], status=[first]) == set()
+            assert task_refs(story=b["ref"], status=[first, other]) == {task["ref"]}
+            assert task_refs(story=b["ref"], modified_before=started) == set()
+            tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+            assert task_refs(story=b["ref"], modified_before=tomorrow) == {task["ref"]}
+            b_status = wf.get_story(TEST_PROJECT, b["ref"], session_id=session_id)["status"]
+            assert b["ref"] in refs(blocked=False, status=[b_status])
+            assert b["ref"] not in refs(modified_before=started)
             activity = wf.get_project_activity(TEST_PROJECT, since=started, session_id=session_id)
             assert activity["truncated"] is False
             assert {a["ref"], b["ref"], task["ref"]} <= {e.get("ref") for e in activity["events"]}
