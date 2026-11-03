@@ -42,17 +42,29 @@ def _link_stories(client, epic_id: int, refs_and_ids: List[tuple]) -> tuple:
     return linked, already, failed
 
 
+# structured_output=False: with an output schema FastMCP sends the result twice
+# (text block + structuredContent); the size guard measures the text block.
 @app.tool(
     "get_epic_overview",
+    structured_output=False,
     description=(
         "Return an epic (including its full description) and all user stories linked "
         "to it, with per-status counts. ref is the epic ref number. project accepts "
-        "slug or ID."
+        "slug or ID. stories=False leaves the story rows out (the counts stay). "
+        "sections=['State as of', 'Exit criterion'] replaces the description with "
+        "description_sections: each Markdown section whose heading starts with one of "
+        "the names (case-insensitive), keyed by its full heading, running to the next "
+        "heading of the same or a higher level; with description_headings (every "
+        "heading), description_chars (full length) and sections_missing. sections=[] "
+        "returns the headings only. A result over 50,000 characters is refused with an "
+        "error giving the description size and story count; it is never cut."
     ),
 )
 def get_epic_overview(
     project: Union[str, int],
     ref: int,
+    stories: bool = True,
+    sections: Optional[List[str]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
@@ -71,24 +83,41 @@ def get_epic_overview(
             "user_stories", project_id=project_id, epic=epic["id"]
         )
 
-        stories = [resolve._story_summary(s) for s in linked_stories]
+        rows = [resolve._story_summary(s) for s in linked_stories]
         by_status: Dict[str, int] = {}
-        for s in stories:
+        for s in rows:
             sname = s.get("status") or "Unknown"
             by_status[sname] = by_status.get(sname, 0) + 1
 
-        return {
-            "epic": {
-                **resolve._epic_summary(epic),
-                "description": epic.get("description"),
-                "version": epic.get("version"),
-            },
-            "summary": {
-                "total_stories": len(stories),
-                "stories_by_status": by_status,
-            },
-            "stories": stories,
+        description = epic.get("description") or ""
+        epic_out: Dict[str, Any] = {**resolve._epic_summary(epic), "version": epic.get("version")}
+        if sections is None:
+            epic_out["description"] = epic.get("description")
+        else:
+            headings, found, missing = resolve._description_sections(description, sections)
+            epic_out["description_chars"] = len(description)
+            epic_out["description_headings"] = headings
+            if sections:
+                epic_out["description_sections"] = found
+                if missing:
+                    epic_out["sections_missing"] = missing
+        result: Dict[str, Any] = {
+            "epic": epic_out,
+            "summary": {"total_stories": len(rows), "stories_by_status": by_status},
         }
+        if stories:
+            result["stories"] = rows
+
+        size = core._text_size(result)
+        if size > core._MAX_RESULT_CHARS:
+            raise ValueError(
+                f"get_epic_overview: epic #{ref} is {size:,} characters (description "
+                f"{len(description):,} characters, {len(rows)} stories), over the "
+                f"{core._MAX_RESULT_CHARS:,}-character limit; nothing returned. Pass "
+                f"sections=[...] for chosen description sections (sections=[] for the "
+                f"headings only) and/or stories=False."
+            )
+        return result
 
     return core._execute_taiga_operation("get_epic_overview", do_overview, f"#{ref} in {project}")
 

@@ -3570,6 +3570,114 @@ class TestSingleItemGettersReturnDescription:
         assert "description" not in wf._issue_summary(blob)
 
 
+class TestEpicOverviewSectionsAndSize:
+    """T2.10b: stories=False, sections=[...], and the 50k guard."""
+
+    DESC = "\n".join(
+        [
+            "Intro line.",
+            "## State as of 2026-11-03",
+            "On track.",
+            "### Detail",
+            "sub detail",
+            "```",
+            "## not a heading (in a fence)",
+            "```",
+            "## Exit criterion",
+            "All stories Done.",
+            "## Historique",
+            "old stuff",
+        ]
+    )
+
+    def _setup(self, mock_client, description, n_stories=3, subject="s"):
+        epic = {"id": 900, "ref": 12, "subject": "E", "description": description, "version": 4}
+
+        def api_get(path, params=None):
+            return epic if "/epics/by_ref" in str(path) else {"id": 1, "slug": "p", "name": "P"}
+
+        mock_client.api.get.side_effect = api_get
+        mock_client.list_resources.return_value = [
+            {
+                "ref": i,
+                "subject": subject,
+                "status_extra_info": {"name": "Done" if i % 2 else "New"},
+                "modified_date": "2026-11-01T00:00:00Z",
+            }
+            for i in range(n_stories)
+        ]
+
+    def test_default_shape_unchanged(self, session, mock_client):
+        self._setup(mock_client, self.DESC)
+        result = wf.get_epic_overview("p", 12, session_id=session)
+        assert result["epic"]["description"] == self.DESC
+        assert len(result["stories"]) == 3
+        assert result["summary"] == {
+            "total_stories": 3,
+            "stories_by_status": {"New": 2, "Done": 1},
+        }
+
+    def test_stories_false_keeps_the_counts(self, session, mock_client):
+        self._setup(mock_client, self.DESC)
+        result = wf.get_epic_overview("p", 12, stories=False, session_id=session)
+        assert "stories" not in result
+        assert result["summary"]["total_stories"] == 3
+
+    def test_sections_by_heading_prefix(self, session, mock_client):
+        self._setup(mock_client, self.DESC)
+        result = wf.get_epic_overview(
+            "p", 12, sections=["state as of", "Exit criterion", "Risks"], session_id=session
+        )
+        epic = result["epic"]
+        assert "description" not in epic
+        assert epic["description_chars"] == len(self.DESC)
+        assert epic["description_headings"] == [
+            "State as of 2026-11-03",
+            "Detail",
+            "Exit criterion",
+            "Historique",
+        ]
+        assert epic["description_sections"] == {
+            # A section runs to the next heading of the same or a higher level:
+            # its ### sub-section and a fenced '##' line stay inside.
+            "State as of 2026-11-03": "On track.\n### Detail\nsub detail\n```\n"
+            "## not a heading (in a fence)\n```",
+            "Exit criterion": "All stories Done.",
+        }
+        assert epic["sections_missing"] == ["Risks"]
+
+    def test_empty_sections_returns_headings_only(self, session, mock_client):
+        self._setup(mock_client, self.DESC)
+        epic = wf.get_epic_overview("p", 12, sections=[], session_id=session)["epic"]
+        assert "description_sections" not in epic and "description" not in epic
+        assert "sections_missing" not in epic
+        assert len(epic["description_headings"]) == 4
+
+    def test_no_description_with_sections(self, session, mock_client):
+        self._setup(mock_client, None)
+        epic = wf.get_epic_overview("p", 12, sections=["State as of"], session_id=session)["epic"]
+        assert epic["description_chars"] == 0
+        assert epic["description_sections"] == {}
+        assert epic["sections_missing"] == ["State as of"]
+
+    def test_oversized_result_is_refused_then_fits_with_sections(self, session, mock_client):
+        big = self.DESC + "\n" + "x" * 60_000
+        self._setup(mock_client, big, n_stories=51)
+        with pytest.raises(ValueError) as err:
+            wf.get_epic_overview("p", 12, session_id=session)
+        msg = str(err.value)
+        assert f"description {len(big):,} characters, 51 stories" in msg
+        assert "nothing returned" in msg and "sections=" in msg and "stories=False" in msg
+        result = wf.get_epic_overview(
+            "p", 12, sections=["State as of", "Exit criterion"], session_id=session
+        )
+        assert len(result["stories"]) == 51
+        assert core._text_size(result) <= core._MAX_RESULT_CHARS
+
+    def test_epic_overview_sends_no_structured_output(self):
+        assert wf.mcp._tool_manager.get_tool("get_epic_overview").output_schema is None
+
+
 class TestLegacyServerMode:
     """v3 dropped the full server: TAIGA_SERVER_MODE no longer dispatches anything."""
 
