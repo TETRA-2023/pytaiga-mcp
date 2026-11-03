@@ -2,8 +2,8 @@
 
 import logging
 import re
-from datetime import date
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Union
 
 from src.server import core
 from src.taiga_client import (
@@ -122,6 +122,39 @@ def _resolve_status(
         available = [s["name"] for s in statuses]
         raise ValueError(f"Status '{status_name}' not found. Available: {available}")
     return matches[0]["id"]
+
+
+def _resolve_statuses(
+    client: TaigaClientWrapper,
+    project_id: int,
+    entity_type: str,
+    status: Union[str, List[str]],
+    session_id: str,
+) -> Union[int, str]:
+    """One status name, or a list of them, as the `status` query param: one ID,
+    or the comma-separated IDs Taiga's status filter takes (verified live:
+    `status=41,42` matches either)."""
+    names = [status] if isinstance(status, str) else list(status)
+    if not names:
+        raise ValueError("status must be a status name or a non-empty list of names.")
+    ids: List[int] = []
+    for name in names:
+        status_id = _resolve_status(client, project_id, entity_type, name, session_id)
+        if status_id not in ids:
+            ids.append(status_id)
+    return ids[0] if len(ids) == 1 else ",".join(str(i) for i in ids)
+
+
+def _parse_moment(value: str, name: str) -> datetime:
+    """An ISO date or datetime; a date, or a time without offset, is UTC."""
+    try:
+        moment = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{name} must be an ISO date or datetime (e.g. '2026-11-02' or "
+            f"'2026-11-02T09:00:00+01:00'), got {value!r}."
+        ) from None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 def _status_map(
@@ -410,7 +443,7 @@ def _story_filters(
     client: TaigaClientWrapper,
     proj: Dict[str, Any],
     session_id: str,
-    status: Optional[str] = None,
+    status: Optional[Union[str, List[str]]] = None,
     assignee: Optional[str] = None,
     epic: Optional[int] = None,
     tags: Optional[str] = None,
@@ -423,7 +456,7 @@ def _story_filters(
     project_id = proj["id"]
     filters: Dict[str, Any] = {}
     if status:
-        filters["status"] = _resolve_status(client, project_id, "story", status, session_id)
+        filters["status"] = _resolve_statuses(client, project_id, "story", status, session_id)
     if assignee:
         filters["assigned_to"] = _resolve_user(client, project_id, assignee, session_id)
     if epic is not None:

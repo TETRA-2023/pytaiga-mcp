@@ -1,7 +1,7 @@
 """Project-level reads: projects, overview, search, workload, health, activity."""
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
 
 import pydantic_core
@@ -417,14 +417,7 @@ def _summarize_timeline_event(event: Dict[str, Any], full_comments: bool = False
 
 def _parse_since(since: str) -> datetime:
     """An ISO date or datetime; a date, or a time without offset, is UTC."""
-    try:
-        moment = datetime.fromisoformat(since)
-    except ValueError:
-        raise ValueError(
-            f"since must be an ISO date or datetime (e.g. '2026-11-02' or "
-            f"'2026-11-02T09:00:00+01:00'), got {since!r}."
-        ) from None
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    return resolve._parse_moment(since, "since")
 
 
 def _event_actor(event: Dict[str, Any]) -> Dict[str, Any]:
