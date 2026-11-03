@@ -4,8 +4,6 @@ import logging
 from collections import Counter
 from typing import Any, Dict, List, Optional, Union
 
-import pydantic_core
-
 from src.server import app, core, resolve
 from src.taiga_client import TaigaNotFoundError
 
@@ -68,13 +66,11 @@ _LIST_FILTERS = {
 
 # list_items refuses a result whose text exceeds this many characters (the
 # client would refuse it inline anyway), like get_project_activity's guard.
-_LIST_MAX_CHARS = 50_000
+_LIST_MAX_CHARS = core._MAX_RESULT_CHARS
 
 
 def _rows_size(rows: List[Dict[str, Any]]) -> int:
-    """Characters the client receives: FastMCP sends each row of a list result
-    as its own indented JSON text block."""
-    return sum(len(pydantic_core.to_json(r, fallback=str, indent=2).decode()) for r in rows)
+    return core._text_size(rows)
 
 
 def _guard_size(rows: List[Dict[str, Any]], entity_type: str) -> List[Dict[str, Any]]:

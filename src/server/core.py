@@ -4,6 +4,8 @@ import logging
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
+import pydantic_core
+
 from src.taiga_client import (
     TaigaAPIError,
     TaigaAuthenticationError,
@@ -35,6 +37,18 @@ auto_login_error: Optional[str] = None
 
 # Per-session lookup cache: {session_id: {"members_{pid}": [...], ...}}
 _session_cache: Dict[str, Dict[str, Any]] = {}
+
+# Largest result a size-guarded tool returns (get_project_activity, list_items,
+# get_epic_overview): over it the client refuses the result inline.
+_MAX_RESULT_CHARS = 50_000
+
+
+def _text_size(result: Any) -> int:
+    """Characters of the text the client receives. FastMCP serialises a dict
+    result as one indented JSON block (about 35% larger than compact), and a
+    list result as one such block per item."""
+    items = result if isinstance(result, list) else [result]
+    return sum(len(pydantic_core.to_json(i, fallback=str, indent=2).decode()) for i in items)
 
 
 def _session_cache_for(session_id: str) -> Dict[str, Any]:

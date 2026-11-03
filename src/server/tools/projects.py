@@ -4,8 +4,6 @@ import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
 
-import pydantic_core
-
 from src.server import app, core, resolve
 from src.taiga_client import TaigaNotFoundError, safe_lower
 
@@ -360,7 +358,7 @@ _ACTIVITY_MAX_SCAN = 5000
 # Above this many characters of JSON an agent client stores the result in a file
 # instead of reading it (T2.9: 438 events = 143,000 characters), so the result is
 # summarised per ticket, then cut.
-_ACTIVITY_MAX_CHARS = 50_000
+_ACTIVITY_MAX_CHARS = core._MAX_RESULT_CHARS
 
 # Activity comments longer than this are shortened unless full_comments=True.
 _ACTIVITY_COMMENT_CHARS = 200
@@ -492,9 +490,7 @@ def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _size(result: Dict[str, Any]) -> int:
-    """Characters of the text block the client receives: FastMCP serialises a
-    dict result exactly like this (indented), about 35% larger than compact."""
-    return len(pydantic_core.to_json(result, fallback=str, indent=2).decode())
+    return core._text_size(result)
 
 
 def _fit(result: Dict[str, Any]) -> Dict[str, Any]:

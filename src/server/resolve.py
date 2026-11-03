@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.server import core
 from src.taiga_client import (
@@ -155,6 +155,49 @@ def _parse_moment(value: str, name: str) -> datetime:
             f"'2026-11-02T09:00:00+01:00'), got {value!r}."
         ) from None
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def _description_sections(
+    text: Optional[str], names: List[str]
+) -> Tuple[List[str], Dict[str, str], List[str]]:
+    """Split a Markdown description on its ATX headings (not inside a code fence).
+
+    Returns every heading's text in order; the sections whose heading starts with
+    one of `names` (case-insensitive, so 'State as of' matches 'State as of
+    2026-11-03'), keyed by the full heading text, each running to the next heading
+    of the same or a higher level; and the names no heading matched."""
+    lines = (text or "").split("\n")
+    heads: List[Tuple[int, int, str]] = []  # (line index, level, text)
+    fence = None
+    for i, line in enumerate(lines):
+        m = _FENCE.match(line)
+        if m:
+            marker = m.group(1)
+            if fence is None:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = None
+            continue
+        if fence is None:
+            h = _HEADING.match(line)
+            if h:
+                heads.append((i, len(h.group(1)), h.group(2)))
+    wanted = [n.strip().lower() for n in names]
+    sections: Dict[str, str] = {}
+    matched = set()
+    for k, (start, level, title) in enumerate(heads):
+        hits = [n for n in wanted if title.lower().startswith(n)]
+        if not hits:
+            continue
+        matched.update(hits)
+        end = next((i for i, lv, _ in heads[k + 1 :] if lv <= level), len(lines))
+        sections[title] = "\n".join(lines[start + 1 : end]).strip("\n")
+    missing = [n for n, w in zip(names, wanted) if w not in matched]
+    return [t for _, _, t in heads], sections, missing
 
 
 def _status_map(
