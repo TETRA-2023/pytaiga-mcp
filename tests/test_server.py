@@ -11,6 +11,7 @@ import pytest
 import src.server as wf
 from src import taiga_client
 from src.server import core
+from src.server import resolve as wf_resolve
 from src.server.tools import projects as projects_tools
 from src.taiga_client import (
     TaigaAPIError,
@@ -2041,19 +2042,63 @@ class TestGetProjectActivity:
         assert rows[6]["epic_refs"] == [3102, 5]
         assert rows[8]["epic_refs"] == []
         assert "epic_refs" not in rows[9]
-        assert rows[70]["story_ref"] == 7 and "epic_refs" not in rows[70]
+        # A task row carries its parent story's epics.
+        assert rows[70]["story_ref"] == 7 and rows[70]["epic_refs"] == [3102]
         # Each epic once, sorted by ref; only those the rows name.
         assert result["epics"] == [rules, {"ref": 5, "subject": "Other", "project": "o"}]
         # ONE story list read for every row, not one get_story per row.
         mock_client.list_resources.assert_called_once_with("user_stories", project_id=1)
 
     def test_no_story_rows_no_story_read(self, session, mock_client):
-        self._paged(mock_client, [[self._task_event("2026-11-02T10:00:00Z", 70, 7)]])
+        event = self._task_event("2026-11-02T10:00:00Z", 70, 7)
+        del event["data"]["task"]["userstory"]  # a task in no story
+        self._paged(mock_client, [[event]])
         result = wf.get_project_activity(
             "p", since="2026-11-02", group_by="ticket", session_id=session
         )
-        assert result["tickets"][0]["story_ref"] == 7 and "epics" not in result
+        row = result["tickets"][0]
+        assert "story_ref" not in row and row["epic_refs"] == [] and result["epics"] == []
         mock_client.list_resources.assert_not_called()
+
+    def test_task_rows_epics_carry_domain_with_one_read_each(self, session, mock_client):
+        page = [
+            self._task_event("2026-11-02T11:00:00Z", 70, 7),
+            self._task_event("2026-11-02T10:00:00Z", 71, 7),
+            self._task_event("2026-11-02T09:00:00Z", 72, 8),
+        ]
+        self._paged(mock_client, [page])
+        domain = {"id": 110, "ref": 457, "subject": "Security", "project": {"id": 1}}
+        initiative = {"id": 120, "ref": 3102, "subject": "Rules", "project": {"id": 1}}
+
+        def lr(resource, project_id=None, **kw):
+            return {
+                "user_stories": [
+                    {"ref": 7, "project": 1, "epics": [initiative, domain]},
+                    {"ref": 8, "project": 1, "epics": None},
+                ],
+                "epics": [
+                    {"id": 110, "tags": [["domain", None], ["infra", None]]},
+                    {"id": 120, "tags": [["initiative", None]]},
+                    {"id": 130, "tags": [["domain", None]]},
+                ],
+            }[resource]
+
+        mock_client.list_resources.side_effect = lr
+        result = wf.get_project_activity(
+            "p", since="2026-11-02", group_by="ticket", session_id=session
+        )
+        rows = {r["ref"]: r for r in result["tickets"]}
+        assert rows[70]["epic_refs"] == rows[71]["epic_refs"] == [3102, 457]
+        assert rows[72]["epic_refs"] == []
+        assert result["epics"] == [
+            {"ref": 457, "subject": "Security", "domain": True},
+            {"ref": 3102, "subject": "Rules", "domain": False},
+        ]
+        # One story list read and one epic list read, whatever the number of tasks.
+        assert [c.args[0] for c in mock_client.list_resources.call_args_list] == [
+            "user_stories",
+            "epics",
+        ]
 
     def test_task_events_carry_story_ref(self, session, mock_client):
         self._paged(mock_client, [[self._task_event("2026-11-02T10:00:00Z", 70, 7)]])
@@ -5831,3 +5876,92 @@ class TestBlockedNote:
         result = getattr(wf, tool)("p", 9, subject="S", session_id=session)
         assert sent(mock_client, "patch", f"/{segment}/300") == [{"version": 4, "subject": "S"}]
         assert (result["is_blocked"], result["blocked_note"]) == (True, "n")
+
+
+class TestListItemsEpics:
+    E1 = {"id": 110, "ref": 457, "subject": "Security", "project": {"id": 1, "slug": "p"}}
+    E2 = {"id": 120, "ref": 3102, "subject": "Rules", "project": {"id": 1, "slug": "p"}}
+    EPIC_TAGS = [{"id": 110, "tags": [["Domain", None]]}, {"id": 120, "tags": []}]
+
+    def _setup(self, mock_client, tasks, stories=None):
+        mock_client.api.get.return_value = PROJECT
+        story_by_id = {s["id"]: s for s in (stories or [])}
+
+        def lr(resource, project_id=None, **kw):
+            return {"tasks": tasks, "epics": self.EPIC_TAGS, "user_stories": stories or []}[
+                resource
+            ]
+
+        mock_client.list_resources.side_effect = lr
+        route(
+            mock_client,
+            get={f"/userstories/{i}": s for i, s in story_by_id.items()},
+        )
+
+    def test_task_rows_carry_parent_story_epics_with_domain(self, session, mock_client):
+        stories = [
+            {"id": 50, "ref": 7, "project": 1, "epics": [self.E2, self.E1]},
+            {"id": 51, "ref": 8, "project": 1, "epics": None},
+        ]
+        tasks = [
+            {"ref": 70, "user_story": 50},
+            {"ref": 71, "user_story": 50},
+            {"ref": 72, "user_story": 51},
+            {"ref": 73, "user_story": None},
+        ]
+        self._setup(mock_client, tasks, stories)
+        rows = {r["ref"]: r for r in wf.list_items("p", entity_type="task", session_id=session)}
+        assert rows[70]["epics"] == [
+            {"ref": 3102, "subject": "Rules", "domain": False},
+            {"ref": 457, "subject": "Security", "domain": True},
+        ]
+        assert rows[71]["epics"] == rows[70]["epics"]
+        assert rows[72]["epics"] == [] and rows[73]["epics"] == []
+        # Each distinct parent story read once, not once per task.
+        story_reads = [
+            c.args[0] for c in mock_client.api.get.call_args_list if "/userstories/" in c.args[0]
+        ]
+        assert sorted(story_reads) == ["/userstories/50", "/userstories/51"]
+
+    def test_many_parent_stories_cost_one_list_read(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(wf_resolve, "_STORY_READS_MAX", 1)
+        stories = [
+            {"id": 50, "ref": 7, "project": 1, "epics": [self.E1]},
+            {"id": 51, "ref": 8, "project": 1, "epics": None},
+        ]
+        tasks = [{"ref": 70, "user_story": 50}, {"ref": 72, "user_story": 51}]
+        self._setup(mock_client, tasks, stories)
+        rows = wf.list_items("p", entity_type="task", session_id=session)
+        assert rows[0]["epics"] == [{"ref": 457, "subject": "Security", "domain": True}]
+        assert not [c for c in mock_client.api.get.call_args_list if "/userstories/" in c.args[0]]
+
+    def test_blocked_filter_runs_before_the_story_reads(self, session, mock_client):
+        stories = [{"id": 50, "ref": 7, "project": 1, "epics": [self.E1]}]
+        tasks = [
+            {"ref": 70, "user_story": 50, "is_blocked": True},
+            {"ref": 71, "user_story": 51, "is_blocked": False},
+        ]
+        self._setup(mock_client, tasks, stories)
+        rows = wf.list_items("p", entity_type="task", blocked=True, session_id=session)
+        assert [r["ref"] for r in rows] == [70]
+        story_reads = [
+            c.args[0] for c in mock_client.api.get.call_args_list if "/userstories/" in c.args[0]
+        ]
+        assert story_reads == ["/userstories/50"]
+
+    def test_story_rows_epics_carry_domain(self, session, mock_client):
+        stories = [{"id": 50, "ref": 7, "project": 1, "epics": [self.E1, self.E2]}]
+        self._setup(mock_client, [], stories)
+        rows = wf.list_items("p", session_id=session)
+        assert rows[0]["epics"] == [
+            {"ref": 457, "subject": "Security", "domain": True},
+            {"ref": 3102, "subject": "Rules", "domain": False},
+        ]
+
+    def test_unreadable_epic_of_other_project_has_no_domain_key(self, session, mock_client):
+        other = {"id": 999, "ref": 5, "subject": "Other", "project": {"id": 2, "slug": "o"}}
+        stories = [{"id": 50, "ref": 7, "project": 1, "epics": [other]}]
+        self._setup(mock_client, [], stories)
+        route(mock_client, get={"/epics/999": _api_error(TaigaNotFoundError, 404, "Not found.")})
+        rows = wf.list_items("p", session_id=session)
+        assert rows[0]["epics"] == [{"ref": 5, "subject": "Other", "project": "o"}]

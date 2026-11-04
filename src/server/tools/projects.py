@@ -493,23 +493,36 @@ def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(rows.values(), key=lambda r: r["last_event"] or "", reverse=True)
 
 
-def _add_story_epics(result: Dict[str, Any], load_stories) -> None:
-    """Give each user_story ticket row its story's epic refs (epic_refs), and list
-    those epics once in result["epics"] [{ref, subject}] (plus project for an epic
-    of another project): an epic repeats on many rows. ONE story list read, made
-    only when a story row exists. A story no longer in the project (deleted) gets
-    no epic_refs key."""
+def _add_story_epics(result: Dict[str, Any], load_stories, load_domains=None) -> None:
+    """Give each ticket row of a story its epic refs (epic_refs), and each task row
+    the epic refs of its parent story ([] when the row names no story), and list
+    those epics once in result["epics"] [{ref, subject, domain}] (plus project for
+    an epic of another project): an epic repeats on many rows. load_stories(refs)
+    reads the stories with those refs, once per call; load_domains(stories) gives
+    {epic id: domain flag}. A story no longer in the project (deleted) gets no
+    epic_refs key; a task whose story is gone gets []."""
     rows = result["tickets"]
-    if not any(r["entity"] == "user_story" and r.get("ref") is not None for r in rows):
+    refs = {
+        r.get("ref") if r["entity"] == "user_story" else r.get("story_ref")
+        for r in rows
+        if r["entity"] in ("user_story", "task")
+    } - {None}
+    if not any(r["entity"] in ("user_story", "task") for r in rows):
         return
-    links_by_ref = {s.get("ref"): resolve._epic_links(s) for s in load_stories()}
+    stories = load_stories(refs) if refs else []
+    domains = load_domains(stories) if load_domains else None
+    links_by_ref = {s.get("ref"): resolve._epic_links(s, domains) for s in stories}
     epics: Dict[Any, Dict[str, Any]] = {}
     for row in rows:
         if row["entity"] == "user_story" and row.get("ref") in links_by_ref:
             links = links_by_ref[row["ref"]]
-            row["epic_refs"] = [link["ref"] for link in links]
-            for link in links:
-                epics.setdefault((link.get("project"), link["ref"]), link)
+        elif row["entity"] == "task":
+            links = links_by_ref.get(row.get("story_ref"), [])
+        else:
+            continue
+        row["epic_refs"] = [link["ref"] for link in links]
+        for link in links:
+            epics.setdefault((link.get("project"), link["ref"]), link)
     result["epics"] = sorted(epics.values(), key=lambda e: (e.get("project") or "", e["ref"]))
 
 
@@ -517,7 +530,7 @@ def _size(result: Dict[str, Any]) -> int:
     return core._text_size(result)
 
 
-def _fit(result: Dict[str, Any], load_stories=list) -> Dict[str, Any]:
+def _fit(result: Dict[str, Any], load_stories=lambda refs: [], load_domains=None) -> Dict[str, Any]:
     """Keep the result under _ACTIVITY_MAX_CHARS: events become ticket rows, then
     rows lose their last comment, then subjects are shortened, then rows go:
     edit-only ones first, oldest first (too_large)."""
@@ -528,7 +541,7 @@ def _fit(result: Dict[str, Any], load_stories=list) -> Dict[str, Any]:
         result["group_by"] = "ticket"
         result["summarised"] = True
         result["tickets"] = _ticket_rows(events)
-        _add_story_epics(result, load_stories)
+        _add_story_epics(result, load_stories, load_domains)
         result["ticket_count"] = len(result["tickets"])
         if _size(result) <= _ACTIVITY_MAX_CHARS:
             return result
@@ -612,8 +625,9 @@ def _fit(result: Dict[str, Any], load_stories=list) -> Dict[str, Any]:
         "status_change {from (first), to (last)} over the window, events, comments, actors, "
         "last_event, last_comment (200 characters); a user_story row also carries "
         "epic_refs (its story's epics, [] when in none), listed once in a top-level "
-        "epics [{ref, subject}] (plus project for an epic of another project); a task "
-        "row carries its parent story_ref. Task events carry story_ref too. "
+        "epics [{ref, subject, domain}] (plus project for an epic of another project; "
+        "domain is true for an epic tagged `domain`, false for an initiative epic); a task "
+        "row carries its parent story_ref and that story's epic_refs ([] when no story). Task events carry story_ref too. "
         "status_to (group_by='ticket' only): a status name or a list; keeps the rows whose "
         "status_change.to (the last status reached in the window) is one of them, "
         "case-insensitive, before the size guard — e.g. ['Done', 'Ready for test'] with "
@@ -729,8 +743,16 @@ def get_project_activity(
         if unmatched:
             result["unmatched_actors"] = unmatched
 
-        def load_stories() -> List[Dict[str, Any]]:
-            return client.list_resources("user_stories", project_id=project_id)
+        def load_stories(refs) -> List[Dict[str, Any]]:
+            # ONE story list read per call, whatever the number of rows.
+            return [
+                s
+                for s in client.list_resources("user_stories", project_id=project_id)
+                if s.get("ref") in refs
+            ]
+
+        def load_domains(stories) -> Dict[Any, bool]:
+            return resolve._epic_domains(client, project_id, stories)
 
         summaries = [_summarize_timeline_event(e, full_comments) for e in events]
         result["count"] = len(summaries)
@@ -749,10 +771,10 @@ def get_project_activity(
                 missed = [t for k, t in wanted.items() if k not in hit]
                 if missed:
                     result["unmatched_status_to"] = missed
-            _add_story_epics(result, load_stories)
+            _add_story_epics(result, load_stories, load_domains)
             result["ticket_count"] = len(result["tickets"])
         else:
             result["events"] = summaries
-        return _fit(result, load_stories)
+        return _fit(result, load_stories, load_domains)
 
     return core._execute_taiga_operation("get_project_activity", do_activity, str(project))
