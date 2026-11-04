@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.server import core
 from src.taiga_client import (
+    TaigaAPIError,
     TaigaClientWrapper,
     TaigaConcurrencyError,
     TaigaNotFoundError,
@@ -622,8 +623,8 @@ def _sprint_summary(milestone: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract readable fields from a raw user story dict."""
+def _story_summary(us: Dict[str, Any], domains: Optional[Dict[Any, bool]] = None) -> Dict[str, Any]:
+    """Extract readable fields from a raw user story dict (``domains``: see _epic_links)."""
     return {
         "ref": us.get("ref"),
         "subject": us.get("subject"),
@@ -635,23 +636,97 @@ def _story_summary(us: Dict[str, Any]) -> Dict[str, Any]:
         # arrives as `milestone` (ID) plus flat `milestone_name`/`milestone_slug`.
         "sprint": us.get("milestone_name") or us.get("milestone_slug"),
         "tags": us.get("tags", []),
-        "epics": _epic_links(us),
+        "epics": _epic_links(us, domains),
         **_activity_fields(us),
     }
 
 
-def _epic_links(us: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _epic_links(
+    us: Dict[str, Any], domains: Optional[Dict[Any, bool]] = None
+) -> List[Dict[str, Any]]:
     """The story's epic links as {ref, subject}, plus `project` (slug) for an epic of
     another project, whose ref means nothing in this one. Taiga sends `epics: null`,
-    not [], for a story in no epic."""
+    not [], for a story in no epic. With ``domains`` (from _epic_domains), each link
+    also says domain: true/false (the epic carries the tag `domain`); an epic whose
+    tags could not be read has no domain key."""
     links = []
     for e in us.get("epics") or []:
         link = {"ref": e.get("ref"), "subject": e.get("subject")}
         epic_project = e.get("project") or {}
         if epic_project.get("id") not in (None, us.get("project")):
             link["project"] = epic_project.get("slug")
+        if domains is not None and e.get("id") in domains:
+            link["domain"] = domains[e["id"]]
         links.append(link)
     return links
+
+
+def _is_domain(tags: Any) -> bool:
+    """Whether Taiga tags ([name, color] pairs, or bare names) include `domain`."""
+    for tag in tags or []:
+        name = tag[0] if isinstance(tag, (list, tuple)) and tag else tag
+        if isinstance(name, str) and name.strip().lower() == "domain":
+            return True
+    return False
+
+
+def _epic_domains(
+    client: TaigaClientWrapper, project_id: int, stories: List[Dict[str, Any]]
+) -> Dict[Any, bool]:
+    """{epic id: domain flag} for every epic the stories are linked to.
+
+    ONE epic list read of the project (only when a story has an epic), plus one
+    read per epic of ANOTHER project. An epic that cannot be read (deleted, no
+    access) is left out, so its links carry no domain key rather than a guess.
+    """
+    ids = {e.get("id") for s in stories for e in (s.get("epics") or []) if e.get("id") is not None}
+    if not ids:
+        return {}
+    domains = {
+        e["id"]: _is_domain(e.get("tags"))
+        for e in client.list_resources("epics", project_id=project_id)
+        if e.get("id") in ids
+    }
+    for epic_id in ids - set(domains):
+        try:
+            domains[epic_id] = _is_domain((client.api.get(f"/epics/{epic_id}") or {}).get("tags"))
+        except TaigaAPIError as e:
+            if e.status_code not in (403, 404):
+                raise
+    return domains
+
+
+# Up to this many distinct parent stories are read one by one; more cost one
+# story list read of the project (measured on tetra, 592 stories: about 2.4 s
+# for the list, 0.2-0.7 s per single read).
+_STORY_READS_MAX = 5
+
+
+def _parent_stories(
+    client: TaigaClientWrapper,
+    project_id: int,
+    tasks: List[Dict[str, Any]],
+    known: Optional[Dict[Any, Dict[str, Any]]] = None,
+) -> Dict[Any, Dict[str, Any]]:
+    """{story id: story} for the tasks' parent stories: each distinct story read
+    once (``known`` ones not at all), or one list read when there are many. A
+    story that cannot be read is left out."""
+    stories = dict(known or {})
+    wanted = {t.get("user_story") for t in tasks if t.get("user_story") is not None} - set(stories)
+    if not wanted:
+        return stories
+    if len(wanted) > _STORY_READS_MAX:
+        for s in client.list_resources("user_stories", project_id=project_id):
+            if s.get("id") in wanted:
+                stories[s["id"]] = s
+        return stories
+    for story_id in wanted:
+        try:
+            stories[story_id] = client.api.get(f"/userstories/{story_id}")
+        except TaigaAPIError as e:
+            if e.status_code not in (403, 404):
+                raise
+    return stories
 
 
 def _task_summary(task: Dict[str, Any]) -> Dict[str, Any]:

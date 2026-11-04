@@ -111,7 +111,10 @@ def _guard_size(rows: List[Dict[str, Any]], entity_type: str) -> List[Dict[str, 
         "modified_before (ISO date or datetime; a date or a time without offset is UTC) "
         "keeps items last modified before that moment, e.g. 'In progress' untouched for a "
         "week. A filter that does not apply to the type is an error. Story, task and epic "
-        "rows carry modified_date, and blocked_note when blocked. A result over 50,000 "
+        "rows carry modified_date, and blocked_note when blocked. Story rows carry epics "
+        "[{ref, subject, domain}] (plus project for an epic of another project); task rows "
+        "carry their parent story's epics the same way ([] when the task has no story). "
+        "domain is true for an epic tagged `domain`, false for an initiative epic. A result over 50,000 "
         "characters is refused with an error giving the row count, a breakdown by status "
         "and the filters to narrow it; it is never cut. project accepts slug or ID."
     ),
@@ -168,6 +171,12 @@ def list_items(
             rows = [r for r in rows if bool(r.get("is_blocked")) == blocked]
         return _guard_size(rows, entity_type)
 
+    def unblocked_out(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # The blocked filter, applied to raw items BEFORE their epics are read.
+        if blocked is None:
+            return items
+        return [i for i in items if bool(i.get("is_blocked")) == blocked]
+
     def do_list():
         proj = resolve._resolve_project(client, project)
         project_id = proj["id"]
@@ -193,6 +202,7 @@ def list_items(
             epics = client.list_resources("epics", project_id=project_id, **filters)
             return keep([resolve._epic_summary(e) for e in epics])
 
+        parents: Dict[Any, Dict[str, Any]] = {}
         if entity_type == "task":
             if status is not None:
                 filters["status"] = resolve._resolve_statuses(
@@ -207,6 +217,7 @@ def list_items(
                 if not parent:
                     raise ValueError(f"User story #{story} not found in '{proj['slug']}'.")
                 filters["user_story"] = parent["id"]
+                parents[parent["id"]] = parent
             if closed is not None:
                 filters["status__is_closed"] = closed
         else:
@@ -225,10 +236,21 @@ def list_items(
             filters["modified_date__lt"] = before.isoformat()
 
         if entity_type == "task":
-            tasks = client.list_resources("tasks", project_id=project_id, **filters)
-            return keep([resolve._task_summary(t) for t in tasks])
-        stories = client.list_resources("user_stories", project_id=project_id, **filters)
-        return keep([resolve._story_summary(s) for s in stories])
+            tasks = unblocked_out(client.list_resources("tasks", project_id=project_id, **filters))
+            parents = resolve._parent_stories(client, project_id, tasks, parents)
+            domains = resolve._epic_domains(client, project_id, list(parents.values()))
+            rows = []
+            for t in tasks:
+                row = resolve._task_summary(t)
+                parent = parents.get(t.get("user_story"))
+                row["epics"] = resolve._epic_links(parent, domains) if parent else []
+                rows.append(row)
+            return keep(rows)
+        stories = unblocked_out(
+            client.list_resources("user_stories", project_id=project_id, **filters)
+        )
+        domains = resolve._epic_domains(client, project_id, stories)
+        return keep([resolve._story_summary(s, domains) for s in stories])
 
     return core._execute_taiga_operation("list_items", do_list, f"{entity_type} list in {project}")
 
