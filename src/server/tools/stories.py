@@ -162,6 +162,7 @@ def create_story(
         "epic REPLACES the story's epic links: epic=N unlinks it from every epic it is in, then "
         "links it to epic #N; epic=0 unlinks it from all epics. To add one epic and keep the "
         "others, use link_to_epic. The result's epics_before lists the links that were replaced. "
+        + resolve._BLOCKED_HELP
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -181,11 +182,13 @@ def update_story(
     epic: Optional[int] = None,
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
+    blocked_note: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolve._check_description_args(
         description, description_edits, description_append, description_prepend
     )
+    blocked_fields = resolve._blocked_payload(blocked, blocked_note)
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -222,8 +225,7 @@ def update_story(
             payload["milestone"] = milestone["id"]
         if tags is not None:
             payload["tags"] = tags
-        if blocked is not None:
-            payload["is_blocked"] = blocked
+        payload.update(blocked_fields)
 
         epic_changed = False
         # Only the body fields gate the "no-op" check; epic relinking is a
@@ -272,7 +274,7 @@ def update_story(
                     "The story's epic links may be partly changed."
                 )
 
-        summary = resolve._story_summary(result)
+        summary = resolve._blocked_result(resolve._story_summary(result), result)
         if epic is not None:
             summary["epics_before"] = resolve._epic_links(current)
         if epic_error:

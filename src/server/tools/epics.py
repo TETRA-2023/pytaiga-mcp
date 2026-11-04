@@ -188,6 +188,7 @@ def create_epic(
         "change. status and assignee are resolved by name; color is a hex string "
         "(e.g. '#A5694F'); tags replaces the epic's tags. Linking stories is not done "
         "here: use create_epic(story_refs=...) or update_story(epic=...). "
+        + resolve._BLOCKED_HELP
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -206,11 +207,13 @@ def update_epic(
     color: Optional[str] = None,
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
+    blocked_note: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolve._check_description_args(
         description, description_edits, description_append, description_prepend
     )
+    blocked_fields = resolve._blocked_payload(blocked, blocked_note)
     fields = (
         subject,
         description,
@@ -222,6 +225,7 @@ def update_epic(
         color,
         tags,
         blocked,
+        blocked_note,
     )
     if all(v is None for v in fields):
         raise ValueError("No fields to update were provided.")
@@ -260,11 +264,10 @@ def update_epic(
             payload["color"] = color
         if tags is not None:
             payload["tags"] = tags
-        if blocked is not None:
-            payload["is_blocked"] = blocked
+        payload.update(blocked_fields)
 
         result = resolve._patch_versioned(client, f"/epics/{current['id']}", payload)
-        summary = resolve._epic_summary(result)
+        summary = resolve._blocked_result(resolve._epic_summary(result), result)
         if description_change is not None:
             summary["description_change"] = {**description_change, "version": result.get("version")}
         return summary
