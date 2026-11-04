@@ -347,6 +347,48 @@ _DESCRIPTION_EDITS_HELP = (
 )
 
 
+_BLOCKED_HELP = (
+    "blocked sets is_blocked; blocked_note says why (on whom or what the item waits). "
+    "A non-empty blocked_note blocks the item too (blocked may be omitted); "
+    "blocked=false with a non-empty blocked_note is refused. Unblocking empties the note "
+    "(Taiga does it). blocked_note='' clears the note and keeps the item blocked. "
+    "The result returns is_blocked and blocked_note. "
+)
+
+
+def _blocked_payload(blocked: Optional[bool], blocked_note: Optional[str]) -> Dict[str, Any]:
+    """The is_blocked/blocked_note PATCH fields; refuses a contradiction before any call.
+
+    Taiga drops a note sent to an unblocked item without a word, and empties the
+    note when the item is unblocked (both verified live, 2026-11-04). So a
+    non-empty note blocks the item, and a note with blocked=False is refused
+    rather than lost.
+    """
+    if blocked_note is not None and not isinstance(blocked_note, str):
+        raise ValueError("blocked_note must be a string.")
+    note = blocked_note.strip() if blocked_note is not None else None
+    if note and blocked is False:
+        raise ValueError(
+            "blocked=false with a blocked_note: Taiga empties the note of an unblocked "
+            "item. Omit blocked_note to unblock, or set blocked=true."
+        )
+    payload: Dict[str, Any] = {}
+    if blocked is not None:
+        payload["is_blocked"] = blocked
+    if blocked_note is not None:
+        payload["blocked_note"] = note
+        if note:
+            payload["is_blocked"] = True
+    return payload
+
+
+def _blocked_result(summary: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    """An update result always states is_blocked and blocked_note ('' when none)."""
+    summary["is_blocked"] = bool(result.get("is_blocked"))
+    summary["blocked_note"] = result.get("blocked_note") or ""
+    return summary
+
+
 def _check_description_args(
     description: Optional[str],
     edits: Optional[List[Dict[str, str]]],

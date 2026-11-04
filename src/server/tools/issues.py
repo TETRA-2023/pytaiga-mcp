@@ -137,6 +137,7 @@ def create_issue(
     description=(
         "Update an issue by ref number. All fields optional. "
         "status, priority, severity, type, and assignee are resolved by name. "
+        + resolve._BLOCKED_HELP
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -156,12 +157,14 @@ def update_issue(
     severity: Optional[str] = None,
     issue_type: Optional[str] = None,
     blocked: Optional[bool] = None,
+    blocked_note: Optional[str] = None,
     tags: Optional[List[str]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolve._check_description_args(
         description, description_edits, description_append, description_prepend
     )
+    blocked_fields = resolve._blocked_payload(blocked, blocked_note)
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -205,8 +208,7 @@ def update_issue(
             payload["type"] = resolve._resolve_issue_attribute(
                 client, project_id, "type", issue_type, actual_session_id
             )
-        if blocked is not None:
-            payload["is_blocked"] = blocked
+        payload.update(blocked_fields)
         if tags is not None:
             payload["tags"] = tags
 
@@ -232,9 +234,9 @@ def update_issue(
             )
             or result.get("type"),
             "assignee": (result.get("assigned_to_extra_info") or {}).get("full_name_display"),
-            "is_blocked": result.get("is_blocked"),
             "is_closed": result.get("is_closed", False),
         }
+        resolve._blocked_result(summary, result)
         if description_change is not None:
             summary["description_change"] = {**description_change, "version": result.get("version")}
         return summary

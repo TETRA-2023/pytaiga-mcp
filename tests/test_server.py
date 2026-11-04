@@ -5765,3 +5765,69 @@ def test_readme_tool_table_matches_registered_tools():
         "missing_from_readme": sorted(registered - documented),
         "not_a_tool": sorted(documented - registered),
     }
+
+
+# ---------------------------------------------------------------------------
+# blocked_note on the four update tools
+# ---------------------------------------------------------------------------
+
+_BLOCKED_TOOLS = [
+    ("update_task", "tasks"),
+    ("update_story", "userstories"),
+    ("update_issue", "issues"),
+    ("update_epic", "epics"),
+]
+
+
+@pytest.mark.parametrize("tool,segment", _BLOCKED_TOOLS)
+class TestBlockedNote:
+    def _route(self, mock_client, segment, patched):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        mock_client.list_resources.return_value = []
+        route(
+            mock_client,
+            get={f"/{segment}/by_ref": {"id": 300, "ref": 9, "version": 4}},
+            patch={f"/{segment}/300": {"ref": 9, "version": 5, **patched}},
+        )
+
+    def test_note_blocks_the_item_and_is_returned(self, session, mock_client, tool, segment):
+        # Taiga drops a note sent to an unblocked item: the note must block it.
+        self._route(mock_client, segment, {"is_blocked": True, "blocked_note": "waits on tech@"})
+        result = getattr(wf, tool)("p", 9, blocked_note=" waits on tech@ ", session_id=session)
+        assert sent(mock_client, "patch", f"/{segment}/300") == [
+            {"version": 4, "is_blocked": True, "blocked_note": "waits on tech@"}
+        ]
+        assert result["is_blocked"] is True
+        assert result["blocked_note"] == "waits on tech@"
+
+    def test_unblock_returns_empty_note(self, session, mock_client, tool, segment):
+        # Taiga empties the note on unblock (verified live); only is_blocked is sent.
+        self._route(mock_client, segment, {"is_blocked": False, "blocked_note": ""})
+        result = getattr(wf, tool)("p", 9, blocked=False, session_id=session)
+        assert sent(mock_client, "patch", f"/{segment}/300") == [
+            {"version": 4, "is_blocked": False}
+        ]
+        assert result["is_blocked"] is False
+        assert result["blocked_note"] == ""
+
+    def test_empty_note_clears_it_and_keeps_the_block(self, session, mock_client, tool, segment):
+        self._route(mock_client, segment, {"is_blocked": True, "blocked_note": ""})
+        result = getattr(wf, tool)("p", 9, blocked_note="", session_id=session)
+        assert sent(mock_client, "patch", f"/{segment}/300") == [{"version": 4, "blocked_note": ""}]
+        assert result["is_blocked"] is True
+        assert result["blocked_note"] == ""
+
+    def test_note_with_blocked_false_refused_before_any_call(
+        self, session, mock_client, tool, segment
+    ):
+        self._route(mock_client, segment, {})
+        with pytest.raises(ValueError, match="blocked=false with a blocked_note"):
+            getattr(wf, tool)("p", 9, blocked=False, blocked_note="x", session_id=session)
+        mock_client.api.get.assert_not_called()
+        mock_client.api.patch.assert_not_called()
+
+    def test_result_states_note_even_when_untouched(self, session, mock_client, tool, segment):
+        self._route(mock_client, segment, {"subject": "S", "is_blocked": True, "blocked_note": "n"})
+        result = getattr(wf, tool)("p", 9, subject="S", session_id=session)
+        assert sent(mock_client, "patch", f"/{segment}/300") == [{"version": 4, "subject": "S"}]
+        assert (result["is_blocked"], result["blocked_note"]) == (True, "n")

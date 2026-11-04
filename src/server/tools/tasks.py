@@ -147,6 +147,7 @@ def create_task(
         "status, assignee, and sprint are resolved by name. story_ref reparents the task to a "
         "different user story. sprint accepts a name or ID; tasks can have a milestone "
         "independent of their parent story. "
+        + resolve._BLOCKED_HELP
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -165,12 +166,14 @@ def update_task(
     sprint: Optional[Union[str, int]] = None,
     story_ref: Optional[int] = None,
     blocked: Optional[bool] = None,
+    blocked_note: Optional[str] = None,
     tags: Optional[List[str]] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolve._check_description_args(
         description, description_edits, description_append, description_prepend
     )
+    blocked_fields = resolve._blocked_payload(blocked, blocked_note)
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -210,8 +213,7 @@ def update_task(
             if not new_story:
                 raise ValueError(f"User story #{story_ref} not found in project '{proj['slug']}'.")
             payload["user_story"] = new_story["id"]
-        if blocked is not None:
-            payload["is_blocked"] = blocked
+        payload.update(blocked_fields)
         if tags is not None:
             payload["tags"] = tags
 
@@ -219,7 +221,7 @@ def update_task(
             raise ValueError("No fields to update were provided.")
 
         result = resolve._patch_versioned(client, f"/tasks/{current['id']}", payload)
-        summary = resolve._task_summary(result)
+        summary = resolve._blocked_result(resolve._task_summary(result), result)
         if description_change is not None:
             summary["description_change"] = {**description_change, "version": result.get("version")}
         return summary
