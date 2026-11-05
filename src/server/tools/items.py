@@ -114,7 +114,12 @@ def _guard_size(rows: List[Dict[str, Any]], entity_type: str) -> List[Dict[str, 
         "rows carry modified_date, and blocked_note when blocked. Story rows carry epics "
         "[{ref, subject, domain}] (plus project for an epic of another project); task rows "
         "carry their parent story's epics the same way ([] when the task has no story). "
-        "domain is true for an epic tagged `domain`, false for an initiative epic. A result over 50,000 "
+        "domain is true for an epic tagged `domain`, false for an initiative epic. "
+        "history=True (story and task only) adds status_since (when the current status "
+        "was entered; the creation date if it never changed) and blocked_since (when the "
+        "item was last blocked; null when not blocked), read from each row's history: one "
+        "read per row, so it is refused above 100 rows (about 4 s for 100); filter first, "
+        "e.g. status='Needs Info' or blocked=true. A result over 50,000 "
         "characters is refused with an error giving the row count, a breakdown by status "
         "and the filters to narrow it; it is never cut. project accepts slug or ID."
     ),
@@ -131,12 +136,15 @@ def list_items(
     closed: Optional[bool] = None,
     blocked: Optional[bool] = None,
     modified_before: Optional[str] = None,
+    history: bool = False,
     session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     if entity_type not in _LIST_FILTERS:
         raise ValueError(
             f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_LIST_FILTERS)}."
         )
+    if history and entity_type not in ("story", "task"):
+        raise ValueError("history=True applies to entity_type 'story' or 'task' only.")
     given = {
         name
         for name, value in (
@@ -169,6 +177,24 @@ def list_items(
     def keep(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if blocked is not None:
             rows = [r for r in rows if bool(r.get("is_blocked")) == blocked]
+        return _guard_size(rows, entity_type)
+
+    def dated(segment: str, items: List[Dict[str, Any]], rows: List[Dict[str, Any]]):
+        # rows[i] is items[i]'s row, both already filtered and size-checked.
+        if not history:
+            return rows
+        if len(items) > resolve._HISTORY_ROWS_MAX:
+            by_status = Counter(str(r.get("status")) for r in rows)
+            breakdown = ", ".join(f"{name} {n}" for name, n in by_status.most_common())
+            raise ValueError(
+                f"list_items: history=True needs one history read per row and {len(rows)} "
+                f"{entity_type} rows match, over the {resolve._HISTORY_ROWS_MAX}-row limit "
+                f"for history; nothing returned. By status: {breakdown}. Narrow with: "
+                f"{', '.join(sorted(_LIST_FILTERS[entity_type]))}, or drop history=True."
+            )
+        dates = resolve._history_dates(client, segment, items)
+        for item, row in zip(items, rows):
+            row.update(dates[item["id"]])
         return _guard_size(rows, entity_type)
 
     def unblocked_out(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -245,12 +271,14 @@ def list_items(
                 parent = parents.get(t.get("user_story"))
                 row["epics"] = resolve._epic_links(parent, domains) if parent else []
                 rows.append(row)
-            return keep(rows)
+            return dated("tasks", tasks, keep(rows))
         stories = unblocked_out(
             client.list_resources("user_stories", project_id=project_id, **filters)
         )
         domains = resolve._epic_domains(client, project_id, stories)
-        return keep([resolve._story_summary(s, domains) for s in stories])
+        return dated(
+            "userstories", stories, keep([resolve._story_summary(s, domains) for s in stories])
+        )
 
     return core._execute_taiga_operation("list_items", do_list, f"{entity_type} list in {project}")
 

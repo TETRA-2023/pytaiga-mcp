@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from src.server import app, core, resolve
-from src.taiga_client import _NO_PAGINATION_HEADERS, TaigaAuthenticationError, TaigaNotFoundError
+from src.taiga_client import TaigaAuthenticationError, TaigaNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -111,13 +111,6 @@ def _comment_action(
         raise ValueError(f"Comment {comment_id} not found on {label} (see list_comments).")
 
 
-def _fetch_history(client, hist: str, item_id: int) -> List[Dict[str, Any]]:
-    """Full history of an item. /history is paginated (30 per page) like any list
-    endpoint, so without the header an item with a long history loses its oldest
-    entries, comments included."""
-    return client.api.get(f"/history/{hist}/{item_id}", headers=_NO_PAGINATION_HEADERS) or []
-
-
 def _run_comment_action(
     tool: str,
     action: str,
@@ -165,7 +158,7 @@ def list_comments(
 
     def do_list():
         _, item, hist = _resolve_item(client, project, entity_type, ref)
-        history = _fetch_history(client, hist, item["id"])
+        history = resolve._fetch_history(client, hist, item["id"])
         comments = [
             _comment_summary(e)
             for e in history
@@ -290,7 +283,7 @@ def get_history(
 
     def do_history():
         _, item, hist = _resolve_item(client, project, entity_type, ref)
-        history = _fetch_history(client, hist, item["id"])
+        history = resolve._fetch_history(client, hist, item["id"])
         entries = []
         for e in history:
             entry: Dict[str, Any] = {

@@ -454,6 +454,19 @@ def _actor_matcher(client, project_id: int, actors: List[str], session_id: str):
     return matches, hits
 
 
+_COMMENT_HEAD_CHARS = 80
+
+
+def _comment_head(comment: str) -> str:
+    """First non-empty line of a comment, at most _COMMENT_HEAD_CHARS characters:
+    a closing comment's `Outcome:` line. Kept when the size guard drops
+    last_comment."""
+    for line in comment.splitlines():
+        if line.strip():
+            return line.strip()[:_COMMENT_HEAD_CHARS]
+    return ""
+
+
 def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One row per item that moved, from event summaries (newest first)."""
     rows: Dict[Any, Dict[str, Any]] = {}
@@ -485,6 +498,7 @@ def _ticket_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # Already shortened by _summarize_timeline_event unless full_comments.
             row["comments"] += 1
             row["last_comment"] = event["comment"]
+            row["last_comment_head"] = _comment_head(event["comment"])
             if event.get("comment_truncated"):
                 row["last_comment_truncated"] = True
             else:
@@ -623,7 +637,8 @@ def _fit(result: Dict[str, Any], load_stories=lambda refs: [], load_domains=None
         "only (without since, the latest `limit` events are read, then filtered). "
         "group_by='ticket': one row per item instead of events — entity, ref, subject, "
         "status_change {from (first), to (last)} over the window, events, comments, actors, "
-        "last_event, last_comment (200 characters); a user_story row also carries "
+        "last_event, last_comment (200 characters) and last_comment_head (its first "
+        "non-empty line, 80 characters, e.g. a closing's `Outcome:` line); a user_story row also carries "
         "epic_refs (its story's epics, [] when in none), listed once in a top-level "
         "epics [{ref, subject, domain}] (plus project for an epic of another project; "
         "domain is true for an epic tagged `domain`, false for an initiative epic); a task "
@@ -634,8 +649,8 @@ def _fit(result: Dict[str, Any], load_stories=lambda refs: [], load_domains=None
         "full_comments=True returns each closing comment in full; unmatched_status_to "
         "lists names no row reached. "
         "Size guard: a result over 50,000 characters is returned as ticket rows "
-        "(summarised=true); rows that still don't fit lose last_comment, rows with no "
-        "status move first (comments_dropped=true), then subjects are cut to 60 characters "
+        "(summarised=true); rows that still don't fit lose last_comment (last_comment_head "
+        "stays), rows with no status move first (comments_dropped=true), then subjects are cut to 60 characters "
         "(subjects_shortened=true), then rows go — those with no status move and no comment "
         "first, then the oldest (too_large=true, tickets_omitted; active_omitted = how many "
         "of them moved or had a comment, 0 if only edit-only rows were cut). "
