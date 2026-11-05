@@ -24,7 +24,7 @@ An [MCP](https://modelcontextprotocol.io/) server that lets AI assistants work i
 |---|---|
 | **Session** | `get_default_session`, `login`, `logout`, `session_status`, `get_current_user` |
 | **Projects** | `list_projects`, `get_project_overview`, `search`, `get_team_workload`, `get_project_health`, `get_project_activity` |
-| **Stories** | `get_story`, `browse_backlog` (stories in no sprint), `create_story`, `update_story`, `set_story_status` |
+| **Stories** | `get_story` (with every task of the story, closed ones included, and counts by status; tasks=False for the counts only; over 50k characters it is refused, never cut), `browse_backlog` (stories in no sprint), `create_story`, `update_story`, `set_story_status` |
 | **Tasks** | `get_task`, `create_task`, `update_task`, `break_down_story`, `set_task_status` |
 | **Issues** | `get_issue`, `create_issue`, `update_issue` |
 | **Sprints** | `get_sprint_board`, `plan_sprint`, `move_to_sprint`, `close_sprint` |

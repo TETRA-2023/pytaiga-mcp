@@ -14,17 +14,26 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# structured_output=False: with an output schema FastMCP sends the result twice
+# (text block + structuredContent); the size guard measures the text block.
 @app.tool(
     "get_story",
+    structured_output=False,
     description=(
         "Read a single user story by its ref number. Returns resolved human fields "
         "(status name, is_closed, assignee, sprint, tags, epics) plus the full description "
-        "— no mutation. project accepts slug or ID."
+        "and the story's tasks — no mutation. tasks [{ref, subject, status, is_closed, "
+        "assignee}] lists EVERY task of the story, closed ones included, in the story's "
+        "task order, with task_count and tasks_by_status; read it before adding tasks so "
+        "none is created twice. tasks=False leaves the task rows out (the counts stay). "
+        "A result over 50,000 characters is refused with an error giving the task count "
+        "and description size; it is never cut. project accepts slug or ID."
     ),
 )
 def get_story(
     project: Union[str, int],
     ref: int,
+    tasks: bool = True,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
@@ -41,6 +50,38 @@ def get_story(
         result = resolve._story_summary(story)
         result["description"] = story.get("description")
         result["version"] = story.get("version")
+
+        # ONE task list read; no status filter, so closed tasks are listed too.
+        # Taiga orders a story's tasks by us_order (ties: ref), as its story page does.
+        story_tasks = client.list_resources("tasks", project_id=proj["id"], user_story=story["id"])
+        story_tasks = sorted(
+            story_tasks,
+            key=lambda t: (t.get("us_order") is None, t.get("us_order") or 0, t.get("ref") or 0),
+        )
+        rows = []
+        by_status: Dict[str, int] = {}
+        for t in story_tasks:
+            summary = resolve._task_summary(t)
+            rows.append(
+                {k: summary[k] for k in ("ref", "subject", "status", "is_closed", "assignee")}
+            )
+            name = summary.get("status") or "Unknown"
+            by_status[name] = by_status.get(name, 0) + 1
+        result["task_count"] = len(rows)
+        result["tasks_by_status"] = by_status
+        if tasks:
+            result["tasks"] = rows
+
+        size = core._text_size(result)
+        if size > core._MAX_RESULT_CHARS:
+            description = story.get("description") or ""
+            raise ValueError(
+                f"get_story: story #{ref} is {size:,} characters (description "
+                f"{len(description):,} characters, {len(rows)} tasks), over the "
+                f"{core._MAX_RESULT_CHARS:,}-character limit; nothing returned. Pass "
+                f"tasks=False, and list the tasks with list_items(entity_type='task', "
+                f"story={ref}) (filters: status, closed)."
+            )
         return result
 
     return core._execute_taiga_operation("get_story", do_get, f"#{ref} in {project}")

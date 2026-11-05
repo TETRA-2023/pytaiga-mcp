@@ -2640,6 +2640,7 @@ class TestGetStory:
             mock_client,
             get={
                 "/userstories/by_ref": {
+                    "id": 50,
                     "ref": 3,
                     "subject": "Story A",
                     "status_extra_info": {"name": "In Progress"},
@@ -2659,6 +2660,69 @@ class TestGetStory:
         route(mock_client, get={"/userstories/by_ref": None})
         with pytest.raises(ValueError, match="not found"):
             wf.get_story("p", 99, session_id=session)
+
+    def _tasks_setup(self, mock_client, tasks, description="D"):
+        mock_client.api.get.return_value = {"id": 1, "slug": "p", "name": "P"}
+        route(
+            mock_client,
+            get={"/userstories/by_ref": {"id": 50, "ref": 3, "description": description}},
+        )
+        mock_client.list_resources.return_value = tasks
+
+    @staticmethod
+    def _task(ref, us_order, status, closed=False, assignee=None):
+        return {
+            "ref": ref,
+            "us_order": us_order,
+            "subject": f"T{ref}",
+            "status_extra_info": {"name": status, "is_closed": closed},
+            "is_closed": closed,
+            "assigned_to_extra_info": {"full_name_display": assignee} if assignee else None,
+            "is_blocked": False,
+        }
+
+    def test_lists_every_task_in_story_order_closed_included(self, session, mock_client):
+        self._tasks_setup(
+            mock_client,
+            [
+                self._task(2257, 3, "Closed", closed=True),
+                self._task(2254, 1, "In progress", assignee="Alice"),
+                self._task(3306, None, "New"),
+                self._task(2255, 2, "Closed", closed=True),
+            ],
+        )
+        result = wf.get_story("p", 3, session_id=session)
+        assert [t["ref"] for t in result["tasks"]] == [2254, 2255, 2257, 3306]
+        assert result["tasks"][0] == {
+            "ref": 2254,
+            "subject": "T2254",
+            "status": "In progress",
+            "is_closed": False,
+            "assignee": "Alice",
+        }
+        assert result["task_count"] == 4
+        assert result["tasks_by_status"] == {"In progress": 1, "Closed": 2, "New": 1}
+        # One task list read for the story, with no status filter (closed tasks count).
+        mock_client.list_resources.assert_called_once_with("tasks", project_id=1, user_story=50)
+
+    def test_tasks_false_keeps_the_counts(self, session, mock_client):
+        self._tasks_setup(mock_client, [self._task(1, 1, "New")])
+        result = wf.get_story("p", 3, tasks=False, session_id=session)
+        assert "tasks" not in result
+        assert (result["task_count"], result["tasks_by_status"]) == (1, {"New": 1})
+
+    def test_story_without_tasks(self, session, mock_client):
+        self._tasks_setup(mock_client, [])
+        result = wf.get_story("p", 3, session_id=session)
+        assert (result["tasks"], result["task_count"], result["tasks_by_status"]) == ([], 0, {})
+
+    def test_oversized_result_refused_with_the_count(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(core, "_MAX_RESULT_CHARS", 2000)
+        self._tasks_setup(mock_client, [self._task(i, i, "New") for i in range(40)])
+        with pytest.raises(ValueError, match=r"40 tasks.*tasks=False"):
+            wf.get_story("p", 3, session_id=session)
+        result = wf.get_story("p", 3, tasks=False, session_id=session)
+        assert result["task_count"] == 40
 
 
 class TestGetTask:
