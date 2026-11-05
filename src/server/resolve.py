@@ -2,11 +2,13 @@
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.server import core
 from src.taiga_client import (
+    _NO_PAGINATION_HEADERS,
     TaigaAPIError,
     TaigaClientWrapper,
     TaigaConcurrencyError,
@@ -700,6 +702,59 @@ def _epic_domains(
 # story list read of the project (measured on tetra, 592 stories: about 2.4 s
 # for the list, 0.2-0.7 s per single read).
 _STORY_READS_MAX = 5
+
+# History segment of each list type (/history/<segment>/<id>).
+_HISTORY_SEGMENTS = {"tasks": "task", "userstories": "userstory", "user_stories": "userstory"}
+# history=True reads one history per row: at most this many rows, read by
+# _HISTORY_WORKERS threads (measured on tetra 2026-11-05: 463 task histories
+# take 54 s one by one, 17.5 s on 4 threads, no faster on 6, 8 or 16).
+_HISTORY_ROWS_MAX = 100
+_HISTORY_WORKERS = 4
+
+
+def _fetch_history(client, hist: str, item_id: int) -> List[Dict[str, Any]]:
+    """Full history of an item. /history is paginated (30 per page) like any list
+    endpoint, so without the header an item with a long history loses its oldest
+    entries, comments included."""
+    return client.api.get(f"/history/{hist}/{item_id}", headers=_NO_PAGINATION_HEADERS) or []
+
+
+def _since_dates(item: Dict[str, Any], history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """{status_since, blocked_since} of an item from its history (any order).
+    status_since: the newest change of status, else the item's creation.
+    blocked_since: None unless blocked now; the newest change of is_blocked to
+    true, else the creation (created blocked)."""
+    created = item.get("created_date")
+
+    def newest(test) -> Optional[str]:
+        moments = [
+            e.get("created_at")
+            for e in history
+            if e.get("created_at") and test((e.get("values_diff") or {}))
+        ]
+        return max(moments) if moments else None
+
+    status_since = newest(lambda d: "status" in d) or created
+    blocked_since = None
+    if item.get("is_blocked"):
+
+        def to_blocked(d: Dict[str, Any]) -> bool:
+            change = d.get("is_blocked")
+            return isinstance(change, (list, tuple)) and len(change) == 2 and bool(change[1])
+
+        blocked_since = newest(to_blocked) or created
+    return {"status_since": status_since, "blocked_since": blocked_since}
+
+
+def _history_dates(client, segment: str, items: List[Dict[str, Any]]) -> Dict[Any, Dict[str, Any]]:
+    """{item id: _since_dates} for items of one list type, one history read each,
+    _HISTORY_WORKERS at a time."""
+    hist = _HISTORY_SEGMENTS[segment]
+    if not items:
+        return {}
+    with ThreadPoolExecutor(min(_HISTORY_WORKERS, len(items))) as pool:
+        histories = list(pool.map(lambda i: _fetch_history(client, hist, i["id"]), items))
+    return {i["id"]: _since_dates(i, h) for i, h in zip(items, histories)}
 
 
 def _parent_stories(

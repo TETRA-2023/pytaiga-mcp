@@ -1997,6 +1997,7 @@ class TestGetProjectActivity:
             "actors": ["Alice A", "Bob B"],
             "status_change": {"from": "New", "to": "Done"},
             "last_comment": "started",
+            "last_comment_head": "started",
             "last_event": "2026-11-02T12:00:00Z",
         }
         assert second["ref"] == 8 and "status_change" not in second
@@ -2191,6 +2192,16 @@ class TestGetProjectActivity:
         rows = {r["ref"]: r for r in result["tickets"]}
         assert result["comments_dropped"] is True
         assert rows[7]["last_comment"] == "R" * 150 and "last_comment" not in rows[8]
+        # The head of a dropped comment stays: the Daily reads it to skip a superseded closing.
+        assert rows[8]["last_comment_head"] == "E" * 80
+
+    def test_comment_head_is_the_first_non_empty_line(self):
+        head = projects_tools._comment_head
+        assert (
+            head("\n  Outcome: superseded by #12  \nDecision: none") == "Outcome: superseded by #12"
+        )
+        assert head("x" * 300) == "x" * 80
+        assert head("") == "" and head("\n \n") == ""
 
     def test_entity_filter(self, session, mock_client):
         task = self._story_event("2026-11-02T09:00:00Z", 2)
@@ -6029,3 +6040,121 @@ class TestListItemsEpics:
         route(mock_client, get={"/epics/999": _api_error(TaigaNotFoundError, 404, "Not found.")})
         rows = wf.list_items("p", session_id=session)
         assert rows[0]["epics"] == [{"ref": 5, "subject": "Other", "project": "o"}]
+
+
+class TestListItemsHistory:
+    """list_items(history=True): status_since / blocked_since from each row's history."""
+
+    def _setup(self, mock_client, resource, items, histories):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.side_effect = lambda r, project_id=None, **kw: (
+            items if r == resource else []
+        )
+        hist = "task" if resource == "tasks" else "userstory"
+        route(mock_client, get={f"/history/{hist}/{i}": h for i, h in histories.items()})
+
+    def _history_reads(self, mock_client):
+        return sorted(
+            c.args[0]
+            for c in mock_client.api.get.call_args_list
+            if c.args[0].startswith("/history/")
+        )
+
+    def test_task_dates_from_history(self, session, mock_client):
+        tasks = [
+            # Needs Info since May, description edited today: dated by the status move.
+            {"id": 1, "ref": 1124, "created_date": "2026-05-14T12:53:58Z", "is_blocked": False},
+            # Blocked twice; the newest block counts. Status never changed.
+            {"id": 2, "ref": 428, "created_date": "2026-04-01T10:00:00Z", "is_blocked": True},
+            # Created blocked: no is_blocked change in the history.
+            {"id": 3, "ref": 9, "created_date": "2026-04-02T10:00:00Z", "is_blocked": True},
+        ]
+        histories = {
+            1: [
+                {"created_at": "2026-11-05T09:28:28Z", "values_diff": {"description_diff": "x"}},
+                {
+                    "created_at": "2026-05-14T12:54:03Z",
+                    "values_diff": {"status": ["New", "Needs Info"]},
+                },
+                {"created_at": "2026-05-14T12:53:58Z", "values_diff": {}},
+            ],
+            2: [
+                {
+                    "created_at": "2026-06-01T00:00:00Z",
+                    "values_diff": {"is_blocked": [False, True]},
+                },
+                {
+                    "created_at": "2026-05-01T00:00:00Z",
+                    "values_diff": {"is_blocked": [True, False]},
+                },
+                {
+                    "created_at": "2026-04-05T00:00:00Z",
+                    "values_diff": {"is_blocked": [False, True]},
+                },
+            ],
+            3: [],
+        }
+        self._setup(mock_client, "tasks", tasks, histories)
+        rows = {
+            r["ref"]: r
+            for r in wf.list_items("p", entity_type="task", history=True, session_id=session)
+        }
+        assert rows[1124]["status_since"] == "2026-05-14T12:54:03Z"
+        assert rows[1124]["blocked_since"] is None
+        assert rows[428]["status_since"] == "2026-04-01T10:00:00Z"
+        assert rows[428]["blocked_since"] == "2026-06-01T00:00:00Z"
+        assert rows[9]["blocked_since"] == "2026-04-02T10:00:00Z"
+        assert self._history_reads(mock_client) == [
+            "/history/task/1",
+            "/history/task/2",
+            "/history/task/3",
+        ]
+
+    def test_story_rows_read_the_userstory_history(self, session, mock_client):
+        stories = [
+            {"id": 5, "ref": 463, "created_date": "2026-04-24T00:00:00Z", "is_blocked": False}
+        ]
+        histories = {
+            5: [
+                {
+                    "created_at": "2026-09-29T13:52:27Z",
+                    "values_diff": {"status": ["Review", "On-Hold"]},
+                },
+                {
+                    "created_at": "2026-05-17T13:33:19Z",
+                    "values_diff": {"status": ["Ready", "Review"]},
+                },
+            ]
+        }
+        self._setup(mock_client, "user_stories", stories, histories)
+        (row,) = wf.list_items("p", history=True, session_id=session)
+        assert row["status_since"] == "2026-09-29T13:52:27Z" and row["blocked_since"] is None
+
+    def test_no_history_read_by_default(self, session, mock_client):
+        tasks = [{"id": 1, "ref": 1, "is_blocked": True}]
+        self._setup(mock_client, "tasks", tasks, {1: []})
+        (row,) = wf.list_items("p", entity_type="task", session_id=session)
+        assert "status_since" not in row and "blocked_since" not in row
+        assert self._history_reads(mock_client) == []
+
+    def test_history_only_for_rows_kept_by_blocked(self, session, mock_client):
+        tasks = [{"id": 1, "ref": 1, "is_blocked": True}, {"id": 2, "ref": 2, "is_blocked": False}]
+        self._setup(mock_client, "tasks", tasks, {1: [], 2: []})
+        rows = wf.list_items(
+            "p", entity_type="task", blocked=True, history=True, session_id=session
+        )
+        assert [r["ref"] for r in rows] == [1]
+        assert self._history_reads(mock_client) == ["/history/task/1"]
+
+    def test_too_many_rows_refused_before_any_history_read(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(wf_resolve, "_HISTORY_ROWS_MAX", 1)
+        tasks = [{"id": i, "ref": i, "status_extra_info": {"name": "New"}} for i in (1, 2)]
+        self._setup(mock_client, "tasks", tasks, {1: [], 2: []})
+        with pytest.raises(ValueError, match=r"2 task rows match, over the 1-row limit.*New 2"):
+            wf.list_items("p", entity_type="task", history=True, session_id=session)
+        assert self._history_reads(mock_client) == []
+
+    @pytest.mark.parametrize("entity_type", ["epic", "sprint"])
+    def test_history_refused_for_other_types(self, session, mock_client, entity_type):
+        with pytest.raises(ValueError, match="history=True applies"):
+            wf.list_items("p", entity_type=entity_type, history=True, session_id=session)
