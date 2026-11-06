@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from src import config
 from src.server import core
 from src.taiga_client import (
     _NO_PAGINATION_HEADERS,
@@ -843,3 +844,200 @@ def _issue_summary(
         "is_closed": _is_closed(issue),
         "tags": issue.get("tags", []),
     }
+
+
+# ---------------------------------------------------------------------------
+# Closing receipts (team rule, Outline "Taiga Project Management — Team
+# Guidelines" §6): a story moved to a closed status, or a task moved to a closed
+# status or Ready for test, needs a receipt comment first. Enforced here because
+# a skill read before a context compaction is not there when the ticket closes.
+# ---------------------------------------------------------------------------
+
+_STORY_RECEIPT_TEMPLATE = """\
+Outcome: <one line: the value the "so that" delivered, in the stakeholder's words>
+AC:
+  - [x] AC1 — <evidence: link or one-line check result>
+  - [⊘] AC2 — punted to US #NNN, <reason>
+Scope: <added X / dropped Y vs plan + reason, or "as planned">
+Artifacts: <canonical links>
+Next: <follow-up refs, or "none">"""
+
+_TASK_RECEIPT_TEMPLATE = """\
+Outcome: <one line: what we now know or shipped>
+Decision: <choice + the one reason that mattered, or "none">
+Artifact: <single canonical link: PR, Outline doc, commit, image tag>
+Next: <follow-up ref, or "none">"""
+
+_RECEIPT_TEMPLATES = {"story": _STORY_RECEIPT_TEMPLATE, "task": _TASK_RECEIPT_TEMPLATE}
+# Field label -> the line it must start; Artifact and Artifacts are accepted
+# for both (the label, not its plural, is what a reader looks for).
+_RECEIPT_FIELDS = {
+    "story": (
+        ("Outcome", "Outcome"),
+        ("AC", "AC"),
+        ("Scope", "Scope"),
+        ("Artifacts?", "Artifacts"),
+        ("Next", "Next"),
+    ),
+    "task": (
+        ("Outcome", "Outcome"),
+        ("Decision", "Decision"),
+        ("Artifacts?", "Artifact"),
+        ("Next", "Next"),
+    ),
+}
+_RECEIPT_HISTORY = {"story": "userstory", "task": "task"}
+
+
+def _field_re(field: str) -> "re.Pattern[str]":
+    # "Outcome:", "**Outcome:**" and "**Outcome**:" all count; "Outcomes:" does not.
+    return re.compile(rf"^\s*[*_]*{field}[*_]*\s*:", re.IGNORECASE)
+
+
+_RECEIPT_HELP = (
+    "Closing receipt (team rule): moving a story to a closed status (Done, Cancelled, "
+    "Archived…), or a task to a closed status or 'Ready for test', is refused unless a "
+    "comment posted since the item last left a closed status has 'Outcome:' as its first "
+    "line and the other receipt lines (story: AC:, Scope:, Artifacts:, Next:; task: "
+    "Decision:, Artifact:, Next:). The refusal gives the template; post it with "
+    "add_comment, then retry. receipt_override='<reason>' closes without a receipt (a "
+    "superseded or cancelled ticket, a bulk cleanup): the reason is posted as a comment in "
+    "the same write and returned in the result. "
+)
+
+
+def _receipt_needed(entity_type: str, status: Dict[str, Any]) -> bool:
+    if status.get("is_closed"):
+        return True
+    return entity_type == "task" and safe_lower(status.get("name")) == "ready for test"
+
+
+def _moment(value: Any) -> datetime:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _receipt_missing(entity_type: str, text: str) -> Optional[List[str]]:
+    """None when text is not a receipt (first non-empty line is not Outcome:),
+    else the receipt lines it lacks ([] = complete)."""
+    lines = [ln for ln in (text or "").replace("\r\n", "\n").split("\n") if ln.strip()]
+    if not lines or not _field_re("Outcome").match(lines[0]):
+        return None
+    return [
+        f"{label}:"
+        for pattern, label in _RECEIPT_FIELDS[entity_type][1:]
+        if not any(_field_re(pattern).match(ln) for ln in lines[1:])
+    ]
+
+
+def _check_closing_receipt(
+    client: TaigaClientWrapper,
+    project_id: int,
+    entity_type: str,
+    item: Dict[str, Any],
+    target_status_id: Optional[int],
+    session_id: str,
+    override: Optional[str],
+) -> Optional[str]:
+    """Refuse (ValueError) a move into a receipt status without a receipt.
+
+    entity_type is 'story' or 'task'. Returns the comment to send in the same PATCH
+    as the status when receipt_override is used, else None. Reads the item's history
+    (one GET) only when the move needs a receipt: a move from one closed status to
+    another (Done -> Archived) or to the item's current status needs none.
+    """
+    if override is not None and not str(override).strip():
+        raise ValueError("receipt_override must give the reason for closing without a receipt.")
+    if not config.settings.closing_receipts:
+        return None
+    statuses = _status_map(client, project_id, entity_type, session_id)
+    target = statuses.get(target_status_id) or {}
+    current = statuses.get(item.get("status")) or {}
+    needed = (
+        target_status_id is not None
+        and target_status_id != item.get("status")
+        and not current.get("is_closed")
+        and _receipt_needed(entity_type, target)
+    )
+    if not needed:
+        if override is not None:
+            raise ValueError(
+                "receipt_override applies only to a move into a status that needs a closing "
+                "receipt; this call makes no such move. Nothing was written."
+            )
+        return None
+    if override is not None:
+        return f"Closing without receipt: {str(override).strip()}"
+
+    history = _fetch_history(client, _RECEIPT_HISTORY[entity_type], item["id"])
+    closed_names = {safe_lower(s.get("name")) for s in statuses.values() if s.get("is_closed")}
+    closed_ids = {sid for sid, s in statuses.items() if s.get("is_closed")}
+
+    def is_closed(value: Any) -> bool:
+        return value in closed_ids or safe_lower(value) in closed_names
+
+    # A receipt counts only if posted after the item last LEFT a closed status:
+    # reopen then reclose needs a new one.
+    reopened = None
+    for e in history:
+        change = (e.get("values_diff") or {}).get("status")
+        if isinstance(change, (list, tuple)) and len(change) == 2:
+            if is_closed(change[0]) and not is_closed(change[1]):
+                moment = _moment(e.get("created_at"))
+                reopened = moment if reopened is None or moment > reopened else reopened
+
+    receipts = []  # (moment, entry, missing fields), newest first
+    for e in history:
+        if not e.get("comment") or e.get("delete_comment_date"):
+            continue
+        moment = _moment(e.get("created_at"))
+        if reopened is not None and moment <= reopened:
+            continue
+        missing = _receipt_missing(entity_type, e["comment"])
+        if missing == []:
+            return None
+        if missing is not None:
+            receipts.append((moment, e, missing))
+    receipts.sort(key=lambda r: r[0], reverse=True)
+
+    kind = "story" if entity_type == "story" else "task"
+    label = f"{kind} #{item.get('ref')}"
+    since = f" since it was reopened ({reopened.isoformat()})" if reopened else ""
+    if receipts:
+        _, entry, missing = receipts[0]
+        found = (
+            f"Its newest receipt comment (id {entry.get('id')}, {entry.get('created_at')}) "
+            f"lacks the line(s) {', '.join(missing)}: complete it with edit_comment("
+            f"comment_id='{entry.get('id')}', entity_type='{kind}') rather than posting a "
+            "second one."
+        )
+    else:
+        found = (
+            f"No comment on it{since} has 'Outcome:' as its first line. Post the receipt with "
+            f"add_comment(entity_type='{kind}'), one line per field."
+        )
+    n_fields = len(_RECEIPT_FIELDS[entity_type])
+    raise ValueError(
+        f"Closing receipt required: {label} cannot move to '{target.get('name')}' without "
+        f"a {n_fields}-field receipt comment. Nothing was written. {found} Then retry.\n"
+        f"Template ({kind}):\n{_RECEIPT_TEMPLATES[entity_type]}\n"
+        "To close without a receipt (superseded, duplicate, cancelled, bulk cleanup), pass "
+        "receipt_override='<reason>': the reason is posted as a comment with the status."
+    )
+
+
+def _refuse_receipt_status_on_create(
+    client: TaigaClientWrapper, project_id: int, entity_type: str, status_id: int, session_id: str
+) -> None:
+    """A new item has no comment, so it cannot be created in a receipt status."""
+    if not config.settings.closing_receipts:
+        return
+    target = _status_map(client, project_id, entity_type, session_id).get(status_id) or {}
+    if _receipt_needed(entity_type, target):
+        raise ValueError(
+            f"A new {entity_type} cannot be created in status '{target.get('name')}': that "
+            "status needs a closing receipt comment. Create it open, post the receipt with "
+            "add_comment, then move it. Nothing was written."
+        )

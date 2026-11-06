@@ -120,10 +120,13 @@ Client configuration without Docker:
 | `TAIGA_API_URL` | Taiga base URL: scheme, host and any path prefix (the server adds `/api/v1`; a trailing `/api/v1` is stripped). Use the final `https://` URL: a redirect turns a POST into a GET. | `http://localhost:9000` |
 | `TAIGA_USERNAME` / `TAIGA_PASSWORD` | Credentials for auto-authentication at startup. If this login fails, a tool called without a `session_id` reports why. | (none) |
 | `TAIGA_TRANSPORT` | `stdio`, `sse` or `streamable-http` (a `--sse` / `--streamable-http` flag wins) | `stdio` |
+| `TAIGA_CLOSING_RECEIPTS` | `false` turns off the closing-receipt guard (see below) | `true` |
 | `MCP_HOST` | Bind address for the HTTP transports (`0.0.0.0` in Docker) | `127.0.0.1` |
 | `MCP_PORT` | Port for the HTTP transports | `8000` |
 
 Values can also come from a `.env` file in the project root.
+
+**Closing receipts.** Moving a user story to a closed status (`Done`, `Cancelled`, …), or a task to a closed status or `Ready for test`, is refused unless a comment posted since the item last left a closed status is a receipt: its first non-empty line starts with `Outcome:`, and it has the other field lines (story: `AC:`, `Scope:`, `Artifacts:`, `Next:`; task: `Decision:`, `Artifact:`, `Next:`). The refusal writes nothing and carries the template. `receipt_override="<reason>"` on `update_story`, `set_story_status`, `update_task` and `set_task_status` closes without a receipt and posts `Closing without receipt: <reason>` with the status, in one write. A task cannot be created in such a status (`create_task`, `break_down_story`).
 
 ## Authentication
 

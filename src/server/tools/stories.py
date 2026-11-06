@@ -204,6 +204,7 @@ def create_story(
         "links it to epic #N; epic=0 unlinks it from all epics. To add one epic and keep the "
         "others, use link_to_epic. The result's epics_before lists the links that were replaced. "
         + resolve._BLOCKED_HELP
+        + resolve._RECEIPT_HELP
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -224,6 +225,7 @@ def update_story(
     tags: Optional[List[str]] = None,
     blocked: Optional[bool] = None,
     blocked_note: Optional[str] = None,
+    receipt_override: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolve._check_description_args(
@@ -257,6 +259,16 @@ def update_story(
             payload["status"] = resolve._resolve_status(
                 client, project_id, "story", status, actual_session_id
             )
+        # Before any write (the epic relink included): a refusal writes nothing.
+        override_comment = resolve._check_closing_receipt(
+            client,
+            project_id,
+            "story",
+            current,
+            payload.get("status"),
+            actual_session_id,
+            receipt_override,
+        )
         if assignee is not None:
             payload["assigned_to"] = resolve._resolve_user(
                 client, project_id, assignee, actual_session_id
@@ -267,6 +279,8 @@ def update_story(
         if tags is not None:
             payload["tags"] = tags
         payload.update(blocked_fields)
+        if override_comment:
+            payload["comment"] = override_comment
 
         epic_changed = False
         # Only the body fields gate the "no-op" check; epic relinking is a
@@ -329,6 +343,8 @@ def update_story(
             )
         if description_change is not None:
             summary["description_change"] = {**description_change, "version": result.get("version")}
+        if override_comment:
+            summary["receipt_override"] = receipt_override.strip()
         return summary
 
     return core._execute_taiga_operation("update_story", do_update, f"#{ref} in {project}")
@@ -338,13 +354,14 @@ def update_story(
     "set_story_status",
     description=(
         "Change the status of a user story by its ref number using the status name "
-        "(e.g. 'In Progress', 'Done'). project accepts slug or ID."
+        "(e.g. 'In Progress', 'Done'). " + resolve._RECEIPT_HELP + "project accepts slug or ID."
     ),
 )
 def set_story_status(
     project: Union[str, int],
     ref: int,
     status: str,
+    receipt_override: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
@@ -359,14 +376,20 @@ def set_story_status(
         if not current:
             raise ValueError(f"User story #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.patch(
-            f"/userstories/{current['id']}",
-            json={"status": status_id, "version": current["version"]},
+        override_comment = resolve._check_closing_receipt(
+            client, project_id, "story", current, status_id, actual_session_id, receipt_override
         )
-        return {
+        payload: Dict[str, Any] = {"status": status_id, "version": current["version"]}
+        if override_comment:
+            payload["comment"] = override_comment
+        result = client.api.patch(f"/userstories/{current['id']}", json=payload)
+        answer = {
             "ref": ref,
             "status": (result.get("status_extra_info") or {}).get("name") or status,
             "is_closed": result.get("is_closed", False),
         }
+        if override_comment:
+            answer["receipt_override"] = receipt_override.strip()
+        return answer
 
     return core._execute_taiga_operation("set_story_status", do_set, f"#{ref} in {project}")

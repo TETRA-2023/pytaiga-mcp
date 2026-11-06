@@ -40,6 +40,14 @@ class TaigaSettings(BaseSettings):
         description="Taiga password for auto-authentication",
     )
 
+    # Team rule: moving a story or task to a closed status needs a receipt comment
+    # (resolve._check_closing_receipt). Off only for a Taiga that does not use it.
+    closing_receipts: bool = Field(
+        default=True,
+        alias="TAIGA_CLOSING_RECEIPTS",
+        description="Refuse to close a story/task without a closing receipt comment",
+    )
+
     class Config:
         env_file = str(ENV_FILE_PATH)
         env_file_encoding = "utf-8"
