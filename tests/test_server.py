@@ -6158,3 +6158,227 @@ class TestListItemsHistory:
     def test_history_refused_for_other_types(self, session, mock_client, entity_type):
         with pytest.raises(ValueError, match="history=True applies"):
             wf.list_items("p", entity_type=entity_type, history=True, session_id=session)
+
+
+# ---------------------------------------------------------------------------
+# Closing receipt guard (moving to a closed status needs a receipt comment)
+# ---------------------------------------------------------------------------
+
+_STORY_STATUSES = [
+    {"id": 65, "name": "New", "is_closed": False},
+    {"id": 68, "name": "Ready for test", "is_closed": False},
+    {"id": 70, "name": "Cancelled", "is_closed": True},
+    {"id": 71, "name": "Done", "is_closed": True},
+    {"id": 72, "name": "Archived", "is_closed": True},
+]
+_TASK_STATUSES = [
+    {"id": 42, "name": "In progress", "is_closed": False},
+    {"id": 43, "name": "Ready for test", "is_closed": False},
+    {"id": 44, "name": "Closed", "is_closed": True},
+]
+_STORY_RECEIPT = (
+    "Outcome: shipped\nAC:\n  - [x] AC1 — checked\nScope: as planned\n"
+    "Artifacts: https://x/pr/1\nNext: none"
+)
+_TASK_RECEIPT = "Outcome: done\nDecision: none\nArtifact: https://x/pr/1\nNext: none"
+
+
+def _comment(text, at="2026-11-06T10:00:00.000Z", deleted=None, cid="c1"):
+    return {
+        "id": cid,
+        "created_at": at,
+        "comment": text,
+        "delete_comment_date": deleted,
+        "values_diff": {},
+    }
+
+
+def _status_move(old, new, at):
+    return {"id": "s", "created_at": at, "comment": "", "values_diff": {"status": [old, new]}}
+
+
+class TestClosingReceipt:
+    STORY = {"id": 300, "ref": 9, "version": 4, "status": 65, "is_closed": False}
+    TASK = {"id": 200, "ref": 7, "version": 2, "status": 42, "is_closed": False}
+
+    def _story(self, mock_client, history, story=None):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = _STORY_STATUSES
+        route(
+            mock_client,
+            get={
+                "/userstories/by_ref": story or self.STORY,
+                "/history/userstory/300": history,
+            },
+            patch={"/userstories/300": {"ref": 9, "status": 71, "is_closed": True}},
+        )
+
+    def _task(self, mock_client, history, task=None):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = _TASK_STATUSES
+        route(
+            mock_client,
+            get={"/tasks/by_ref": task or self.TASK, "/history/task/200": history},
+            patch={"/tasks/200": {"ref": 7, "status": 44, "is_closed": True}},
+        )
+
+    def test_story_done_without_receipt_refused_with_template(self, session, mock_client):
+        self._story(mock_client, [_comment("**Closing receipt**\nall good")])
+        with pytest.raises(ValueError) as e:
+            wf.set_story_status("p", 9, "Done", session_id=session)
+        msg = str(e.value)
+        assert "Nothing was written" in msg
+        assert "Outcome: <one line" in msg and "Artifacts: <canonical links>" in msg
+        assert "receipt_override" in msg
+        mock_client.api.patch.assert_not_called()
+
+    def test_story_done_with_receipt_passes(self, session, mock_client):
+        self._story(mock_client, [_comment(_STORY_RECEIPT)])
+        result = wf.set_story_status("p", 9, "Done", session_id=session)
+        assert result["is_closed"] is True
+        assert sent(mock_client, "patch", "/userstories/300") == [{"status": 71, "version": 4}]
+
+    def test_bold_labels_accepted(self, session, mock_client):
+        bold = _STORY_RECEIPT.replace("Outcome:", "**Outcome:**").replace("Scope:", "**Scope**:")
+        self._story(mock_client, [_comment(bold)])
+        wf.set_story_status("p", 9, "Done", session_id=session)
+        assert sent(mock_client, "patch", "/userstories/300")
+
+    def test_incomplete_receipt_names_missing_fields_and_comment(self, session, mock_client):
+        self._story(mock_client, [_comment("Outcome: x\nAC:\n  - [x] AC1\nNext: none", cid="abc")])
+        with pytest.raises(ValueError, match=r"lacks the line\(s\) Scope:, Artifacts:") as e:
+            wf.update_story("p", 9, status="Done", session_id=session)
+        assert "comment_id='abc'" in str(e.value)
+        mock_client.api.patch.assert_not_called()
+
+    def test_deleted_receipt_ignored(self, session, mock_client):
+        self._story(mock_client, [_comment(_STORY_RECEIPT, deleted="2026-11-06T11:00:00Z")])
+        with pytest.raises(ValueError, match="Closing receipt required"):
+            wf.set_story_status("p", 9, "Done", session_id=session)
+
+    def test_receipt_before_reopen_does_not_count(self, session, mock_client):
+        history = [
+            _status_move("Done", "In progress", "2026-11-06T12:00:00.000Z"),
+            _comment(_STORY_RECEIPT, at="2026-11-06T10:00:00.000Z"),
+        ]
+        self._story(mock_client, history)
+        with pytest.raises(ValueError, match="since it was reopened"):
+            wf.set_story_status("p", 9, "Done", session_id=session)
+
+    def test_receipt_after_reopen_counts(self, session, mock_client):
+        history = [
+            _comment(_STORY_RECEIPT, at="2026-11-06T13:00:00.000Z"),
+            _status_move("Done", "In progress", "2026-11-06T12:00:00.000Z"),
+        ]
+        self._story(mock_client, history)
+        wf.set_story_status("p", 9, "Done", session_id=session)
+        assert sent(mock_client, "patch", "/userstories/300")
+
+    def test_update_story_refusal_writes_nothing(self, session, mock_client):
+        self._story(mock_client, [])
+        with pytest.raises(ValueError, match="Closing receipt required"):
+            wf.update_story("p", 9, status="Done", description="new", epic=0, session_id=session)
+        mock_client.api.patch.assert_not_called()
+        mock_client.api.delete.assert_not_called()
+
+    def test_override_posts_reason_in_same_patch(self, session, mock_client):
+        self._story(mock_client, [])
+        result = wf.update_story(
+            "p", 9, status="Cancelled", receipt_override="superseded by #12", session_id=session
+        )
+        assert result["receipt_override"] == "superseded by #12"
+        assert sent(mock_client, "patch", "/userstories/300") == [
+            {
+                "version": 4,
+                "status": 70,
+                "comment": "Closing without receipt: superseded by #12",
+            }
+        ]
+        # The override needs no history read.
+        paths = [c.args[0] for c in mock_client.api.get.call_args_list]
+        assert "/history/userstory/300" not in paths
+
+    def test_override_blank_refused(self, session, mock_client):
+        self._story(mock_client, [])
+        with pytest.raises(ValueError, match="must give the reason"):
+            wf.set_story_status("p", 9, "Done", receipt_override="  ", session_id=session)
+
+    def test_override_without_guarded_move_refused(self, session, mock_client):
+        self._story(mock_client, [])
+        with pytest.raises(ValueError, match="applies only to a move"):
+            wf.update_story("p", 9, subject="x", receipt_override="why", session_id=session)
+        mock_client.api.patch.assert_not_called()
+
+    def test_closed_to_closed_needs_no_receipt(self, session, mock_client):
+        self._story(mock_client, [], story={**self.STORY, "status": 71})
+        wf.set_story_status("p", 9, "Archived", session_id=session)
+        paths = [c.args[0] for c in mock_client.api.get.call_args_list]
+        assert "/history/userstory/300" not in paths
+        assert sent(mock_client, "patch", "/userstories/300")
+
+    def test_story_ready_for_test_not_guarded(self, session, mock_client):
+        self._story(mock_client, [])
+        wf.set_story_status("p", 9, "Ready for test", session_id=session)
+        assert sent(mock_client, "patch", "/userstories/300")
+
+    def test_story_receipt_shape_required_not_task_shape(self, session, mock_client):
+        self._story(mock_client, [_comment(_TASK_RECEIPT)])
+        with pytest.raises(ValueError, match="AC:, Scope:"):
+            wf.set_story_status("p", 9, "Done", session_id=session)
+
+    @pytest.mark.parametrize("target", ["Closed", "Ready for test"])
+    def test_task_guarded_on_closed_and_ready_for_test(self, session, mock_client, target):
+        self._task(mock_client, [])
+        with pytest.raises(ValueError) as e:
+            wf.set_task_status("p", 7, target, session_id=session)
+        assert "Decision: <choice" in str(e.value)
+        mock_client.api.patch.assert_not_called()
+
+    def test_task_receipt_passes_update_task(self, session, mock_client):
+        self._task(mock_client, [_comment(_TASK_RECEIPT)])
+        wf.update_task("p", 7, status="Closed", session_id=session)
+        assert sent(mock_client, "patch", "/tasks/200") == [{"version": 2, "status": 44}]
+
+    def test_task_artifacts_plural_accepted(self, session, mock_client):
+        self._task(mock_client, [_comment(_TASK_RECEIPT.replace("Artifact:", "Artifacts:"))])
+        wf.set_task_status("p", 7, "Closed", session_id=session)
+        assert sent(mock_client, "patch", "/tasks/200")
+
+    def test_task_override_set_task_status(self, session, mock_client):
+        self._task(mock_client, [])
+        result = wf.set_task_status(
+            "p", 7, "Closed", receipt_override="bulk cleanup", session_id=session
+        )
+        assert result["receipt_override"] == "bulk cleanup"
+        assert sent(mock_client, "patch", "/tasks/200")[0]["comment"] == (
+            "Closing without receipt: bulk cleanup"
+        )
+
+    def test_create_task_in_closed_status_refused(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = _TASK_STATUSES
+        route(mock_client, get={"/userstories/by_ref": self.STORY}, post={"/tasks": {}})
+        with pytest.raises(ValueError, match="cannot be created in status 'Closed'"):
+            wf.create_task("p", 9, "t", status="Closed", session_id=session)
+        mock_client.api.post.assert_not_called()
+
+    def test_break_down_story_refuses_before_creating_any(self, session, mock_client):
+        mock_client.api.get.return_value = PROJECT
+        mock_client.list_resources.return_value = _TASK_STATUSES
+        route(mock_client, get={"/userstories/by_ref": self.STORY}, post={"/tasks": {}})
+        with pytest.raises(ValueError, match="Ready for test"):
+            wf.break_down_story(
+                "p",
+                9,
+                [{"subject": "a"}, {"subject": "b", "status": "Ready for test"}],
+                session_id=session,
+            )
+        mock_client.api.post.assert_not_called()
+
+    def test_switch_off(self, session, mock_client, monkeypatch):
+        from src import config
+
+        monkeypatch.setattr(config.settings, "closing_receipts", False)
+        self._story(mock_client, [])
+        wf.set_story_status("p", 9, "Done", session_id=session)
+        assert sent(mock_client, "patch", "/userstories/300")

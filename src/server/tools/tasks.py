@@ -121,6 +121,9 @@ def create_task(
             data["status"] = resolve._resolve_status(
                 client, project_id, "task", status, actual_session_id
             )
+            resolve._refuse_receipt_status_on_create(
+                client, project_id, "task", data["status"], actual_session_id
+            )
         if assignee:
             data["assigned_to"] = resolve._resolve_user(
                 client, project_id, assignee, actual_session_id
@@ -148,6 +151,7 @@ def create_task(
         "different user story. sprint accepts a name or ID; tasks can have a milestone "
         "independent of their parent story. "
         + resolve._BLOCKED_HELP
+        + resolve._RECEIPT_HELP
         + resolve._DESCRIPTION_EDITS_HELP
         + "project accepts slug or ID."
     ),
@@ -168,6 +172,7 @@ def update_task(
     blocked: Optional[bool] = None,
     blocked_note: Optional[str] = None,
     tags: Optional[List[str]] = None,
+    receipt_override: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolve._check_description_args(
@@ -201,6 +206,15 @@ def update_task(
             payload["status"] = resolve._resolve_status(
                 client, project_id, "task", status, actual_session_id
             )
+        override_comment = resolve._check_closing_receipt(
+            client,
+            project_id,
+            "task",
+            current,
+            payload.get("status"),
+            actual_session_id,
+            receipt_override,
+        )
         if assignee is not None:
             payload["assigned_to"] = resolve._resolve_user(
                 client, project_id, assignee, actual_session_id
@@ -219,11 +233,15 @@ def update_task(
 
         if len(payload) == 1:  # only version key
             raise ValueError("No fields to update were provided.")
+        if override_comment:
+            payload["comment"] = override_comment
 
         result = resolve._patch_versioned(client, f"/tasks/{current['id']}", payload)
         summary = resolve._blocked_result(resolve._task_summary(result), result)
         if description_change is not None:
             summary["description_change"] = {**description_change, "version": result.get("version")}
+        if override_comment:
+            summary["receipt_override"] = receipt_override.strip()
         return summary
 
     return core._execute_taiga_operation("update_task", do_update, f"task #{ref} in {project}")
@@ -278,6 +296,20 @@ def break_down_story(
             else:
                 raise ValueError(
                     "Each entry in tasks must be a non-empty string or a dict with a 'subject' key."
+                )
+
+        # Before creating any task: a status that needs a closing receipt is refused
+        # for every entry, so a refusal never leaves the first tasks created.
+        for entry in normalized:
+            if "status" in entry:
+                resolve._refuse_receipt_status_on_create(
+                    client,
+                    project_id,
+                    "task",
+                    resolve._resolve_status(
+                        client, project_id, "task", entry["status"], actual_session_id
+                    ),
+                    actual_session_id,
                 )
 
         # Bulk path requires sprint context AND no per-task overrides — Taiga's
@@ -349,13 +381,14 @@ def break_down_story(
     "set_task_status",
     description=(
         "Change the status of a task by its ref number using the status name "
-        "(e.g. 'In Progress', 'Done'). project accepts slug or ID."
+        "(e.g. 'In Progress', 'Closed'). " + resolve._RECEIPT_HELP + "project accepts slug or ID."
     ),
 )
 def set_task_status(
     project: Union[str, int],
     ref: int,
     status: str,
+    receipt_override: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_session_id = core._get_session_id(session_id)
@@ -370,13 +403,20 @@ def set_task_status(
         if not current:
             raise ValueError(f"Task #{ref} not found in project '{proj['slug']}'.")
 
-        result = client.api.patch(
-            f"/tasks/{current['id']}", json={"version": current["version"], "status": status_id}
+        override_comment = resolve._check_closing_receipt(
+            client, project_id, "task", current, status_id, actual_session_id, receipt_override
         )
-        return {
+        payload: Dict[str, Any] = {"version": current["version"], "status": status_id}
+        if override_comment:
+            payload["comment"] = override_comment
+        result = client.api.patch(f"/tasks/{current['id']}", json=payload)
+        answer = {
             "ref": ref,
             "status": (result.get("status_extra_info") or {}).get("name") or status,
             "is_closed": result.get("is_closed", False),
         }
+        if override_comment:
+            answer["receipt_override"] = receipt_override.strip()
+        return answer
 
     return core._execute_taiga_operation("set_task_status", do_set, f"task #{ref} in {project}")
