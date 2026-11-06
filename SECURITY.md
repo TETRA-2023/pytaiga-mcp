@@ -12,7 +12,7 @@
 If you discover a security vulnerability in this project, please report it by:
 
 1. **DO NOT** open a public GitHub issue for security vulnerabilities
-2. Email the maintainers directly with details of the vulnerability
+2. Open a private security advisory on this repository ([Security → Report a vulnerability](https://github.com/TETRA-2023/pytaiga-mcp/security/advisories/new)) with details of the vulnerability
 3. Include steps to reproduce the issue if possible
 
 We will acknowledge receipt within 48 hours and aim to provide a fix within 7 days for critical issues.
