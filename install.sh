@@ -3,7 +3,7 @@
 # Check if dev dependencies should be installed
 if [ "$1" = "--dev" ]; then
     echo "Installing with development dependencies..."
-    uv pip install -e ".[dev]"
+    uv pip install -e . --group dev
 else
     echo "Installing production dependencies..."
     uv pip install -e .
