@@ -22,16 +22,6 @@ dependencies = [
     "anyio>=4.14.2",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
-    "pytest-cov>=4.1.0",
-    "ruff>=0.16.3",
-    "mypy>=2.3.0",
-    "pre-commit>=4.6.1",
-]
-
 [project.scripts]
 mcp-taiga = "src.server.app:main"
 # Pre-v3 name, kept for the v3.x line so existing launch configs keep working.
@@ -90,6 +80,16 @@ type = "github"
 token = { env = "GH_TOKEN" }
 
 [dependency-groups]
+# Dev tools live here, not in a [project.optional-dependencies] extra:
+# Dependabot treats an extra as a runtime dependency (fix(deps), which cuts a
+# release) and a dependency group as development (chore(deps-dev)). The image
+# installs with --no-dev (Taiga T25.5 #3569).
 dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.16.3",
+    "mypy>=2.3.0",
+    "pre-commit>=4.6.1",
     "python-semantic-release>=10.6.1",
 ]
