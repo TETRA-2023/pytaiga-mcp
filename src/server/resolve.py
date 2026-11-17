@@ -293,6 +293,27 @@ def _resolve_issue_attribute(
     return matches[0]["id"]
 
 
+def _resolve_issue_attributes(
+    client: TaigaClientWrapper,
+    project_id: int,
+    attr_type: str,
+    names: Union[str, List[str]],
+    session_id: str,
+) -> Union[int, str]:
+    """One issue type/priority/severity name, or a list of them, as the query
+    param: one ID, or comma-separated IDs (taiga-back's IssueTypesFilter,
+    PrioritiesFilter and SeveritiesFilter split on commas, like StatusesFilter)."""
+    wanted = [names] if isinstance(names, str) else list(names)
+    if not wanted:
+        raise ValueError(f"{attr_type} must be a name or a non-empty list of names.")
+    ids: List[int] = []
+    for name in wanted:
+        attr_id = _resolve_issue_attribute(client, project_id, attr_type, name, session_id)
+        if attr_id not in ids:
+            ids.append(attr_id)
+    return ids[0] if len(ids) == 1 else ",".join(str(i) for i in ids)
+
+
 def _name_for_issue_attribute(
     client: TaigaClientWrapper,
     project_id: int,
@@ -705,7 +726,12 @@ def _epic_domains(
 _STORY_READS_MAX = 5
 
 # History segment of each list type (/history/<segment>/<id>).
-_HISTORY_SEGMENTS = {"tasks": "task", "userstories": "userstory", "user_stories": "userstory"}
+_HISTORY_SEGMENTS = {
+    "tasks": "task",
+    "userstories": "userstory",
+    "user_stories": "userstory",
+    "issues": "issue",
+}
 # history=True reads one history per row: at most this many rows, read by
 # _HISTORY_WORKERS threads (measured on tetra 2026-11-05: 463 task histories
 # take 54 s one by one, 17.5 s on 4 threads, no faster on 6, 8 or 16).

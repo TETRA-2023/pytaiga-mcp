@@ -56,10 +56,23 @@ def assign_item(
 # real Taiga (tests/test_integration.py). Taiga IGNORES `is_blocked`, so
 # `blocked` is applied here, after the read; a list of statuses goes as the
 # comma-separated IDs Taiga's status filter takes; modified_before is
-# `modified_date__lt`.
+# `modified_date__lt`. Issue filters checked against taiga-back's IssuesViewSet
+# (StatusesFilter, AssignedToFilter, TagsFilter, IssueTypesFilter,
+# PrioritiesFilter, SeveritiesFilter, ModifiedDateFilter, status__is_closed).
 _LIST_FILTERS = {
     "story": {"status", "sprint", "epic", "tags", "assignee", "blocked", "modified_before"},
     "task": {"status", "assignee", "story", "closed", "blocked", "modified_before"},
+    "issue": {
+        "status",
+        "assignee",
+        "tags",
+        "closed",
+        "blocked",
+        "modified_before",
+        "issue_type",
+        "priority",
+        "severity",
+    },
     "epic": {"status", "assignee", "blocked"},
     "sprint": {"status"},
 }
@@ -99,23 +112,26 @@ def _guard_size(rows: List[Dict[str, Any]], entity_type: str) -> List[Dict[str, 
     "list_items",
     structured_output=False,
     description=(
-        "List every user story, task, epic, or sprint of a project, with optional filters. "
-        "entity_type: 'story' (default; ALL stories, sprint-assigned ones included — "
-        "browse_backlog returns only those in no sprint), 'task', 'epic', or 'sprint'. "
+        "List every user story, task, issue, epic, or sprint of a project, with optional "
+        "filters. entity_type: 'story' (default; ALL stories, sprint-assigned ones included — "
+        "browse_backlog returns only those in no sprint), 'task', 'issue', 'epic', or 'sprint'. "
         "Filters by type — story: status, sprint (name or ID), epic (ref), "
         "tags (comma-separated), assignee (email/full name), blocked, modified_before; "
         "task: status, assignee, story (parent story ref), closed (true/false), blocked, "
-        "modified_before; epic: status, assignee, blocked; sprint: status 'open' or "
-        "'closed'. status is a name or a list of names (any of them matches). "
+        "modified_before; issue: status, assignee, tags, closed, blocked, modified_before, "
+        "issue_type, priority, severity; epic: status, assignee, blocked; sprint: status "
+        "'open' or 'closed'. status, issue_type, priority and severity take a name or a "
+        "list of names (any of them matches). "
         "blocked=true keeps only blocked items, false only unblocked ones. "
         "modified_before (ISO date or datetime; a date or a time without offset is UTC) "
         "keeps items last modified before that moment, e.g. 'In progress' untouched for a "
-        "week. A filter that does not apply to the type is an error. Story, task and epic "
-        "rows carry modified_date, and blocked_note when blocked. Story rows carry epics "
+        "week. A filter that does not apply to the type is an error. Story, task, issue and "
+        "epic rows carry modified_date, and blocked_note when blocked. Issue rows carry "
+        "type, priority and severity names (issues sit in no epic). Story rows carry epics "
         "[{ref, subject, domain}] (plus project for an epic of another project); task rows "
         "carry their parent story's epics the same way ([] when the task has no story). "
         "domain is true for an epic tagged `domain`, false for an initiative epic. "
-        "history=True (story and task only) adds status_since (when the current status "
+        "history=True (story, task and issue) adds status_since (when the current status "
         "was entered; the creation date if it never changed) and blocked_since (when the "
         "item was last blocked; null when not blocked), read from each row's history: one "
         "read per row, so it is refused above 100 rows (about 4 s for 100); filter first, "
@@ -136,6 +152,9 @@ def list_items(
     closed: Optional[bool] = None,
     blocked: Optional[bool] = None,
     modified_before: Optional[str] = None,
+    issue_type: Optional[Union[str, List[str]]] = None,
+    priority: Optional[Union[str, List[str]]] = None,
+    severity: Optional[Union[str, List[str]]] = None,
     history: bool = False,
     session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -143,8 +162,8 @@ def list_items(
         raise ValueError(
             f"Invalid entity_type '{entity_type}'. Must be one of: {', '.join(_LIST_FILTERS)}."
         )
-    if history and entity_type not in ("story", "task"):
-        raise ValueError("history=True applies to entity_type 'story' or 'task' only.")
+    if history and entity_type not in ("story", "task", "issue"):
+        raise ValueError("history=True applies to entity_type 'story', 'task' or 'issue' only.")
     given = {
         name
         for name, value in (
@@ -157,6 +176,9 @@ def list_items(
             ("closed", closed),
             ("blocked", blocked),
             ("modified_before", modified_before),
+            ("issue_type", issue_type),
+            ("priority", priority),
+            ("severity", severity),
         )
         if value is not None
     }
@@ -227,6 +249,42 @@ def list_items(
                 )
             epics = client.list_resources("epics", project_id=project_id, **filters)
             return keep([resolve._epic_summary(e) for e in epics])
+
+        if entity_type == "issue":
+            if status is not None:
+                filters["status"] = resolve._resolve_statuses(
+                    client, project_id, "issue", status, actual_session_id
+                )
+            if assignee is not None:
+                filters["assigned_to"] = resolve._resolve_user(
+                    client, project_id, assignee, actual_session_id
+                )
+            if tags is not None:
+                filters["tags"] = tags
+            if closed is not None:
+                filters["status__is_closed"] = closed
+            for param, attr, value in (
+                ("type", "type", issue_type),
+                ("priority", "priority", priority),
+                ("severity", "severity", severity),
+            ):
+                if value is not None:
+                    filters[param] = resolve._resolve_issue_attributes(
+                        client, project_id, attr, value, actual_session_id
+                    )
+            if before is not None:
+                filters["modified_date__lt"] = before.isoformat()
+            issues = unblocked_out(
+                client.list_resources("issues", project_id=project_id, **filters)
+            )
+            rows = [
+                {
+                    **resolve._issue_summary(i, client, project_id, actual_session_id),
+                    **resolve._activity_fields(i),
+                }
+                for i in issues
+            ]
+            return dated("issues", issues, keep(rows))
 
         parents: Dict[Any, Dict[str, Any]] = {}
         if entity_type == "task":
