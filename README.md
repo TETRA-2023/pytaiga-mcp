@@ -164,6 +164,8 @@ uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/
 # Integration tests against a real Taiga. Write tests need a THROWAWAY project:
 TAIGA_API_URL=... TAIGA_USERNAME=... TAIGA_PASSWORD=... \
 TAIGA_TEST_PROJECT=<sandbox-slug> uv run pytest tests/test_integration.py -m integration
+# The read-only issue-listing test runs on TAIGA_ISSUES_PROJECT (else TAIGA_TEST_PROJECT,
+# else the first visible project); pick one that has issues.
 ```
 
 Pre-commit runs gitleaks, ruff and the unit tests. CI additionally builds the image and smoke-tests it (`initialize` + `tools/list`). See [CONTRIBUTING.md](CONTRIBUTING.md).

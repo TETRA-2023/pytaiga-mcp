@@ -11,6 +11,7 @@ server has no delete tool yet). Never point TAIGA_TEST_PROJECT at a real project
 
 import os
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -119,8 +120,18 @@ class TestReadOnly:
         cut = sorted(r["modified_date"] for r in rows)[len(rows) // 2]
         expected = sorted(r["ref"] for r in rows if r["modified_date"] < cut)
         assert sorted(r["ref"] for r in both(modified_before=cut)) == expected
+        for flag in (True, False):
+            expected = sorted(r["ref"] for r in rows if r["is_blocked"] is flag)
+            assert sorted(r["ref"] for r in both(blocked=flag)) == expected
         with pytest.raises(ValueError, match="not found. Available"):
             issues(status="No such status")
+        # history=True reads /history/issue/<id>, on the smallest status group
+        # (history is capped at 100 rows).
+        by_status = Counter(r["status"] for r in rows)
+        smallest = min(by_status, key=by_status.get)
+        dated = both(status=smallest, history=True)
+        assert len(dated) == by_status[smallest]
+        assert all(r["status_since"] for r in dated)
 
 
 @pytest.mark.integration

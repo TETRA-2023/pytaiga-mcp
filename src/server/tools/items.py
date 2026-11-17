@@ -53,7 +53,8 @@ def assign_item(
 # Filters each list_items entity_type accepts. Taiga silently ignores a query
 # param it doesn't know, so an unsupported filter must be rejected here, not
 # passed through (it would return the unfiltered list). Each one is verified on
-# real Taiga (tests/test_integration.py). Taiga IGNORES `is_blocked`, so
+# real Taiga (tests/test_integration.py; the issue filters by
+# test_list_issues_filters_on_real_taiga). Taiga IGNORES `is_blocked`, so
 # `blocked` is applied here, after the read; a list of statuses goes as the
 # comma-separated IDs Taiga's status filter takes; modified_before is
 # `modified_date__lt`. Issue filters checked against taiga-back's IssuesViewSet
