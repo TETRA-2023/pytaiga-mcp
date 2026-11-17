@@ -11,6 +11,7 @@ server has no delete tool yet). Never point TAIGA_TEST_PROJECT at a real project
 
 import os
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -73,6 +74,65 @@ class TestReadOnly:
         assert me["username"]
         assert api.auth_token != "expired-or-garbage"
         assert api._refresh_token and api._refresh_token != old_refresh
+
+    def test_list_issues_filters_on_real_taiga(self, session_id):
+        """list_items(entity_type="issue") (#255): every filter is one Taiga honours.
+
+        Read-only. Project: TAIGA_ISSUES_PROJECT, else TAIGA_TEST_PROJECT, else the
+        first visible one. Open and closed are read apart, so a project whose full
+        issue list exceeds the 50k-character guard still works.
+        """
+        slug = (
+            os.environ.get("TAIGA_ISSUES_PROJECT")
+            or TEST_PROJECT
+            or wf.list_projects(session_id=session_id)[0]["slug"]
+        )
+
+        def issues(**kw):
+            return wf.list_items(slug, entity_type="issue", session_id=session_id, **kw)
+
+        open_rows, closed_rows = issues(closed=False), issues(closed=True)
+        assert not any(r["is_closed"] for r in open_rows)
+        assert all(r["is_closed"] for r in closed_rows)
+        rows = open_rows + closed_rows
+        if not rows:
+            pytest.skip(f"project {slug} has no issues")
+        assert {"type", "priority", "severity", "modified_date"} <= set(rows[0])
+
+        def both(**kw):
+            return issues(closed=False, **kw) + issues(closed=True, **kw)
+
+        # Each filter returns exactly the rows that carry the value: an ignored
+        # param would return them all.
+        for field, kw in (
+            ("type", "issue_type"),
+            ("priority", "priority"),
+            ("severity", "severity"),
+            ("status", "status"),
+        ):
+            value = rows[0][field]
+            expected = sorted(r["ref"] for r in rows if r[field] == value)
+            assert sorted(r["ref"] for r in both(**{kw: value})) == expected, field
+        # Taiga returns each tag as a [name, color] pair; the filter takes the name.
+        tagged = [t[0] for r in rows for t in r["tags"]]
+        if tagged:
+            expected = sorted(r["ref"] for r in rows if tagged[0] in [t[0] for t in r["tags"]])
+            assert sorted(r["ref"] for r in both(tags=tagged[0])) == expected
+        cut = sorted(r["modified_date"] for r in rows)[len(rows) // 2]
+        expected = sorted(r["ref"] for r in rows if r["modified_date"] < cut)
+        assert sorted(r["ref"] for r in both(modified_before=cut)) == expected
+        for flag in (True, False):
+            expected = sorted(r["ref"] for r in rows if r["is_blocked"] is flag)
+            assert sorted(r["ref"] for r in both(blocked=flag)) == expected
+        with pytest.raises(ValueError, match="not found. Available"):
+            issues(status="No such status")
+        # history=True reads /history/issue/<id>, on the smallest status group
+        # (history is capped at 100 rows).
+        by_status = Counter(r["status"] for r in rows)
+        smallest = min(by_status, key=by_status.get)
+        dated = both(status=smallest, history=True)
+        assert len(dated) == by_status[smallest]
+        assert all(r["status_since"] for r in dated)
 
 
 @pytest.mark.integration

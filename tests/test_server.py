@@ -12,6 +12,7 @@ import src.server as wf
 from src import taiga_client
 from src.server import core
 from src.server import resolve as wf_resolve
+from src.server.tools import items as wf_items
 from src.server.tools import projects as projects_tools
 from src.taiga_client import (
     TaigaAPIError,
@@ -4176,6 +4177,11 @@ class TestListItems:
             ("task", {"epic": 4}),
             ("story", {"story": 3}),
             ("story", {"closed": False}),
+            ("story", {"priority": "High"}),
+            ("task", {"issue_type": "Bug"}),
+            ("issue", {"sprint": "S1"}),
+            ("issue", {"story": 3}),
+            ("issue", {"epic": 4}),
         ],
     )
     def test_filter_not_supported_by_type_is_rejected_before_any_call(
@@ -4190,7 +4196,7 @@ class TestListItems:
 
     def test_unknown_entity_type(self, session, mock_client):
         with pytest.raises(ValueError, match="Invalid entity_type"):
-            wf.list_items("p", entity_type="issue", session_id=session)
+            wf.list_items("p", entity_type="bug", session_id=session)
 
     def test_tasks_with_every_filter_resolved(self, session, mock_client):
         route(mock_client, get={"/projects/by_slug": PROJECT, "/userstories/by_ref": {"id": 62}})
@@ -6050,7 +6056,7 @@ class TestListItemsHistory:
         mock_client.list_resources.side_effect = lambda r, project_id=None, **kw: (
             items if r == resource else []
         )
-        hist = "task" if resource == "tasks" else "userstory"
+        hist = {"tasks": "task", "issues": "issue"}.get(resource, "userstory")
         route(mock_client, get={f"/history/{hist}/{i}": h for i, h in histories.items()})
 
     def _history_reads(self, mock_client):
@@ -6153,6 +6159,21 @@ class TestListItemsHistory:
         with pytest.raises(ValueError, match=r"2 task rows match, over the 1-row limit.*New 2"):
             wf.list_items("p", entity_type="task", history=True, session_id=session)
         assert self._history_reads(mock_client) == []
+
+    def test_issue_rows_read_the_issue_history(self, session, mock_client):
+        issues = [{"id": 8, "ref": 77, "created_date": "2026-10-01T00:00:00Z", "is_blocked": False}]
+        histories = {
+            8: [
+                {
+                    "created_at": "2026-11-02T08:00:00Z",
+                    "values_diff": {"status": ["New", "In progress"]},
+                }
+            ]
+        }
+        self._setup(mock_client, "issues", issues, histories)
+        (row,) = wf.list_items("p", entity_type="issue", history=True, session_id=session)
+        assert row["status_since"] == "2026-11-02T08:00:00Z" and row["blocked_since"] is None
+        assert self._history_reads(mock_client) == ["/history/issue/8"]
 
     @pytest.mark.parametrize("entity_type", ["epic", "sprint"])
     def test_history_refused_for_other_types(self, session, mock_client, entity_type):
@@ -6382,3 +6403,120 @@ class TestClosingReceipt:
         self._story(mock_client, [])
         wf.set_story_status("p", 9, "Done", session_id=session)
         assert sent(mock_client, "patch", "/userstories/300")
+
+
+class TestListItemsIssues:
+    """list_items(entity_type="issue") (GitHub #255)."""
+
+    TABLES = {
+        "issue_statuses": [
+            {"id": 31, "name": "New", "is_closed": False},
+            {"id": 32, "name": "In progress", "is_closed": False},
+            {"id": 33, "name": "Closed", "is_closed": True},
+        ],
+        "issue_types": [{"id": 1, "name": "Bug"}, {"id": 2, "name": "Question"}],
+        "priorities": [{"id": 4, "name": "Low"}, {"id": 5, "name": "High"}],
+        "severities": [{"id": 7, "name": "Minor"}, {"id": 8, "name": "Critical"}],
+        "memberships": [{"user": 9, "full_name": "Bob", "email": "bob@x"}],
+    }
+
+    def _setup(self, mock_client, issues):
+        mock_client.api.get.return_value = PROJECT
+        calls = []
+
+        def lr(resource, project_id=None, **filters):
+            if resource == "issues":
+                calls.append(filters)
+                return issues
+            return self.TABLES[resource]
+
+        mock_client.list_resources.side_effect = lr
+        return calls
+
+    def test_open_issues_rows(self, session, mock_client):
+        issue = {
+            "id": 100,
+            "ref": 12,
+            "subject": "Login broken",
+            "status": 31,
+            "status_extra_info": {"name": "New", "is_closed": False},
+            "assigned_to_extra_info": {"full_name_display": "Bob"},
+            "type": 1,
+            "priority": 5,
+            "severity": 8,
+            "tags": ["auth"],
+            "is_blocked": True,
+            "blocked_note": "waiting on IdP",
+            "modified_date": "2026-11-16T10:00:00Z",
+        }
+        calls = self._setup(mock_client, [issue])
+        (row,) = wf.list_items("p", entity_type="issue", closed=False, session_id=session)
+        assert calls == [{"status__is_closed": False}]
+        assert row == {
+            "ref": 12,
+            "subject": "Login broken",
+            "status": "New",
+            "assignee": "Bob",
+            "type": "Bug",
+            "priority": "High",
+            "severity": "Critical",
+            "is_blocked": True,
+            "is_closed": False,
+            "tags": ["auth"],
+            "modified_date": "2026-11-16T10:00:00Z",
+            "blocked_note": "waiting on IdP",
+        }
+
+    def test_every_filter_resolved(self, session, mock_client):
+        calls = self._setup(mock_client, [])
+        wf.list_items(
+            "p",
+            entity_type="issue",
+            status=["New", "In progress"],
+            assignee="bob",
+            tags="auth",
+            issue_type="bug",
+            priority=["High", "Low"],
+            severity="Critical",
+            modified_before="2026-11-10",
+            session_id=session,
+        )
+        assert calls == [
+            {
+                "status": "31,32",
+                "assigned_to": 9,
+                "tags": "auth",
+                "type": 1,
+                "priority": "5,4",
+                "severity": 8,
+                "modified_date__lt": "2026-11-10T00:00:00+00:00",
+            }
+        ]
+
+    def test_unknown_status_lists_issue_statuses(self, session, mock_client):
+        self._setup(mock_client, [])
+        with pytest.raises(ValueError, match=r"Status 'Done' not found.*'New'.*'Closed'"):
+            wf.list_items("p", entity_type="issue", status="Done", session_id=session)
+
+    def test_unknown_priority_lists_priorities(self, session, mock_client):
+        self._setup(mock_client, [])
+        with pytest.raises(ValueError, match=r"Priority 'Urgent' not found.*'Low', 'High'"):
+            wf.list_items("p", entity_type="issue", priority="Urgent", session_id=session)
+
+    def test_blocked_filtered_after_the_read(self, session, mock_client):
+        calls = self._setup(
+            mock_client,
+            [{"ref": 1, "is_blocked": True}, {"ref": 2, "is_blocked": False}],
+        )
+        rows = wf.list_items("p", entity_type="issue", blocked=False, session_id=session)
+        assert [r["ref"] for r in rows] == [2]
+        assert calls == [{}]
+
+    def test_oversized_result_refused_with_breakdown(self, session, mock_client, monkeypatch):
+        monkeypatch.setattr(wf_items, "_LIST_MAX_CHARS", 10)
+        self._setup(
+            mock_client,
+            [{"ref": i, "status_extra_info": {"name": "New"}} for i in (1, 2)],
+        )
+        with pytest.raises(ValueError, match=r"2 issue rows .*By status: New 2.*issue_type"):
+            wf.list_items("p", entity_type="issue", session_id=session)
