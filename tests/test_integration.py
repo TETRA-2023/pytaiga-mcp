@@ -113,9 +113,10 @@ class TestReadOnly:
             value = rows[0][field]
             expected = sorted(r["ref"] for r in rows if r[field] == value)
             assert sorted(r["ref"] for r in both(**{kw: value})) == expected, field
-        tagged = [t for r in rows for t in r["tags"]]
+        # Taiga returns each tag as a [name, color] pair; the filter takes the name.
+        tagged = [t[0] for r in rows for t in r["tags"]]
         if tagged:
-            expected = sorted(r["ref"] for r in rows if tagged[0] in r["tags"])
+            expected = sorted(r["ref"] for r in rows if tagged[0] in [t[0] for t in r["tags"]])
             assert sorted(r["ref"] for r in both(tags=tagged[0])) == expected
         cut = sorted(r["modified_date"] for r in rows)[len(rows) // 2]
         expected = sorted(r["ref"] for r in rows if r["modified_date"] < cut)
