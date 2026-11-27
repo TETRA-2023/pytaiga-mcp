@@ -4845,6 +4845,46 @@ class TestListComments:
         with pytest.raises(ValueError, match="Story #3 not found"):
             wf.list_comments("p", 3, session_id=session)
 
+    # #262: a long-lived EPIC's full list overflows the client; read only the tail.
+    LONG = [
+        _hist("c5", "2026-10-05T00:00:00Z", "On-Hold: deleted", deleted="2026-10-06T00:00:00Z"),
+        _hist("c4", "2026-10-04T00:00:00Z", "latest, no marker"),
+        _hist("c3", "2026-10-03T00:00:00Z", "Paused. on-hold: waiting for budget"),
+        _hist("c2", "2026-10-02T00:00:00Z", "On-Hold: first pause"),
+        _hist("c1", "2026-10-01T00:00:00Z", "kickoff"),
+    ]
+
+    @pytest.mark.parametrize(
+        "kwargs,ids",
+        [
+            ({"last": 1}, ["c4"]),
+            ({"last": 2}, ["c3", "c4"]),  # still oldest first
+            ({"last": 10}, ["c1", "c2", "c3", "c4"]),
+            ({"contains": "ON-HOLD"}, ["c2", "c3"]),  # case-insensitive, deleted hidden
+            ({"contains": "On-Hold", "last": 1}, ["c3"]),  # filter before last
+            ({"contains": "On-Hold", "last": 1, "include_deleted": True}, ["c5"]),
+            ({"contains": "nothing"}, []),
+        ],
+    )
+    def test_last_and_contains(self, session, mock_client, kwargs, ids):
+        self._route(mock_client, history=self.LONG)
+        result = wf.list_comments("p", 3, session_id=session, **kwargs)
+        assert [c["id"] for c in result] == ids
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"last": 0}, "last must be a positive integer"),
+            ({"last": -1}, "last must be a positive integer"),
+            ({"last": True}, "last must be a positive integer"),
+            ({"contains": "  "}, "contains must not be empty"),
+        ],
+    )
+    def test_last_and_contains_validated_before_any_read(self, session, mock_client, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            wf.list_comments("p", 3, session_id=session, **kwargs)
+        mock_client.api.get.assert_not_called()
+
 
 class TestCommentActions:
     @pytest.mark.parametrize(

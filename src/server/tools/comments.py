@@ -142,8 +142,10 @@ def _run_comment_action(
         "Read the comments of a user story, task, issue, or epic, in full and oldest first. "
         "Each comment has id (needed by edit_comment/delete_comment/restore_comment), author, "
         "created_at, the full text, edited_at and deleted_at. Deleted comments are left out "
-        "unless include_deleted=True. entity_type: 'story' (default), 'task', 'issue', or "
-        "'epic'. project accepts slug or ID."
+        "unless include_deleted=True. contains='text' keeps only comments containing that text "
+        "(case-insensitive); last=N then keeps the N most recent (still oldest first), e.g. "
+        "contains='On-Hold', last=1 for the latest On-Hold comment of a long-lived item. "
+        "entity_type: 'story' (default), 'task', 'issue', or 'epic'. project accepts slug or ID."
     ),
 )
 def list_comments(
@@ -151,8 +153,15 @@ def list_comments(
     ref: int,
     entity_type: str = "story",
     include_deleted: bool = False,
+    last: Optional[int] = None,
+    contains: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    if last is not None and (isinstance(last, bool) or not isinstance(last, int) or last < 1):
+        raise ValueError(f"last must be a positive integer, got {last!r}.")
+    if contains is not None and not contains.strip():
+        raise ValueError("contains must not be empty.")
+    needle = contains.casefold() if contains is not None else None
     actual_session_id = core._get_session_id(session_id)
     client = core._get_authenticated_client(actual_session_id)
 
@@ -164,9 +173,11 @@ def list_comments(
             for e in history
             if (e.get("comment") or "").strip()
             and (include_deleted or not e.get("delete_comment_date"))
+            and (needle is None or needle in e["comment"].casefold())
         ]
         # Taiga returns history newest first; a conversation reads oldest first.
-        return sorted(comments, key=lambda c: c["created_at"] or "")
+        comments.sort(key=lambda c: c["created_at"] or "")
+        return comments[-last:] if last else comments
 
     return core._execute_taiga_operation(
         "list_comments", do_list, f"{entity_type} #{ref} in {project}"
